@@ -1,383 +1,505 @@
 'use client'
+
 export const dynamic = 'force-dynamic'
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import StatCard from '@/components/ui/StatCard'
+import ActionCard from '@/components/ui/ActionCard'
 
-type Cita = {
+type Cliente = {
   id: string
-  fecha: string
-  hora_inicio: string
-  hora_fin: string
+  nombre?: string | null
+  telefono?: string | null
+  email?: string | null
+  [key: string]: any
+}
+
+type Empleado = {
+  id: string
+  nombre?: string | null
+  rol?: string | null
+  [key: string]: any
+}
+
+type Servicio = {
+  id: string
+  nombre?: string | null
+  precio?: number | null
+  [key: string]: any
+}
+
+type CitaRaw = {
+  id: string
+  fecha?: string | null
+  hora?: string | null
+  duracion_minutos?: number | null
+  estado?: string | null
+  notas?: string | null
+  created_at?: string | null
+  [key: string]: any
+}
+
+type CitaView = {
+  id: string
+  fecha: string | null
+  hora: string | null
+  duracion_minutos: number | null
   estado: string
   notas: string | null
-  cliente_id: string
-  terapeuta_id: string | null
-  servicio_id: string | null
-  recurso_id: string | null
-  clientes: { id: string; nombre: string } | null
-  empleados: { id: string; nombre: string } | null
-  servicios: { id: string; nombre: string } | null
-  recursos: { id: string; nombre: string } | null
+  created_at: string | null
+  cliente: Cliente | null
+  empleado: Empleado | null
+  servicio: Servicio | null
 }
 
-type Terapeuta = {
-  id: string
-  nombre: string
-}
-
-const ESTADOS = ['todas', 'programada', 'confirmada', 'cancelada', 'completada', 'reprogramada']
-
-function estadoClasses(estado: string) {
-  switch (estado) {
-    case 'confirmada':
-      return 'bg-blue-50 text-blue-700 border-blue-200'
-    case 'completada':
-      return 'bg-emerald-50 text-emerald-700 border-emerald-200'
-    case 'cancelada':
-      return 'bg-red-50 text-red-700 border-red-200'
-    case 'reprogramada':
-      return 'bg-amber-50 text-amber-700 border-amber-200'
-    default:
-      return 'bg-slate-50 text-slate-700 border-slate-200'
+function formatDate(value: string | null | undefined) {
+  if (!value) return '—'
+  try {
+    return new Date(value).toLocaleDateString()
+  } catch {
+    return value
   }
+}
+
+function formatDateTime(fecha: string | null | undefined, hora?: string | null) {
+  if (!fecha) return '—'
+  return hora ? `${formatDate(fecha)} · ${hora}` : formatDate(fecha)
+}
+
+function estadoBadge(estado: string) {
+  switch ((estado || '').toLowerCase()) {
+    case 'programada':
+      return 'border-sky-400/20 bg-sky-400/10 text-sky-300'
+    case 'confirmada':
+      return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+    case 'completada':
+      return 'border-violet-400/20 bg-violet-400/10 text-violet-300'
+    case 'cancelada':
+      return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+    case 'no_asistio':
+    case 'no asistio':
+      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+    default:
+      return 'border-white/10 bg-white/[0.05] text-white/70'
+  }
+}
+
+function getFirstExistingKey(obj: Record<string, any>, keys: string[]) {
+  for (const key of keys) {
+    if (key in obj) return key
+  }
+  return null
+}
+
+function getDurationFromServicio(servicio: Servicio | null) {
+  if (!servicio) return 0
+
+  const possibleKeys = [
+    'duracion_minutos',
+    'duracion',
+    'tiempo',
+    'tiempo_minutos',
+    'minutos',
+    'duracionMinutos',
+  ]
+
+  for (const key of possibleKeys) {
+    if (key in servicio && servicio[key] != null) {
+      const value = Number(servicio[key])
+      if (!Number.isNaN(value) && value > 0) return value
+    }
+  }
+
+  return 0
 }
 
 export default function AgendaPage() {
   const [loading, setLoading] = useState(true)
-  const [updatingId, setUpdatingId] = useState<string | null>(null)
-
-  const [citas, setCitas] = useState<Cita[]>([])
-  const [terapeutas, setTerapeutas] = useState<Terapeuta[]>([])
-
+  const [citas, setCitas] = useState<CitaRaw[]>([])
+  const [clientes, setClientes] = useState<Cliente[]>([])
+  const [empleados, setEmpleados] = useState<Empleado[]>([])
+  const [servicios, setServicios] = useState<Servicio[]>([])
   const [search, setSearch] = useState('')
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10))
-  const [estado, setEstado] = useState('todas')
-  const [terapeutaId, setTerapeutaId] = useState('todos')
+  const [estadoFiltro, setEstadoFiltro] = useState('todos')
+  const [fechaFiltro, setFechaFiltro] = useState('')
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    loadAll()
+    void loadAgenda()
   }, [])
 
-  useEffect(() => {
-    loadCitas()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fecha])
-
-  async function loadAll() {
+  async function loadAgenda() {
     setLoading(true)
+    setError('')
 
-    const [citasRes, terapeutasRes] = await Promise.all([
-      supabase
-        .from('citas')
-        .select(`
-          id,
-          fecha,
-          hora_inicio,
-          hora_fin,
-          estado,
-          notas,
-          cliente_id,
-          terapeuta_id,
-          servicio_id,
-          recurso_id,
-          clientes:cliente_id ( id, nombre ),
-          empleados:terapeuta_id ( id, nombre ),
-          servicios:servicio_id ( id, nombre ),
-          recursos:recurso_id ( id, nombre )
-        `)
-        .order('fecha', { ascending: true })
-        .order('hora_inicio', { ascending: true }),
-      supabase
-        .from('empleados')
-        .select('id, nombre')
-        .eq('rol', 'terapeuta')
-        .eq('estado', 'activo')
-        .order('nombre', { ascending: true }),
-    ])
+    try {
+      const [citasRes, clientesRes, empleadosRes, serviciosRes] = await Promise.all([
+        supabase.from('citas').select('*').order('fecha', { ascending: true }),
+        supabase.from('clientes').select('*'),
+        supabase.from('empleados').select('*'),
+        supabase.from('servicios').select('*'),
+      ])
 
-    setCitas((citasRes.data || []) as unknown as Cita[])
-    setTerapeutas((terapeutasRes.data || []) as Terapeuta[])
-    setLoading(false)
+      if (citasRes.error) throw new Error(citasRes.error.message)
+      if (clientesRes.error) throw new Error(clientesRes.error.message)
+      if (empleadosRes.error) throw new Error(empleadosRes.error.message)
+      if (serviciosRes.error) throw new Error(serviciosRes.error.message)
+
+      setCitas((citasRes.data || []) as CitaRaw[])
+      setClientes((clientesRes.data || []) as Cliente[])
+      setEmpleados((empleadosRes.data || []) as Empleado[])
+      setServicios((serviciosRes.data || []) as Servicio[])
+    } catch (err: any) {
+      console.error(err)
+      setError(err?.message || 'No se pudo cargar la agenda.')
+      setCitas([])
+      setClientes([])
+      setEmpleados([])
+      setServicios([])
+    } finally {
+      setLoading(false)
+    }
   }
 
-  async function loadCitas() {
-    setLoading(true)
+  const citasView = useMemo<CitaView[]>(() => {
+    const clienteMap = new Map(clientes.map((item) => [item.id, item]))
+    const empleadoMap = new Map(empleados.map((item) => [item.id, item]))
+    const servicioMap = new Map(servicios.map((item) => [item.id, item]))
 
-    let query = supabase
-      .from('citas')
-      .select(`
-        id,
-        fecha,
-        hora_inicio,
-        hora_fin,
-        estado,
-        notas,
-        cliente_id,
-        terapeuta_id,
-        servicio_id,
-        recurso_id,
-        clientes:cliente_id ( id, nombre ),
-        empleados:terapeuta_id ( id, nombre ),
-        servicios:servicio_id ( id, nombre ),
-        recursos:recurso_id ( id, nombre )
-      `)
-      .order('fecha', { ascending: true })
-      .order('hora_inicio', { ascending: true })
+    return citas.map((cita) => {
+      const clienteKey = getFirstExistingKey(cita, [
+        'cliente_id',
+        'id_cliente',
+        'clienteId',
+      ])
 
-    if (fecha) query = query.eq('fecha', fecha)
+      const empleadoKey = getFirstExistingKey(cita, [
+        'empleado_id',
+        'personal_id',
+        'staff_id',
+        'terapeuta_id',
+        'trainer_id',
+        'empleadoId',
+        'personalId',
+      ])
 
-    const { data } = await query
-    setCitas((data || []) as unknown as Cita[])
-    setLoading(false)
-  }
+      const servicioKey = getFirstExistingKey(cita, [
+        'servicio_id',
+        'id_servicio',
+        'servicioId',
+      ])
 
-  const filtradas = useMemo(() => {
-    return citas.filter((c) => {
-      const matchSearch =
-        !search.trim() ||
-        c.clientes?.nombre?.toLowerCase().includes(search.toLowerCase()) ||
-        c.empleados?.nombre?.toLowerCase().includes(search.toLowerCase()) ||
-        c.servicios?.nombre?.toLowerCase().includes(search.toLowerCase()) ||
-        c.recursos?.nombre?.toLowerCase().includes(search.toLowerCase()) ||
-        c.notas?.toLowerCase().includes(search.toLowerCase())
+      const clienteId = clienteKey ? cita[clienteKey] : null
+      const empleadoId = empleadoKey ? cita[empleadoKey] : null
+      const servicioId = servicioKey ? cita[servicioKey] : null
 
-      const matchEstado = estado === 'todas' ? true : c.estado === estado
-      const matchTerapeuta = terapeutaId === 'todos' ? true : c.terapeuta_id === terapeutaId
-
-      return matchSearch && matchEstado && matchTerapeuta
+      return {
+        id: cita.id,
+        fecha: cita.fecha || null,
+        hora: cita.hora || null,
+        duracion_minutos: cita.duracion_minutos ?? null,
+        estado: cita.estado || 'sin estado',
+        notas: cita.notas || null,
+        created_at: cita.created_at || null,
+        cliente: clienteId ? clienteMap.get(clienteId) || null : null,
+        empleado: empleadoId ? empleadoMap.get(empleadoId) || null : null,
+        servicio: servicioId ? servicioMap.get(servicioId) || null : null,
+      }
     })
-  }, [citas, search, estado, terapeutaId])
+  }, [citas, clientes, empleados, servicios])
 
-  const resumen = useMemo(() => {
+  const citasFiltradas = useMemo(() => {
+    const q = search.trim().toLowerCase()
+
+    return citasView.filter((cita) => {
+      const matchSearch =
+        !q ||
+        cita.cliente?.nombre?.toLowerCase().includes(q) ||
+        cita.cliente?.telefono?.toLowerCase().includes(q) ||
+        cita.cliente?.email?.toLowerCase().includes(q) ||
+        cita.empleado?.nombre?.toLowerCase().includes(q) ||
+        cita.empleado?.rol?.toLowerCase().includes(q) ||
+        cita.servicio?.nombre?.toLowerCase().includes(q) ||
+        cita.estado?.toLowerCase().includes(q) ||
+        cita.notas?.toLowerCase().includes(q)
+
+      const matchEstado =
+        estadoFiltro === 'todos' ||
+        cita.estado?.toLowerCase() === estadoFiltro.toLowerCase()
+
+      const matchFecha = !fechaFiltro || cita.fecha === fechaFiltro
+
+      return Boolean(matchSearch && matchEstado && matchFecha)
+    })
+  }, [citasView, search, estadoFiltro, fechaFiltro])
+
+  const stats = useMemo(() => {
+    const total = citasView.length
+    const programadas = citasView.filter((c) => c.estado?.toLowerCase() === 'programada').length
+    const confirmadas = citasView.filter((c) => c.estado?.toLowerCase() === 'confirmada').length
+    const completadas = citasView.filter((c) => c.estado?.toLowerCase() === 'completada').length
+    const canceladas = citasView.filter((c) => c.estado?.toLowerCase() === 'cancelada').length
+
     return {
-      total: filtradas.length,
-      programadas: filtradas.filter((x) => x.estado === 'programada').length,
-      confirmadas: filtradas.filter((x) => x.estado === 'confirmada').length,
-      completadas: filtradas.filter((x) => x.estado === 'completada').length,
-      canceladas: filtradas.filter((x) => x.estado === 'cancelada').length,
+      total,
+      programadas,
+      confirmadas,
+      completadas,
+      canceladas,
     }
-  }, [filtradas])
-
-  async function cambiarEstado(id: string, nuevoEstado: string) {
-    setUpdatingId(id)
-    const { error } = await supabase.from('citas').update({ estado: nuevoEstado }).eq('id', id)
-
-    if (!error) {
-      setCitas((prev) => prev.map((c) => (c.id === id ? { ...c, estado: nuevoEstado } : c)))
-    }
-
-    setUpdatingId(null)
-  }
+  }, [citasView])
 
   return (
-    <div className="p-6">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <p className="text-sm text-slate-500">Administración</p>
-          <h1 className="text-2xl font-bold text-slate-900">Agenda</h1>
-          <p className="mt-1 text-sm text-slate-600">
-            Gestión diaria de citas, cambios de estado y reprogramaciones.
+          <p className="text-sm text-white/55">Operaciones</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
+            Agenda
+          </h1>
+          <p className="mt-2 text-sm text-white/55">
+            Gestión de citas, estados, clientes, personal y servicios.
           </p>
         </div>
 
-        <div className="flex gap-2">
-          <Link
+        <div className="w-full max-w-sm">
+          <ActionCard
+            title="Nueva cita"
+            description="Crear y registrar una nueva cita."
             href="/admin/operaciones/agenda/nueva"
-            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-          >
-            Nueva cita
-          </Link>
+          />
         </div>
       </div>
 
-      <div className="mb-6 grid gap-4 md:grid-cols-5">
-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
-          <p className="text-sm text-slate-500">Total</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">{resumen.total}</p>
-        </div>
-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
-          <p className="text-sm text-slate-500">Programadas</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">{resumen.programadas}</p>
-        </div>
-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
-          <p className="text-sm text-slate-500">Confirmadas</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">{resumen.confirmadas}</p>
-        </div>
-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
-          <p className="text-sm text-slate-500">Completadas</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">{resumen.completadas}</p>
-        </div>
-        <div className="rounded-2xl border bg-white p-4 shadow-sm">
-          <p className="text-sm text-slate-500">Canceladas</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">{resumen.canceladas}</p>
-        </div>
+      {error ? (
+        <Card className="p-4">
+          <p className="text-sm font-medium text-rose-400">Error al cargar</p>
+          <p className="mt-1 text-sm text-white/55">{error}</p>
+        </Card>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <StatCard
+          title="Total citas"
+          value={stats.total}
+        />
+        <StatCard
+          title="Programadas"
+          value={stats.programadas}
+          color="text-sky-400"
+        />
+        <StatCard
+          title="Confirmadas"
+          value={stats.confirmadas}
+          color="text-emerald-400"
+        />
+        <StatCard
+          title="Completadas"
+          value={stats.completadas}
+          color="text-violet-400"
+        />
+        <StatCard
+          title="Canceladas"
+          value={stats.canceladas}
+          color="text-rose-400"
+        />
       </div>
 
-      <section className="mb-6 rounded-2xl border bg-white p-4 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-4">
-          <input
-            type="text"
-            placeholder="Buscar cliente, terapeuta, servicio o recurso..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-          />
+      <Section
+        title="Filtros"
+        description="Busca por cliente, personal, servicio, estado o filtra por fecha."
+      >
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <div className="md:col-span-2">
+            <label className="mb-2 block text-sm font-medium text-white/75">
+              Buscar
+            </label>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Cliente, personal, servicio, estado..."
+              className="
+                w-full rounded-2xl border border-white/10 bg-white/[0.03]
+                px-4 py-3 text-sm text-white outline-none transition
+                placeholder:text-white/35
+                focus:border-white/20 focus:bg-white/[0.05]
+              "
+            />
+          </div>
 
-          <input
-            type="date"
-            value={fecha}
-            onChange={(e) => setFecha(e.target.value)}
-            className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-          />
+          <div>
+            <label className="mb-2 block text-sm font-medium text-white/75">
+              Estado
+            </label>
+            <select
+              value={estadoFiltro}
+              onChange={(e) => setEstadoFiltro(e.target.value)}
+              className="
+                w-full rounded-2xl border border-white/10 bg-white/[0.03]
+                px-4 py-3 text-sm text-white outline-none transition
+                focus:border-white/20 focus:bg-white/[0.05]
+              "
+            >
+              <option value="todos" className="bg-[#11131a] text-white">Todos</option>
+              <option value="programada" className="bg-[#11131a] text-white">Programadas</option>
+              <option value="confirmada" className="bg-[#11131a] text-white">Confirmadas</option>
+              <option value="completada" className="bg-[#11131a] text-white">Completadas</option>
+              <option value="cancelada" className="bg-[#11131a] text-white">Canceladas</option>
+              <option value="no_asistio" className="bg-[#11131a] text-white">No asistió</option>
+            </select>
+          </div>
 
-          <select
-            value={estado}
-            onChange={(e) => setEstado(e.target.value)}
-            className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-          >
-            {ESTADOS.map((item) => (
-              <option key={item} value={item}>
-                {item === 'todas' ? 'Todos los estados' : item}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={terapeutaId}
-            onChange={(e) => setTerapeutaId(e.target.value)}
-            className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-          >
-            <option value="todos">Todos los terapeutas</option>
-            {terapeutas.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.nombre}
-              </option>
-            ))}
-          </select>
+          <div>
+            <label className="mb-2 block text-sm font-medium text-white/75">
+              Fecha
+            </label>
+            <input
+              type="date"
+              value={fechaFiltro}
+              onChange={(e) => setFechaFiltro(e.target.value)}
+              className="
+                w-full rounded-2xl border border-white/10 bg-white/[0.03]
+                px-4 py-3 text-sm text-white outline-none transition
+                focus:border-white/20 focus:bg-white/[0.05]
+              "
+            />
+          </div>
         </div>
-      </section>
+      </Section>
 
-      <section className="rounded-2xl border bg-white shadow-sm overflow-hidden">
+      <Section
+        title="Listado de citas"
+        description="Vista general de todas las citas registradas."
+        className="p-0"
+        contentClassName="overflow-hidden"
+      >
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-100 text-slate-700">
-              <tr>
-                <th className="px-4 py-3 text-left font-semibold">Hora</th>
-                <th className="px-4 py-3 text-left font-semibold">Cliente</th>
-                <th className="px-4 py-3 text-left font-semibold">Terapeuta</th>
-                <th className="px-4 py-3 text-left font-semibold">Servicio</th>
-                <th className="px-4 py-3 text-left font-semibold">Recurso</th>
-                <th className="px-4 py-3 text-left font-semibold">Estado</th>
-                <th className="px-4 py-3 text-left font-semibold">Acciones rápidas</th>
+          <table className="min-w-full">
+            <thead className="border-b border-white/10 bg-white/[0.03]">
+              <tr className="text-left text-sm text-white/55">
+                <th className="px-4 py-4 font-medium">Fecha / Hora</th>
+                <th className="px-4 py-4 font-medium">Cliente</th>
+                <th className="px-4 py-4 font-medium">Personal</th>
+                <th className="px-4 py-4 font-medium">Servicio</th>
+                <th className="px-4 py-4 font-medium">Duración</th>
+                <th className="px-4 py-4 font-medium">Estado</th>
+                <th className="px-4 py-4 font-medium">Notas</th>
+                <th className="px-4 py-4 font-medium">Acciones</th>
               </tr>
             </thead>
-            <tbody>
+
+            <tbody className="divide-y divide-white/10 text-sm">
               {loading ? (
                 <tr>
-                  <td className="px-4 py-6 text-slate-500" colSpan={7}>
+                  <td colSpan={8} className="px-4 py-10 text-center text-white/55">
                     Cargando agenda...
                   </td>
                 </tr>
-              ) : filtradas.length === 0 ? (
+              ) : citasFiltradas.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-6 text-slate-500" colSpan={7}>
-                    No hay citas para los filtros seleccionados.
+                  <td colSpan={8} className="px-4 py-10 text-center text-white/55">
+                    No hay citas registradas.
                   </td>
                 </tr>
               ) : (
-                filtradas.map((cita) => (
-                  <tr key={cita.id} className="border-t border-slate-100 align-top">
-                    <td className="px-4 py-4 text-slate-700">
-                      <div className="font-medium">{cita.hora_inicio.slice(0, 5)}</div>
-                      <div className="text-xs text-slate-500">{cita.hora_fin.slice(0, 5)}</div>
-                    </td>
+                citasFiltradas.map((cita) => {
+                  const duracion =
+                    Number(cita.duracion_minutos || 0) || getDurationFromServicio(cita.servicio)
 
-                    <td className="px-4 py-4">
-                      <div className="font-medium text-slate-900">{cita.clientes?.nombre || 'Sin cliente'}</div>
-                      <div className="text-xs text-slate-500">{cita.fecha}</div>
-                    </td>
+                  return (
+                    <tr key={cita.id} className="align-top transition hover:bg-white/[0.03]">
+                      <td className="px-4 py-4">
+                        <div className="font-medium text-white">
+                          {formatDateTime(cita.fecha, cita.hora)}
+                        </div>
+                        <div className="mt-1 text-xs text-white/45">
+                          Registro: {formatDate(cita.created_at)}
+                        </div>
+                      </td>
 
-                    <td className="px-4 py-4 text-slate-700">
-                      {cita.empleados?.nombre || 'Sin terapeuta'}
-                    </td>
+                      <td className="px-4 py-4">
+                        <div className="font-medium text-white">
+                          {cita.cliente?.nombre || 'Sin cliente'}
+                        </div>
+                        <div className="mt-1 text-xs text-white/45">
+                          {cita.cliente?.telefono || cita.cliente?.email || 'Sin contacto'}
+                        </div>
+                      </td>
 
-                    <td className="px-4 py-4 text-slate-700">
-                      {cita.servicios?.nombre || 'Sin servicio'}
-                    </td>
+                      <td className="px-4 py-4">
+                        <div className="font-medium text-white">
+                          {cita.empleado?.nombre || 'Sin asignar'}
+                        </div>
+                        <div className="mt-1 text-xs text-white/45">
+                          {cita.empleado?.rol || 'Sin rol'}
+                        </div>
+                      </td>
 
-                    <td className="px-4 py-4 text-slate-700">
-                      {cita.recursos?.nombre || 'Sin recurso'}
-                    </td>
+                      <td className="px-4 py-4">
+                        <div className="font-medium text-white">
+                          {cita.servicio?.nombre || 'Sin servicio'}
+                        </div>
+                      </td>
 
-                    <td className="px-4 py-4">
-                      <span
-                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${estadoClasses(cita.estado)}`}
-                      >
-                        {cita.estado}
-                      </span>
-                    </td>
+                      <td className="px-4 py-4">
+                        <div className="font-medium text-white">
+                          {duracion > 0 ? `${duracion} min` : '—'}
+                        </div>
+                      </td>
 
-                    <td className="px-4 py-4">
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          onClick={() => cambiarEstado(cita.id, 'confirmada')}
-                          disabled={updatingId === cita.id}
-                          className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-60"
+                      <td className="px-4 py-4">
+                        <span
+                          className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoBadge(
+                            cita.estado
+                          )}`}
                         >
-                          Confirmar
-                        </button>
+                          {cita.estado}
+                        </span>
+                      </td>
 
-                        <button
-                          onClick={() => cambiarEstado(cita.id, 'completada')}
-                          disabled={updatingId === cita.id}
-                          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
-                        >
-                          Completar
-                        </button>
+                      <td className="px-4 py-4">
+                        <div className="max-w-xs text-white/75">
+                          {cita.notas?.trim() || 'Sin notas'}
+                        </div>
+                      </td>
 
-                        <button
-                          onClick={() => cambiarEstado(cita.id, 'cancelada')}
-                          disabled={updatingId === cita.id}
-                          className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60"
-                        >
-                          Cancelar
-                        </button>
+                      <td className="px-4 py-4">
+                        <div className="flex flex-wrap gap-2">
+                          <Link
+                            href={`/admin/operaciones/agenda/${cita.id}`}
+                            className="
+                              rounded-xl border border-white/10 bg-white/[0.03]
+                              px-3 py-1.5 text-xs font-medium text-white/80
+                              transition hover:bg-white/[0.06]
+                            "
+                          >
+                            Ver
+                          </Link>
 
-                        <Link
-                          href={`/admin/operaciones/agenda/${cita.id}/reprogramar`}
-                          className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100"
-                        >
-                          Reprogramar
-                        </Link>
-
-                        <Link
-                          href={`/admin/operaciones/agenda/${cita.id}/editar`}
-                          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                        >
-                          Editar
-                        </Link>
-
-                        <Link
-                          href={`/admin/operaciones/agenda/${cita.id}`}
-                          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                        >
-                          Ver
-                        </Link>
-                      </div>
-
-                      {cita.notas && (
-                        <p className="mt-2 max-w-md text-xs text-slate-500">{cita.notas}</p>
-                      )}
-                    </td>
-                  </tr>
-                ))
+                          <Link
+                            href={`/admin/operaciones/agenda/${cita.id}/editar`}
+                            className="
+                              rounded-xl border border-white/10 bg-white/[0.03]
+                              px-3 py-1.5 text-xs font-medium text-white/80
+                              transition hover:bg-white/[0.06]
+                            "
+                          >
+                            Editar
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </table>
         </div>
-      </section>
+      </Section>
     </div>
   )
 }

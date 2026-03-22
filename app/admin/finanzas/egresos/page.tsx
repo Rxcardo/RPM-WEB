@@ -3,6 +3,9 @@ export const dynamic = 'force-dynamic'
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import StatCard from '@/components/ui/StatCard'
 
 type MetodoPago = {
   id: string
@@ -61,6 +64,20 @@ const CATEGORIAS = [
   'otros',
 ]
 
+const inputClassName = `
+  w-full rounded-2xl border border-white/10 bg-white/[0.03]
+  px-4 py-3 text-sm text-white outline-none transition
+  placeholder:text-white/35
+  focus:border-white/20 focus:bg-white/[0.05]
+`
+
+const textareaClassName = `
+  min-h-[110px] w-full rounded-2xl border border-white/10 bg-white/[0.03]
+  px-4 py-3 text-sm text-white outline-none transition resize-none
+  placeholder:text-white/35
+  focus:border-white/20 focus:bg-white/[0.05]
+`
+
 function money(value: number) {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -70,10 +87,16 @@ function money(value: number) {
 }
 
 function estadoBadge(estado: string) {
-  if (estado === 'pagado') return 'bg-emerald-50 text-emerald-700 border-emerald-200'
-  if (estado === 'anulado') return 'bg-red-50 text-red-700 border-red-200'
-  if (estado === 'pendiente') return 'bg-amber-50 text-amber-700 border-amber-200'
-  return 'bg-slate-100 text-slate-700 border-slate-200'
+  if (estado === 'pagado') {
+    return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+  }
+  if (estado === 'anulado') {
+    return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+  }
+  if (estado === 'pendiente') {
+    return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+  }
+  return 'border-white/10 bg-white/[0.03] text-white/75'
 }
 
 export default function EgresosPage() {
@@ -336,12 +359,12 @@ export default function EgresosPage() {
   }, [egresos])
 
   return (
-    <div className="px-4 py-6 lg:px-6">
-      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="space-y-6 px-4 py-6 lg:px-6">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <p className="text-sm text-slate-500">Finanzas</p>
-          <h1 className="text-2xl font-bold text-slate-900">Egresos</h1>
-          <p className="mt-1 text-sm text-slate-600">
+          <p className="text-sm text-white/55">Finanzas</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">Egresos</h1>
+          <p className="mt-2 text-sm text-white/55">
             Registra y administra gastos, proveedores y salidas de dinero.
           </p>
         </div>
@@ -354,332 +377,365 @@ export default function EgresosPage() {
               startCreate()
             }
           }}
-          className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+          className="
+            rounded-2xl border border-white/10 bg-white/[0.08]
+            px-4 py-3 text-sm font-semibold text-white transition
+            hover:bg-white/[0.12]
+          "
         >
           {showForm && !editingId ? 'Cerrar formulario' : 'Nuevo egreso'}
         </button>
       </div>
 
-      <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Total registros</p>
-          <p className="mt-2 text-3xl font-bold text-slate-900">{resumen.total}</p>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Pagados</p>
-          <p className="mt-2 text-3xl font-bold text-red-700">{money(resumen.pagados)}</p>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Pendientes</p>
-          <p className="mt-2 text-3xl font-bold text-amber-700">{money(resumen.pendientes)}</p>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Anulados</p>
-          <p className="mt-2 text-3xl font-bold text-slate-900">{money(resumen.anulados)}</p>
-        </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard title="Total registros" value={resumen.total} color="text-white" />
+        <StatCard title="Pagados" value={money(resumen.pagados)} color="text-rose-300" />
+        <StatCard title="Pendientes" value={money(resumen.pendientes)} color="text-amber-300" />
+        <StatCard title="Anulados" value={money(resumen.anulados)} color="text-white" />
       </div>
 
       {errorMsg ? (
-        <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {errorMsg}
-        </div>
+        <Card className="p-4">
+          <p className="text-sm font-medium text-rose-400">Error</p>
+          <p className="mt-1 text-sm text-white/55">{errorMsg}</p>
+        </Card>
       ) : null}
 
       {successMsg ? (
-        <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-          {successMsg}
-        </div>
+        <Card className="p-4">
+          <p className="text-sm font-medium text-emerald-400">Listo</p>
+          <p className="mt-1 text-sm text-white/55">{successMsg}</p>
+        </Card>
       ) : null}
 
       <div className="grid gap-6 xl:grid-cols-3">
         {showForm ? (
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm xl:col-span-1">
-            <h2 className="mb-4 text-lg font-semibold text-slate-900">
-              {editingId ? 'Editar egreso' : 'Nuevo egreso'}
-            </h2>
+          <div className="xl:col-span-1">
+            <Section
+              title={editingId ? 'Editar egreso' : 'Nuevo egreso'}
+              description="Completa la información del gasto y su estado."
+            >
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Fecha</label>
+                  <input
+                    type="date"
+                    value={form.fecha}
+                    onChange={(e) => setForm((prev) => ({ ...prev, fecha: e.target.value }))}
+                    className={inputClassName}
+                  />
+                </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Fecha</label>
-                <input
-                  type="date"
-                  value={form.fecha}
-                  onChange={(e) => setForm((prev) => ({ ...prev, fecha: e.target.value }))}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-                />
-              </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Concepto</label>
+                  <input
+                    type="text"
+                    value={form.concepto}
+                    onChange={(e) => setForm((prev) => ({ ...prev, concepto: e.target.value }))}
+                    placeholder="Ej: Pago de alquiler"
+                    className={inputClassName}
+                  />
+                </div>
 
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Concepto</label>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Categoría</label>
+                  <select
+                    value={form.categoria}
+                    onChange={(e) => setForm((prev) => ({ ...prev, categoria: e.target.value }))}
+                    className={inputClassName}
+                  >
+                    {CATEGORIAS.map((cat) => (
+                      <option key={cat} value={cat} className="bg-[#11131a] text-white">
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Proveedor</label>
+                  <input
+                    type="text"
+                    value={form.proveedor}
+                    onChange={(e) => setForm((prev) => ({ ...prev, proveedor: e.target.value }))}
+                    placeholder="Nombre del proveedor"
+                    className={inputClassName}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Monto</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.monto}
+                    onChange={(e) => setForm((prev) => ({ ...prev, monto: e.target.value }))}
+                    placeholder="0.00"
+                    className={inputClassName}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Estado</label>
+                  <select
+                    value={form.estado}
+                    onChange={(e) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        estado: e.target.value as 'pagado' | 'pendiente' | 'anulado',
+                      }))
+                    }
+                    className={inputClassName}
+                  >
+                    <option value="pagado" className="bg-[#11131a] text-white">
+                      Pagado
+                    </option>
+                    <option value="pendiente" className="bg-[#11131a] text-white">
+                      Pendiente
+                    </option>
+                    <option value="anulado" className="bg-[#11131a] text-white">
+                      Anulado
+                    </option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">
+                    Método de pago
+                  </label>
+                  <select
+                    value={form.metodo_pago_id}
+                    onChange={(e) => setForm((prev) => ({ ...prev, metodo_pago_id: e.target.value }))}
+                    className={inputClassName}
+                  >
+                    <option value="" className="bg-[#11131a] text-white">
+                      Sin método
+                    </option>
+                    {metodosPago.map((metodo) => (
+                      <option key={metodo.id} value={metodo.id} className="bg-[#11131a] text-white">
+                        {metodo.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">
+                    URL comprobante
+                  </label>
+                  <input
+                    type="text"
+                    value={form.comprobante_url}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, comprobante_url: e.target.value }))
+                    }
+                    placeholder="https://..."
+                    className={inputClassName}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Notas</label>
+                  <textarea
+                    value={form.notas}
+                    onChange={(e) => setForm((prev) => ({ ...prev, notas: e.target.value }))}
+                    className={textareaClassName}
+                    placeholder="Notas adicionales"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="
+                      rounded-2xl border border-white/10 bg-white/[0.08]
+                      px-5 py-3 text-sm font-semibold text-white transition
+                      hover:bg-white/[0.12] disabled:opacity-60
+                    "
+                  >
+                    {saving
+                      ? editingId
+                        ? 'Actualizando...'
+                        : 'Guardando...'
+                      : editingId
+                      ? 'Guardar cambios'
+                      : 'Crear egreso'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    className="
+                      rounded-2xl border border-white/10 bg-white/[0.03]
+                      px-5 py-3 text-sm font-semibold text-white/80 transition
+                      hover:bg-white/[0.06]
+                    "
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </form>
+            </Section>
+          </div>
+        ) : null}
+
+        <div className={showForm ? 'xl:col-span-2' : 'xl:col-span-3'}>
+          <Section
+            title="Listado de egresos"
+            description="Filtra, edita, elimina o cambia el estado de cada registro."
+            className="p-0"
+            contentClassName="overflow-hidden"
+          >
+            <div className="border-b border-white/10 bg-white/[0.03] px-5 py-4">
+              <div className="grid gap-3 md:grid-cols-3">
                 <input
                   type="text"
-                  value={form.concepto}
-                  onChange={(e) => setForm((prev) => ({ ...prev, concepto: e.target.value }))}
-                  placeholder="Ej: Pago de alquiler"
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
+                  placeholder="Buscar por concepto, categoría, proveedor..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className={inputClassName}
                 />
-              </div>
 
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Categoría</label>
                 <select
-                  value={form.categoria}
-                  onChange={(e) => setForm((prev) => ({ ...prev, categoria: e.target.value }))}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
+                  value={estadoFiltro}
+                  onChange={(e) => setEstadoFiltro(e.target.value)}
+                  className={inputClassName}
                 >
+                  <option value="todos" className="bg-[#11131a] text-white">
+                    Todos los estados
+                  </option>
+                  <option value="pagado" className="bg-[#11131a] text-white">
+                    Pagado
+                  </option>
+                  <option value="pendiente" className="bg-[#11131a] text-white">
+                    Pendiente
+                  </option>
+                  <option value="anulado" className="bg-[#11131a] text-white">
+                    Anulado
+                  </option>
+                </select>
+
+                <select
+                  value={categoriaFiltro}
+                  onChange={(e) => setCategoriaFiltro(e.target.value)}
+                  className={inputClassName}
+                >
+                  <option value="todos" className="bg-[#11131a] text-white">
+                    Todas las categorías
+                  </option>
                   {CATEGORIAS.map((cat) => (
-                    <option key={cat} value={cat}>
+                    <option key={cat} value={cat} className="bg-[#11131a] text-white">
                       {cat}
                     </option>
                   ))}
                 </select>
               </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Proveedor</label>
-                <input
-                  type="text"
-                  value={form.proveedor}
-                  onChange={(e) => setForm((prev) => ({ ...prev, proveedor: e.target.value }))}
-                  placeholder="Nombre del proveedor"
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Monto</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={form.monto}
-                  onChange={(e) => setForm((prev) => ({ ...prev, monto: e.target.value }))}
-                  placeholder="0.00"
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Estado</label>
-                <select
-                  value={form.estado}
-                  onChange={(e) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      estado: e.target.value as 'pagado' | 'pendiente' | 'anulado',
-                    }))
-                  }
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-                >
-                  <option value="pagado">Pagado</option>
-                  <option value="pendiente">Pendiente</option>
-                  <option value="anulado">Anulado</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
-                  Método de pago
-                </label>
-                <select
-                  value={form.metodo_pago_id}
-                  onChange={(e) => setForm((prev) => ({ ...prev, metodo_pago_id: e.target.value }))}
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-                >
-                  <option value="">Sin método</option>
-                  {metodosPago.map((metodo) => (
-                    <option key={metodo.id} value={metodo.id}>
-                      {metodo.nombre}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">
-                  URL comprobante
-                </label>
-                <input
-                  type="text"
-                  value={form.comprobante_url}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, comprobante_url: e.target.value }))
-                  }
-                  placeholder="https://..."
-                  className="w-full rounded-xl border border-slate-300 px-3 py-2.5"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Notas</label>
-                <textarea
-                  value={form.notas}
-                  onChange={(e) => setForm((prev) => ({ ...prev, notas: e.target.value }))}
-                  className="min-h-[100px] w-full rounded-xl border border-slate-300 px-3 py-2.5"
-                  placeholder="Notas adicionales"
-                />
-              </div>
-
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
-                >
-                  {saving
-                    ? editingId
-                      ? 'Actualizando...'
-                      : 'Guardando...'
-                    : editingId
-                    ? 'Guardar cambios'
-                    : 'Crear egreso'}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={resetForm}
-                  className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                >
-                  Cancelar
-                </button>
-              </div>
-            </form>
-          </section>
-        ) : null}
-
-        <section
-          className={`overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ${
-            showForm ? 'xl:col-span-2' : 'xl:col-span-3'
-          }`}
-        >
-          <div className="border-b bg-slate-50 px-5 py-4">
-            <div className="grid gap-3 md:grid-cols-3">
-              <input
-                type="text"
-                placeholder="Buscar por concepto, categoría, proveedor..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
-              />
-
-              <select
-                value={estadoFiltro}
-                onChange={(e) => setEstadoFiltro(e.target.value)}
-                className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
-              >
-                <option value="todos">Todos los estados</option>
-                <option value="pagado">Pagado</option>
-                <option value="pendiente">Pendiente</option>
-                <option value="anulado">Anulado</option>
-              </select>
-
-              <select
-                value={categoriaFiltro}
-                onChange={(e) => setCategoriaFiltro(e.target.value)}
-                className="rounded-xl border border-slate-300 px-3 py-2 text-sm"
-              >
-                <option value="todos">Todas las categorías</option>
-                {CATEGORIAS.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat}
-                  </option>
-                ))}
-              </select>
             </div>
-          </div>
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-100 text-slate-700">
-                <tr>
-                  <th className="px-4 py-3 text-left font-semibold">Fecha</th>
-                  <th className="px-4 py-3 text-left font-semibold">Concepto</th>
-                  <th className="px-4 py-3 text-left font-semibold">Proveedor</th>
-                  <th className="px-4 py-3 text-left font-semibold">Categoría</th>
-                  <th className="px-4 py-3 text-left font-semibold">Método</th>
-                  <th className="px-4 py-3 text-left font-semibold">Estado</th>
-                  <th className="px-4 py-3 text-left font-semibold">Monto</th>
-                  <th className="px-4 py-3 text-left font-semibold">Acciones</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {loading ? (
-                  <tr>
-                    <td colSpan={8} className="px-4 py-6 text-slate-500">
-                      Cargando egresos...
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="border-b border-white/10 bg-white/[0.03]">
+                  <tr className="text-left text-white/55">
+                    <th className="px-4 py-3 font-medium">Fecha</th>
+                    <th className="px-4 py-3 font-medium">Concepto</th>
+                    <th className="px-4 py-3 font-medium">Proveedor</th>
+                    <th className="px-4 py-3 font-medium">Categoría</th>
+                    <th className="px-4 py-3 font-medium">Método</th>
+                    <th className="px-4 py-3 font-medium">Estado</th>
+                    <th className="px-4 py-3 font-medium">Monto</th>
+                    <th className="px-4 py-3 font-medium">Acciones</th>
                   </tr>
-                ) : egresosFiltrados.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-4 py-6 text-slate-500">
-                      No hay egresos registrados.
-                    </td>
-                  </tr>
-                ) : (
-                  egresosFiltrados.map((row) => (
-                    <tr key={row.id} className="border-t border-slate-100">
-                      <td className="px-4 py-3 text-slate-700">{row.fecha}</td>
+                </thead>
 
-                      <td className="px-4 py-3">
-                        <p className="font-medium text-slate-900">{row.concepto}</p>
-                        {row.notas ? (
-                          <p className="text-xs text-slate-500 line-clamp-1">{row.notas}</p>
-                        ) : null}
-                      </td>
-
-                      <td className="px-4 py-3 text-slate-700">{row.proveedor || '—'}</td>
-                      <td className="px-4 py-3 text-slate-700">{row.categoria}</td>
-                      <td className="px-4 py-3 text-slate-700">{row.metodos_pago?.nombre || '—'}</td>
-
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${estadoBadge(row.estado)}`}
-                        >
-                          {row.estado}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3 font-semibold text-red-700">
-                        {money(row.monto)}
-                      </td>
-
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            onClick={() => startEdit(row)}
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                          >
-                            Editar
-                          </button>
-
-                          <button
-                            onClick={() => toggleEstado(row)}
-                            disabled={updatingId === row.id}
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60"
-                          >
-                            {updatingId === row.id ? 'Actualizando...' : 'Cambiar estado'}
-                          </button>
-
-                          <button
-                            onClick={() => eliminarEgreso(row.id)}
-                            disabled={deletingId === row.id}
-                            className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
-                          >
-                            {deletingId === row.id ? 'Eliminando...' : 'Eliminar'}
-                          </button>
-                        </div>
+                <tbody className="divide-y divide-white/10">
+                  {loading ? (
+                    <tr>
+                      <td colSpan={8} className="px-4 py-6 text-white/55">
+                        Cargando egresos...
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                  ) : egresosFiltrados.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="px-4 py-6 text-white/55">
+                        No hay egresos registrados.
+                      </td>
+                    </tr>
+                  ) : (
+                    egresosFiltrados.map((row) => (
+                      <tr key={row.id} className="transition hover:bg-white/[0.03]">
+                        <td className="px-4 py-3 text-white/75">{row.fecha}</td>
+
+                        <td className="px-4 py-3">
+                          <p className="font-medium text-white">{row.concepto}</p>
+                          {row.notas ? (
+                            <p className="line-clamp-1 text-xs text-white/45">{row.notas}</p>
+                          ) : null}
+                        </td>
+
+                        <td className="px-4 py-3 text-white/75">{row.proveedor || '—'}</td>
+                        <td className="px-4 py-3 text-white/75">{row.categoria}</td>
+                        <td className="px-4 py-3 text-white/75">{row.metodos_pago?.nombre || '—'}</td>
+
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${estadoBadge(row.estado)}`}
+                          >
+                            {row.estado}
+                          </span>
+                        </td>
+
+                        <td className="px-4 py-3 font-semibold text-rose-300">
+                          {money(row.monto)}
+                        </td>
+
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              onClick={() => startEdit(row)}
+                              className="
+                                rounded-xl border border-white/10 bg-white/[0.03]
+                                px-3 py-1.5 text-xs font-semibold text-white/80 transition
+                                hover:bg-white/[0.06]
+                              "
+                            >
+                              Editar
+                            </button>
+
+                            <button
+                              onClick={() => toggleEstado(row)}
+                              disabled={updatingId === row.id}
+                              className="
+                                rounded-xl border border-white/10 bg-white/[0.03]
+                                px-3 py-1.5 text-xs font-semibold text-white/80 transition
+                                hover:bg-white/[0.06] disabled:opacity-60
+                              "
+                            >
+                              {updatingId === row.id ? 'Actualizando...' : 'Cambiar estado'}
+                            </button>
+
+                            <button
+                              onClick={() => eliminarEgreso(row.id)}
+                              disabled={deletingId === row.id}
+                              className="
+                                rounded-xl border border-rose-400/20 bg-rose-400/10
+                                px-3 py-1.5 text-xs font-semibold text-rose-300 transition
+                                hover:bg-rose-400/15 disabled:opacity-60
+                              "
+                            >
+                              {deletingId === row.id ? 'Eliminando...' : 'Eliminar'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+        </div>
       </div>
     </div>
   )

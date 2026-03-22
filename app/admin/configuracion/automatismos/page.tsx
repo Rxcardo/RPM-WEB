@@ -71,7 +71,7 @@ export default function AutomatismosPage() {
 
         <Link
           href="/admin/configuracion"
-          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+          className="rounded-xl border border-slate-200 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
         >
           Volver a configuración
         </Link>
@@ -90,7 +90,7 @@ export default function AutomatismosPage() {
       ) : null}
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <section className="rounded-2xl border border-slate-200 bg-white/[0.04] p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Actualizar planes vencidos</h2>
           <p className="mt-2 text-sm text-slate-600">
             Marca como vencidos los planes activos cuya fecha final ya pasó.
@@ -107,7 +107,7 @@ export default function AutomatismosPage() {
           </div>
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <section className="rounded-2xl border border-slate-200 bg-white/[0.04] p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-slate-900">Actualizar planes agotados</h2>
           <p className="mt-2 text-sm text-slate-600">
             Marca como agotados los planes activos que ya consumieron sus sesiones.

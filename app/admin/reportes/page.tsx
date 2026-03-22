@@ -2,7 +2,23 @@
 export const dynamic = 'force-dynamic'
 
 import { useEffect, useMemo, useState } from 'react'
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  PieChart,
+  Pie,
+  Cell,
+} from 'recharts'
 import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import StatCard from '@/components/ui/StatCard'
 
 type ClienteRow = {
   id: string
@@ -70,6 +86,18 @@ const TIPOS = [
   { value: 'financiero', label: 'Financiero' },
 ]
 
+const PIE_COLORS = ['#38bdf8', '#34d399', '#f59e0b', '#f87171', '#a78bfa', '#94a3b8']
+const BAR_INGRESOS = '#34d399'
+const BAR_EGRESOS = '#f87171'
+const BAR_CATEGORIA = '#60a5fa'
+
+const inputClassName = `
+  w-full rounded-2xl border border-white/10 bg-white/[0.03]
+  px-4 py-3 text-sm text-white outline-none transition
+  placeholder:text-white/35
+  focus:border-white/20 focus:bg-white/[0.05]
+`
+
 function money(value: number) {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -84,9 +112,7 @@ function todayISO() {
 
 function firstDayOfMonthISO() {
   const now = new Date()
-  return new Date(now.getFullYear(), now.getMonth(), 1)
-    .toISOString()
-    .slice(0, 10)
+  return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
 }
 
 function downloadCSV(filename: string, rows: Record<string, any>[]) {
@@ -118,6 +144,14 @@ function downloadCSV(filename: string, rows: Record<string, any>[]) {
   URL.revokeObjectURL(url)
 }
 
+function shortDate(value: string) {
+  try {
+    return new Date(value).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })
+  } catch {
+    return value
+  }
+}
+
 export default function ReportesPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -135,7 +169,6 @@ export default function ReportesPage() {
 
   useEffect(() => {
     void loadReporte('financiero')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   function limpiarDatos() {
@@ -350,17 +383,10 @@ export default function ReportesPage() {
       (x) => x.estado === 'completada' || x.estado === 'realizada'
     ).length
 
-    const citasCanceladas = citasFiltradas.filter(
-      (x) => x.estado === 'cancelada'
-    ).length
+    const citasCanceladas = citasFiltradas.filter((x) => x.estado === 'cancelada').length
 
-    const planesActivos = planesFiltrados.filter(
-      (x) => x.estado === 'activo'
-    ).length
-
-    const clientesActivos = clientesFiltrados.filter(
-      (x) => x.estado === 'activo'
-    ).length
+    const planesActivos = planesFiltrados.filter((x) => x.estado === 'activo').length
+    const clientesActivos = clientesFiltrados.filter((x) => x.estado === 'activo').length
 
     return {
       totalClientes: clientesFiltrados.length,
@@ -381,6 +407,70 @@ export default function ReportesPage() {
     ingresosFiltrados,
     egresosFiltrados,
   ])
+
+  const citasEstadoChart = useMemo(() => {
+    const map = new Map<string, number>()
+
+    for (const row of citasFiltradas) {
+      const key = row.estado || 'sin estado'
+      map.set(key, (map.get(key) || 0) + 1)
+    }
+
+    return Array.from(map.entries()).map(([name, value]) => ({ name, value }))
+  }, [citasFiltradas])
+
+  const financieroDiaChart = useMemo(() => {
+    const map = new Map<string, { fecha: string; ingresos: number; egresos: number }>()
+
+    for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) {
+      const prev = map.get(row.fecha) || { fecha: row.fecha, ingresos: 0, egresos: 0 }
+      prev.ingresos += Number(row.monto || 0)
+      map.set(row.fecha, prev)
+    }
+
+    for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado')) {
+      const prev = map.get(row.fecha) || { fecha: row.fecha, ingresos: 0, egresos: 0 }
+      prev.egresos += Number(row.monto || 0)
+      map.set(row.fecha, prev)
+    }
+
+    return Array.from(map.values())
+      .sort((a, b) => a.fecha.localeCompare(b.fecha))
+      .map((row) => ({
+        ...row,
+        label: shortDate(row.fecha),
+      }))
+  }, [ingresosFiltrados, egresosFiltrados])
+
+  const categoriaChart = useMemo(() => {
+    const map = new Map<string, number>()
+
+    if (tipo === 'ingresos') {
+      for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) {
+        const key = row.categoria || 'general'
+        map.set(key, (map.get(key) || 0) + Number(row.monto || 0))
+      }
+    } else if (tipo === 'egresos') {
+      for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado')) {
+        const key = row.categoria || 'operativo'
+        map.set(key, (map.get(key) || 0) + Number(row.monto || 0))
+      }
+    } else {
+      for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) {
+        const key = row.categoria || 'general'
+        map.set(key, (map.get(key) || 0) + Number(row.monto || 0))
+      }
+      for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado')) {
+        const key = row.categoria || 'operativo'
+        map.set(key, (map.get(key) || 0) + Number(row.monto || 0))
+      }
+    }
+
+    return Array.from(map.entries())
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8)
+  }, [tipo, ingresosFiltrados, egresosFiltrados])
 
   function handleExport() {
     if (tipo === 'clientes') {
@@ -409,8 +499,7 @@ export default function ReportesPage() {
           sesiones_totales: row.sesiones_totales,
           sesiones_usadas: row.sesiones_usadas,
           sesiones_restantes:
-            Number(row.sesiones_totales || 0) -
-            Number(row.sesiones_usadas || 0),
+            Number(row.sesiones_totales || 0) - Number(row.sesiones_usadas || 0),
           estado: row.estado,
           creado: row.created_at,
         }))
@@ -505,34 +594,36 @@ export default function ReportesPage() {
   }
 
   return (
-    <div className="px-4 py-6 lg:px-6">
-      <div className="mb-6">
-        <p className="text-sm text-slate-500">Administración</p>
-        <h1 className="text-2xl font-bold text-slate-900">Reportes</h1>
-        <p className="mt-1 text-sm text-slate-600">
+    <div className="space-y-6 px-4 py-6 lg:px-6">
+      <div>
+        <p className="text-sm text-white/55">Administración</p>
+        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">Reportes</h1>
+        <p className="mt-2 text-sm text-white/55">
           Reportes administrativos, operativos y financieros con exportación CSV.
         </p>
       </div>
 
       {error ? (
-        <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
+        <Card className="p-4">
+          <p className="text-sm font-medium text-rose-400">Error</p>
+          <p className="mt-1 text-sm text-white/55">{error}</p>
+        </Card>
       ) : null}
 
-      <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <Section
+        title="Filtros del reporte"
+        description="Selecciona el tipo, rango de fechas y búsqueda."
+      >
         <div className="grid gap-3 md:grid-cols-5">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              Tipo
-            </label>
+            <label className="mb-2 block text-sm font-medium text-white/75">Tipo</label>
             <select
               value={tipo}
               onChange={(e) => setTipo(e.target.value)}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              className={inputClassName}
             >
               {TIPOS.map((item) => (
-                <option key={item.value} value={item.value}>
+                <option key={item.value} value={item.value} className="bg-[#11131a] text-white">
                   {item.label}
                 </option>
               ))}
@@ -540,39 +631,33 @@ export default function ReportesPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              Desde
-            </label>
+            <label className="mb-2 block text-sm font-medium text-white/75">Desde</label>
             <input
               type="date"
               value={fechaInicio}
               onChange={(e) => setFechaInicio(e.target.value)}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              className={inputClassName}
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              Hasta
-            </label>
+            <label className="mb-2 block text-sm font-medium text-white/75">Hasta</label>
             <input
               type="date"
               value={fechaFin}
               onChange={(e) => setFechaFin(e.target.value)}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              className={inputClassName}
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
-              Buscar
-            </label>
+            <label className="mb-2 block text-sm font-medium text-white/75">Buscar</label>
             <input
               type="text"
               placeholder="Buscar..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              className={inputClassName}
             />
           </div>
 
@@ -580,386 +665,431 @@ export default function ReportesPage() {
             <button
               onClick={() => loadReporte()}
               disabled={loading}
-              className="flex-1 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              className="
+                flex-1 rounded-2xl border border-white/10 bg-white/[0.08]
+                px-4 py-3 text-sm font-semibold text-white transition
+                hover:bg-white/[0.12] disabled:opacity-60
+              "
             >
               {loading ? 'Cargando...' : 'Generar'}
             </button>
 
             <button
               onClick={handleExport}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              className="
+                rounded-2xl border border-white/10 bg-white/[0.03]
+                px-4 py-3 text-sm font-semibold text-white/80 transition
+                hover:bg-white/[0.06]
+              "
             >
               CSV
             </button>
           </div>
         </div>
-      </section>
+      </Section>
 
-      <div className="mb-6 grid gap-4 md:grid-cols-3 xl:grid-cols-6">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Clientes</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">
-            {resumen.totalClientes}
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            Activos: {resumen.totalClientesActivos}
-          </p>
-        </div>
+      <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+        <StatCard
+          title="Clientes"
+          value={resumen.totalClientes}
+          subtitle={`Activos: ${resumen.totalClientesActivos}`}
+          color="text-sky-400"
+        />
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Planes</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">
-            {resumen.totalPlanes}
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            Activos: {resumen.totalPlanesActivos}
-          </p>
-        </div>
+        <StatCard
+          title="Planes"
+          value={resumen.totalPlanes}
+          subtitle={`Activos: ${resumen.totalPlanesActivos}`}
+          color="text-violet-400"
+        />
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Citas</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">
-            {resumen.totalCitas}
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            Completadas: {resumen.totalCitasCompletadas} · Canceladas:{' '}
-            {resumen.totalCitasCanceladas}
-          </p>
-        </div>
+        <StatCard
+          title="Citas"
+          value={resumen.totalCitas}
+          subtitle={`Completadas: ${resumen.totalCitasCompletadas} · Canceladas: ${resumen.totalCitasCanceladas}`}
+          color="text-amber-300"
+        />
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Ingresos</p>
-          <p className="mt-2 text-2xl font-bold text-emerald-700">
-            {money(resumen.totalIngresos)}
-          </p>
-        </div>
+        <StatCard
+          title="Ingresos"
+          value={money(resumen.totalIngresos)}
+          color="text-emerald-400"
+        />
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Egresos</p>
-          <p className="mt-2 text-2xl font-bold text-red-700">
-            {money(resumen.totalEgresos)}
-          </p>
-        </div>
+        <StatCard
+          title="Egresos"
+          value={money(resumen.totalEgresos)}
+          color="text-rose-400"
+        />
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="text-sm text-slate-500">Balance</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">
-            {money(resumen.balance)}
-          </p>
-        </div>
+        <StatCard
+          title="Balance"
+          value={money(resumen.balance)}
+          color={resumen.balance >= 0 ? 'text-cyan-400' : 'text-rose-400'}
+        />
       </div>
 
-      {tipo === 'clientes' && (
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b bg-slate-50 px-5 py-4">
-            <h2 className="text-lg font-semibold text-slate-900">
-              Reporte de clientes
-            </h2>
-          </div>
+      {(tipo === 'citas' || tipo === 'ingresos' || tipo === 'egresos' || tipo === 'financiero') && (
+        <div className="grid gap-6 xl:grid-cols-2">
+          {tipo === 'citas' && (
+            <Section
+              title="Estados de citas"
+              description="Distribución por estado."
+            >
+              <div className="h-80">
+                {citasEstadoChart.length === 0 ? (
+                  <Card className="flex h-full items-center justify-center p-4">
+                    <p className="text-sm text-white/55">No hay datos para mostrar.</p>
+                  </Card>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={citasEstadoChart}
+                        dataKey="value"
+                        nameKey="name"
+                        innerRadius={60}
+                        outerRadius={100}
+                        paddingAngle={3}
+                      >
+                        {citasEstadoChart.map((entry, index) => (
+                          <Cell
+                            key={`${entry.name}-${index}`}
+                            fill={PIE_COLORS[index % PIE_COLORS.length]}
+                          />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        contentStyle={{
+                          background: '#11131a',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: 16,
+                          color: '#fff',
+                        }}
+                      />
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </Section>
+          )}
 
+          {tipo === 'financiero' && (
+            <Section
+              title="Ingresos vs egresos por día"
+              description="Comparativo diario del período."
+            >
+              <div className="h-80">
+                {financieroDiaChart.length === 0 ? (
+                  <Card className="flex h-full items-center justify-center p-4">
+                    <p className="text-sm text-white/55">No hay datos para mostrar.</p>
+                  </Card>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={financieroDiaChart}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                      <XAxis dataKey="label" stroke="rgba(255,255,255,0.45)" />
+                      <YAxis stroke="rgba(255,255,255,0.45)" />
+                      <Tooltip
+                        formatter={(value) => money(Number(value))}
+                        contentStyle={{
+                          background: '#11131a',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: 16,
+                          color: '#fff',
+                        }}
+                      />
+                      <Legend />
+                      <Bar dataKey="ingresos" fill={BAR_INGRESOS} radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="egresos" fill={BAR_EGRESOS} radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </Section>
+          )}
+
+          {(tipo === 'ingresos' || tipo === 'egresos' || tipo === 'financiero') && (
+            <Section
+              title="Distribución por categoría"
+              description="Top categorías del período."
+            >
+              <div className="h-80">
+                {categoriaChart.length === 0 ? (
+                  <Card className="flex h-full items-center justify-center p-4">
+                    <p className="text-sm text-white/55">No hay datos para mostrar.</p>
+                  </Card>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={categoriaChart}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                      <XAxis dataKey="name" stroke="rgba(255,255,255,0.45)" />
+                      <YAxis stroke="rgba(255,255,255,0.45)" />
+                      <Tooltip
+                        formatter={(value) => money(Number(value))}
+                        contentStyle={{
+                          background: '#11131a',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: 16,
+                          color: '#fff',
+                        }}
+                      />
+                      <Bar dataKey="value" fill={BAR_CATEGORIA} radius={[8, 8, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </Section>
+          )}
+        </div>
+      )}
+
+      {tipo === 'clientes' && (
+        <Section
+          title="Reporte de clientes"
+          description="Listado filtrado de clientes."
+          className="p-0"
+          contentClassName="overflow-hidden"
+        >
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-100 text-slate-700">
+              <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold">Nombre</th>
-                  <th className="px-4 py-3 text-left font-semibold">Teléfono</th>
-                  <th className="px-4 py-3 text-left font-semibold">Email</th>
-                  <th className="px-4 py-3 text-left font-semibold">Estado</th>
-                  <th className="px-4 py-3 text-left font-semibold">Creado</th>
+                  <th className="px-4 py-3 text-left font-medium">Nombre</th>
+                  <th className="px-4 py-3 text-left font-medium">Teléfono</th>
+                  <th className="px-4 py-3 text-left font-medium">Email</th>
+                  <th className="px-4 py-3 text-left font-medium">Estado</th>
+                  <th className="px-4 py-3 text-left font-medium">Creado</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-white/10">
                 {clientesFiltrados.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-4 py-6 text-slate-500">
-                      No hay clientes.
-                    </td>
+                    <td colSpan={5} className="px-4 py-6 text-white/55">No hay clientes.</td>
                   </tr>
                 ) : (
                   clientesFiltrados.map((row) => (
-                    <tr key={row.id} className="border-t border-slate-100">
-                      <td className="px-4 py-3 font-medium text-slate-900">
-                        {row.nombre}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.telefono || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.email || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">{row.estado}</td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.created_at}
-                      </td>
+                    <tr key={row.id} className="transition hover:bg-white/[0.03]">
+                      <td className="px-4 py-3 font-medium text-white">{row.nombre}</td>
+                      <td className="px-4 py-3 text-white/75">{row.telefono || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.email || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.estado}</td>
+                      <td className="px-4 py-3 text-white/75">{row.created_at}</td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
           </div>
-        </section>
+        </Section>
       )}
 
       {tipo === 'planes' && (
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b bg-slate-50 px-5 py-4">
-            <h2 className="text-lg font-semibold text-slate-900">
-              Reporte de planes
-            </h2>
-          </div>
-
+        <Section
+          title="Reporte de planes"
+          description="Listado filtrado de planes asignados."
+          className="p-0"
+          contentClassName="overflow-hidden"
+        >
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-100 text-slate-700">
+              <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold">Cliente</th>
-                  <th className="px-4 py-3 text-left font-semibold">Plan</th>
-                  <th className="px-4 py-3 text-left font-semibold">Precio</th>
-                  <th className="px-4 py-3 text-left font-semibold">Inicio</th>
-                  <th className="px-4 py-3 text-left font-semibold">Fin</th>
-                  <th className="px-4 py-3 text-left font-semibold">Usadas</th>
-                  <th className="px-4 py-3 text-left font-semibold">Restantes</th>
-                  <th className="px-4 py-3 text-left font-semibold">Estado</th>
+                  <th className="px-4 py-3 text-left font-medium">Cliente</th>
+                  <th className="px-4 py-3 text-left font-medium">Plan</th>
+                  <th className="px-4 py-3 text-left font-medium">Precio</th>
+                  <th className="px-4 py-3 text-left font-medium">Inicio</th>
+                  <th className="px-4 py-3 text-left font-medium">Fin</th>
+                  <th className="px-4 py-3 text-left font-medium">Usadas</th>
+                  <th className="px-4 py-3 text-left font-medium">Restantes</th>
+                  <th className="px-4 py-3 text-left font-medium">Estado</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-white/10">
                 {planesFiltrados.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-6 text-slate-500">
-                      No hay planes.
-                    </td>
+                    <td colSpan={8} className="px-4 py-6 text-white/55">No hay planes.</td>
                   </tr>
                 ) : (
                   planesFiltrados.map((row) => (
-                    <tr key={row.id} className="border-t border-slate-100">
-                      <td className="px-4 py-3 font-medium text-slate-900">
-                        {row.clientes?.nombre || '—'}
+                    <tr key={row.id} className="transition hover:bg-white/[0.03]">
+                      <td className="px-4 py-3 font-medium text-white">{row.clientes?.nombre || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.planes?.nombre || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{money(Number(row.planes?.precio || 0))}</td>
+                      <td className="px-4 py-3 text-white/75">{row.fecha_inicio || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.fecha_fin || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.sesiones_usadas}</td>
+                      <td className="px-4 py-3 text-white/75">
+                        {Number(row.sesiones_totales || 0) - Number(row.sesiones_usadas || 0)}
                       </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.planes?.nombre || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {money(Number(row.planes?.precio || 0))}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.fecha_inicio || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.fecha_fin || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.sesiones_usadas}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {Number(row.sesiones_totales || 0) -
-                          Number(row.sesiones_usadas || 0)}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">{row.estado}</td>
+                      <td className="px-4 py-3 text-white/75">{row.estado}</td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
           </div>
-        </section>
+        </Section>
       )}
 
       {tipo === 'citas' && (
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b bg-slate-50 px-5 py-4">
-            <h2 className="text-lg font-semibold text-slate-900">
-              Reporte de citas
-            </h2>
-          </div>
-
+        <Section
+          title="Reporte de citas"
+          description="Listado filtrado de citas."
+          className="p-0"
+          contentClassName="overflow-hidden"
+        >
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-100 text-slate-700">
+              <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold">Fecha</th>
-                  <th className="px-4 py-3 text-left font-semibold">Hora</th>
-                  <th className="px-4 py-3 text-left font-semibold">Cliente</th>
-                  <th className="px-4 py-3 text-left font-semibold">Personal</th>
-                  <th className="px-4 py-3 text-left font-semibold">Servicio</th>
-                  <th className="px-4 py-3 text-left font-semibold">Estado</th>
+                  <th className="px-4 py-3 text-left font-medium">Fecha</th>
+                  <th className="px-4 py-3 text-left font-medium">Hora</th>
+                  <th className="px-4 py-3 text-left font-medium">Cliente</th>
+                  <th className="px-4 py-3 text-left font-medium">Personal</th>
+                  <th className="px-4 py-3 text-left font-medium">Servicio</th>
+                  <th className="px-4 py-3 text-left font-medium">Estado</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-white/10">
                 {citasFiltradas.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-6 text-slate-500">
-                      No hay citas.
-                    </td>
+                    <td colSpan={6} className="px-4 py-6 text-white/55">No hay citas.</td>
                   </tr>
                 ) : (
                   citasFiltradas.map((row) => (
-                    <tr key={row.id} className="border-t border-slate-100">
-                      <td className="px-4 py-3 text-slate-700">{row.fecha}</td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.hora_inicio?.slice(0, 5)} -{' '}
-                        {row.hora_fin?.slice(0, 5)}
+                    <tr key={row.id} className="transition hover:bg-white/[0.03]">
+                      <td className="px-4 py-3 text-white/75">{row.fecha}</td>
+                      <td className="px-4 py-3 text-white/75">
+                        {row.hora_inicio?.slice(0, 5)} - {row.hora_fin?.slice(0, 5)}
                       </td>
-                      <td className="px-4 py-3 font-medium text-slate-900">
-                        {row.clientes?.nombre || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.empleados?.nombre || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.servicios?.nombre || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">{row.estado}</td>
+                      <td className="px-4 py-3 font-medium text-white">{row.clientes?.nombre || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.empleados?.nombre || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.servicios?.nombre || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.estado}</td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
           </div>
-        </section>
+        </Section>
       )}
 
       {tipo === 'ingresos' && (
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b bg-slate-50 px-5 py-4">
-            <h2 className="text-lg font-semibold text-slate-900">
-              Reporte de ingresos
-            </h2>
-          </div>
-
+        <Section
+          title="Reporte de ingresos"
+          description="Listado filtrado de ingresos."
+          className="p-0"
+          contentClassName="overflow-hidden"
+        >
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-100 text-slate-700">
+              <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold">Fecha</th>
-                  <th className="px-4 py-3 text-left font-semibold">Concepto</th>
-                  <th className="px-4 py-3 text-left font-semibold">Cliente</th>
-                  <th className="px-4 py-3 text-left font-semibold">Categoría</th>
-                  <th className="px-4 py-3 text-left font-semibold">Método</th>
-                  <th className="px-4 py-3 text-left font-semibold">Estado</th>
-                  <th className="px-4 py-3 text-left font-semibold">Monto</th>
+                  <th className="px-4 py-3 text-left font-medium">Fecha</th>
+                  <th className="px-4 py-3 text-left font-medium">Concepto</th>
+                  <th className="px-4 py-3 text-left font-medium">Cliente</th>
+                  <th className="px-4 py-3 text-left font-medium">Categoría</th>
+                  <th className="px-4 py-3 text-left font-medium">Método</th>
+                  <th className="px-4 py-3 text-left font-medium">Estado</th>
+                  <th className="px-4 py-3 text-left font-medium">Monto</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-white/10">
                 {ingresosFiltrados.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-6 text-slate-500">
-                      No hay ingresos.
-                    </td>
+                    <td colSpan={7} className="px-4 py-6 text-white/55">No hay ingresos.</td>
                   </tr>
                 ) : (
                   ingresosFiltrados.map((row) => (
-                    <tr key={row.id} className="border-t border-slate-100">
-                      <td className="px-4 py-3 text-slate-700">{row.fecha}</td>
+                    <tr key={row.id} className="transition hover:bg-white/[0.03]">
+                      <td className="px-4 py-3 text-white/75">{row.fecha}</td>
                       <td className="px-4 py-3">
-                        <p className="font-medium text-slate-900">
-                          {row.concepto}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {row.tipo_origen}
-                        </p>
+                        <p className="font-medium text-white">{row.concepto}</p>
+                        <p className="text-xs text-white/45">{row.tipo_origen}</p>
                       </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.clientes?.nombre || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.categoria}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.metodos_pago?.nombre || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">{row.estado}</td>
-                      <td className="px-4 py-3 font-semibold text-emerald-700">
-                        {money(row.monto)}
-                      </td>
+                      <td className="px-4 py-3 text-white/75">{row.clientes?.nombre || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.categoria}</td>
+                      <td className="px-4 py-3 text-white/75">{row.metodos_pago?.nombre || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.estado}</td>
+                      <td className="px-4 py-3 font-semibold text-emerald-400">{money(row.monto)}</td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
           </div>
-        </section>
+        </Section>
       )}
 
       {tipo === 'egresos' && (
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b bg-slate-50 px-5 py-4">
-            <h2 className="text-lg font-semibold text-slate-900">
-              Reporte de egresos
-            </h2>
-          </div>
-
+        <Section
+          title="Reporte de egresos"
+          description="Listado filtrado de egresos."
+          className="p-0"
+          contentClassName="overflow-hidden"
+        >
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-100 text-slate-700">
+              <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold">Fecha</th>
-                  <th className="px-4 py-3 text-left font-semibold">Concepto</th>
-                  <th className="px-4 py-3 text-left font-semibold">Proveedor</th>
-                  <th className="px-4 py-3 text-left font-semibold">Categoría</th>
-                  <th className="px-4 py-3 text-left font-semibold">Método</th>
-                  <th className="px-4 py-3 text-left font-semibold">Estado</th>
-                  <th className="px-4 py-3 text-left font-semibold">Monto</th>
+                  <th className="px-4 py-3 text-left font-medium">Fecha</th>
+                  <th className="px-4 py-3 text-left font-medium">Concepto</th>
+                  <th className="px-4 py-3 text-left font-medium">Proveedor</th>
+                  <th className="px-4 py-3 text-left font-medium">Categoría</th>
+                  <th className="px-4 py-3 text-left font-medium">Método</th>
+                  <th className="px-4 py-3 text-left font-medium">Estado</th>
+                  <th className="px-4 py-3 text-left font-medium">Monto</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-white/10">
                 {egresosFiltrados.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-6 text-slate-500">
-                      No hay egresos.
-                    </td>
+                    <td colSpan={7} className="px-4 py-6 text-white/55">No hay egresos.</td>
                   </tr>
                 ) : (
                   egresosFiltrados.map((row) => (
-                    <tr key={row.id} className="border-t border-slate-100">
-                      <td className="px-4 py-3 text-slate-700">{row.fecha}</td>
-                      <td className="px-4 py-3 font-medium text-slate-900">
-                        {row.concepto}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.proveedor || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.categoria}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.metodos_pago?.nombre || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">{row.estado}</td>
-                      <td className="px-4 py-3 font-semibold text-red-700">
-                        {money(row.monto)}
-                      </td>
+                    <tr key={row.id} className="transition hover:bg-white/[0.03]">
+                      <td className="px-4 py-3 text-white/75">{row.fecha}</td>
+                      <td className="px-4 py-3 font-medium text-white">{row.concepto}</td>
+                      <td className="px-4 py-3 text-white/75">{row.proveedor || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.categoria}</td>
+                      <td className="px-4 py-3 text-white/75">{row.metodos_pago?.nombre || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.estado}</td>
+                      <td className="px-4 py-3 font-semibold text-rose-400">{money(row.monto)}</td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
           </div>
-        </section>
+        </Section>
       )}
 
       {tipo === 'financiero' && (
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b bg-slate-50 px-5 py-4">
-            <h2 className="text-lg font-semibold text-slate-900">
-              Reporte financiero
-            </h2>
-          </div>
-
+        <Section
+          title="Reporte financiero"
+          description="Consolidado de ingresos y egresos."
+          className="p-0"
+          contentClassName="overflow-hidden"
+        >
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-100 text-slate-700">
+              <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold">Fecha</th>
-                  <th className="px-4 py-3 text-left font-semibold">Tipo</th>
-                  <th className="px-4 py-3 text-left font-semibold">Concepto</th>
-                  <th className="px-4 py-3 text-left font-semibold">Categoría</th>
-                  <th className="px-4 py-3 text-left font-semibold">Tercero</th>
-                  <th className="px-4 py-3 text-left font-semibold">Método</th>
-                  <th className="px-4 py-3 text-left font-semibold">Estado</th>
-                  <th className="px-4 py-3 text-left font-semibold">Monto</th>
+                  <th className="px-4 py-3 text-left font-medium">Fecha</th>
+                  <th className="px-4 py-3 text-left font-medium">Tipo</th>
+                  <th className="px-4 py-3 text-left font-medium">Concepto</th>
+                  <th className="px-4 py-3 text-left font-medium">Categoría</th>
+                  <th className="px-4 py-3 text-left font-medium">Tercero</th>
+                  <th className="px-4 py-3 text-left font-medium">Método</th>
+                  <th className="px-4 py-3 text-left font-medium">Estado</th>
+                  <th className="px-4 py-3 text-left font-medium">Monto</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-white/10">
                 {[
                   ...ingresosFiltrados.map((row) => ({
                     key: `ingreso-${row.id}`,
@@ -992,25 +1122,17 @@ export default function ReportesPage() {
                     return dateA < dateB ? 1 : -1
                   })
                   .map((row) => (
-                    <tr key={row.key} className="border-t border-slate-100">
-                      <td className="px-4 py-3 text-slate-700">{row.fecha}</td>
-                      <td className="px-4 py-3 text-slate-700">{row.tipo}</td>
-                      <td className="px-4 py-3 font-medium text-slate-900">
-                        {row.concepto}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.categoria}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">
-                        {row.tercero}
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">{row.metodo}</td>
-                      <td className="px-4 py-3 text-slate-700">{row.estado}</td>
+                    <tr key={row.key} className="transition hover:bg-white/[0.03]">
+                      <td className="px-4 py-3 text-white/75">{row.fecha}</td>
+                      <td className="px-4 py-3 text-white/75">{row.tipo}</td>
+                      <td className="px-4 py-3 font-medium text-white">{row.concepto}</td>
+                      <td className="px-4 py-3 text-white/75">{row.categoria}</td>
+                      <td className="px-4 py-3 text-white/75">{row.tercero}</td>
+                      <td className="px-4 py-3 text-white/75">{row.metodo}</td>
+                      <td className="px-4 py-3 text-white/75">{row.estado}</td>
                       <td
                         className={`px-4 py-3 font-semibold ${
-                          row.tipo === 'Ingreso'
-                            ? 'text-emerald-700'
-                            : 'text-red-700'
+                          row.tipo === 'Ingreso' ? 'text-emerald-400' : 'text-rose-400'
                         }`}
                       >
                         {row.tipo === 'Ingreso' ? '+' : '-'}
@@ -1019,18 +1141,17 @@ export default function ReportesPage() {
                     </tr>
                   ))}
 
-                {ingresosFiltrados.length === 0 &&
-                  egresosFiltrados.length === 0 && (
-                    <tr>
-                      <td colSpan={8} className="px-4 py-6 text-slate-500">
-                        No hay movimientos financieros.
-                      </td>
-                    </tr>
-                  )}
+                {ingresosFiltrados.length === 0 && egresosFiltrados.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-6 text-white/55">
+                      No hay movimientos financieros.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
-        </section>
+        </Section>
       )}
     </div>
   )

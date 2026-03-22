@@ -1,10 +1,29 @@
 'use client'
+
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import ActionCard from '@/components/ui/ActionCard'
+
+type ServicioDetalle = {
+  id: string
+  nombre: string
+  estado?: string | null
+  categoria?: string | null
+  precio?: number | null
+  duracion_min?: number | null
+  duracion?: number | null
+  tiempo?: number | null
+  tiempo_min?: number | null
+  tiempo_minutos?: number | null
+  minutos?: number | null
+  [key: string]: any
+}
 
 type CitaDetalle = {
   id: string
@@ -16,22 +35,44 @@ type CitaDetalle = {
   created_at: string | null
   clientes: { id: string; nombre: string } | null
   empleados: { id: string; nombre: string } | null
-  servicios: { id: string; nombre: string; duracion_min?: number | null } | null
+  servicios: ServicioDetalle | null
   recursos: { id: string; nombre: string } | null
 }
 
+function getServicioDuracion(servicio: ServicioDetalle | null) {
+  if (!servicio) return null
+
+  const posibles = [
+    servicio.duracion_min,
+    servicio.duracion,
+    servicio.tiempo,
+    servicio.tiempo_min,
+    servicio.tiempo_minutos,
+    servicio.minutos,
+  ]
+
+  for (const valor of posibles) {
+    const n = Number(valor)
+    if (!Number.isNaN(n) && n > 0) return n
+  }
+
+  return null
+}
+
 function estadoClasses(estado: string) {
-  switch (estado) {
+  switch ((estado || '').toLowerCase()) {
     case 'confirmada':
-      return 'bg-blue-50 text-blue-700 border-blue-200'
+      return 'border-sky-400/20 bg-sky-400/10 text-sky-300'
     case 'completada':
-      return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
     case 'cancelada':
-      return 'bg-red-50 text-red-700 border-red-200'
+      return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
     case 'reprogramada':
-      return 'bg-amber-50 text-amber-700 border-amber-200'
+      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+    case 'programada':
+      return 'border-violet-400/20 bg-violet-400/10 text-violet-300'
     default:
-      return 'bg-slate-50 text-slate-700 border-slate-200'
+      return 'border-white/10 bg-white/[0.05] text-white/70'
   }
 }
 
@@ -44,16 +85,48 @@ function formatFecha(fecha: string) {
   }
 }
 
+function formatDateTime(value: string | null) {
+  if (!value) return '—'
+  try {
+    return new Date(value).toLocaleString()
+  } catch {
+    return value
+  }
+}
+
+function DetailItem({
+  label,
+  value,
+}: {
+  label: string
+  value: React.ReactNode
+}) {
+  return (
+    <Card className="p-4">
+      <p className="text-xs text-white/45">{label}</p>
+      <div className="mt-1 font-medium text-white">{value}</div>
+    </Card>
+  )
+}
+
 export default function VerCitaPage() {
   const router = useRouter()
   const params = useParams()
-  const id = params?.id as string
+  const rawId = params?.id
+  const id = Array.isArray(rawId) ? rawId[0] : (rawId as string)
 
   const [loading, setLoading] = useState(true)
   const [cita, setCita] = useState<CitaDetalle | null>(null)
 
+  const duracionServicio = useMemo(() => getServicioDuracion(cita?.servicios || null), [cita])
+
   useEffect(() => {
-    loadCita()
+    if (!id) {
+      setLoading(false)
+      return
+    }
+
+    void loadCita()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
@@ -72,15 +145,22 @@ export default function VerCitaPage() {
         created_at,
         clientes:cliente_id ( id, nombre ),
         empleados:terapeuta_id ( id, nombre ),
-        servicios:servicio_id ( id, nombre, duracion_min ),
+        servicios:servicio_id ( * ),
         recursos:recurso_id ( id, nombre )
       `)
       .eq('id', id)
-      .single()
+      .limit(1)
+      .maybeSingle()
 
     if (error) {
       console.error(error)
       alert('No se pudo cargar la cita.')
+      router.push('/admin/operaciones/agenda')
+      return
+    }
+
+    if (!data) {
+      alert('No se encontró la cita.')
       router.push('/admin/operaciones/agenda')
       return
     }
@@ -91,137 +171,150 @@ export default function VerCitaPage() {
 
   if (loading) {
     return (
-      <div className="p-6">
-        <div className="rounded-2xl border bg-white p-6 shadow-sm">
-          <p className="text-sm text-slate-500">Cargando cita...</p>
+      <div className="space-y-4">
+        <div>
+          <p className="text-sm text-white/55">Agenda</p>
+          <h1 className="mt-1 text-2xl font-semibold text-white">Detalle de cita</h1>
         </div>
+
+        <Card className="p-6">
+          <p className="text-sm text-white/55">Cargando cita...</p>
+        </Card>
       </div>
     )
   }
 
   if (!cita) {
     return (
-      <div className="p-6">
-        <div className="rounded-2xl border bg-white p-6 shadow-sm">
-          <p className="text-sm text-slate-500">No se encontró la cita.</p>
+      <div className="space-y-4">
+        <div>
+          <p className="text-sm text-white/55">Agenda</p>
+          <h1 className="mt-1 text-2xl font-semibold text-white">Detalle de cita</h1>
         </div>
+
+        <Card className="p-6">
+          <p className="text-sm text-white/55">No se encontró la cita.</p>
+        </Card>
       </div>
     )
   }
 
   return (
-    <div className="p-6">
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <p className="text-sm text-slate-500">Agenda</p>
-          <h1 className="text-2xl font-bold text-slate-900">Detalle de cita</h1>
-          <p className="mt-1 text-sm text-slate-600">
+          <p className="text-sm text-white/55">Agenda</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
+            Detalle de cita
+          </h1>
+          <p className="mt-2 text-sm text-white/55">
             Consulta toda la información de la cita.
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <Link
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <ActionCard
+            title="Editar"
+            description="Modificar datos de la cita."
             href={`/admin/operaciones/agenda/${cita.id}/editar`}
-            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-          >
-            Editar
-          </Link>
+          />
 
-          <Link
+          <ActionCard
+            title="Reprogramar"
+            description="Cambiar fecha y horario."
             href={`/admin/operaciones/agenda/${cita.id}/reprogramar`}
-            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-          >
-            Reprogramar
-          </Link>
+          />
         </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2 rounded-2xl border bg-white p-6 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-            Información principal
-          </h2>
+        <div className="lg:col-span-2">
+          <Section
+            title="Información principal"
+            description="Datos base de la cita, cliente, personal y servicio."
+          >
+            <div className="grid gap-4 md:grid-cols-2">
+              <DetailItem
+                label="Cliente"
+                value={cita.clientes?.nombre || 'Sin cliente'}
+              />
 
-          <div className="grid gap-5 md:grid-cols-2">
-            <div>
-              <p className="text-xs text-slate-500">Cliente</p>
-              <p className="mt-1 font-semibold text-slate-900">
-                {cita.clientes?.nombre || 'Sin cliente'}
-              </p>
-            </div>
+              <DetailItem
+                label="Terapeuta"
+                value={cita.empleados?.nombre || 'Sin terapeuta'}
+              />
 
-            <div>
-              <p className="text-xs text-slate-500">Terapeuta</p>
-              <p className="mt-1 font-semibold text-slate-900">
-                {cita.empleados?.nombre || 'Sin terapeuta'}
-              </p>
-            </div>
+              <DetailItem
+                label="Servicio"
+                value={cita.servicios?.nombre || 'Sin servicio'}
+              />
 
-            <div>
-              <p className="text-xs text-slate-500">Servicio</p>
-              <p className="mt-1 font-semibold text-slate-900">
-                {cita.servicios?.nombre || 'Sin servicio'}
-              </p>
-            </div>
+              <DetailItem
+                label="Recurso"
+                value={cita.recursos?.nombre || 'Sin recurso'}
+              />
 
-            <div>
-              <p className="text-xs text-slate-500">Recurso</p>
-              <p className="mt-1 font-semibold text-slate-900">
-                {cita.recursos?.nombre || 'Sin recurso'}
-              </p>
-            </div>
+              <DetailItem
+                label="Fecha"
+                value={formatFecha(cita.fecha)}
+              />
 
-            <div>
-              <p className="text-xs text-slate-500">Fecha</p>
-              <p className="mt-1 font-semibold text-slate-900">
-                {formatFecha(cita.fecha)}
-              </p>
-            </div>
+              <DetailItem
+                label="Horario"
+                value={`${cita.hora_inicio?.slice(0, 5) || '—'} - ${cita.hora_fin?.slice(0, 5) || '—'}`}
+              />
 
-            <div>
-              <p className="text-xs text-slate-500">Horario</p>
-              <p className="mt-1 font-semibold text-slate-900">
-                {cita.hora_inicio?.slice(0, 5)} - {cita.hora_fin?.slice(0, 5)}
-              </p>
-            </div>
+              <DetailItem
+                label="Estado"
+                value={
+                  <span
+                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoClasses(
+                      cita.estado
+                    )}`}
+                  >
+                    {cita.estado}
+                  </span>
+                }
+              />
 
-            <div>
-              <p className="text-xs text-slate-500">Estado</p>
-              <div className="mt-2">
-                <span
-                  className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${estadoClasses(cita.estado)}`}
-                >
-                  {cita.estado}
-                </span>
-              </div>
+              <DetailItem
+                label="Duración"
+                value={duracionServicio ? `${duracionServicio} min` : '—'}
+              />
             </div>
-
-            <div>
-              <p className="text-xs text-slate-500">Duración</p>
-              <p className="mt-1 font-semibold text-slate-900">
-                {cita.servicios?.duracion_min ? `${cita.servicios.duracion_min} min` : '—'}
-              </p>
-            </div>
-          </div>
+          </Section>
         </div>
 
-        <div className="rounded-2xl border bg-white p-6 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-            Notas
-          </h2>
-
-          <p className="whitespace-pre-wrap text-sm text-slate-700">
-            {cita.notas || 'Sin notas registradas.'}
-          </p>
-
-          <div className="mt-6 border-t pt-4">
-            <p className="text-xs text-slate-500">Creada</p>
-            <p className="mt-1 text-sm font-medium text-slate-900">
-              {cita.created_at ? new Date(cita.created_at).toLocaleString() : '—'}
+        <Section
+          title="Notas"
+          description="Observaciones registradas para esta cita."
+        >
+          <Card className="p-4">
+            <p className="whitespace-pre-wrap text-sm text-white/75">
+              {cita.notas || 'Sin notas registradas.'}
             </p>
+          </Card>
+
+          <Card className="mt-4 p-4">
+            <p className="text-xs text-white/45">Creada</p>
+            <p className="mt-1 text-sm font-medium text-white">
+              {formatDateTime(cita.created_at)}
+            </p>
+          </Card>
+
+          <div className="mt-4">
+            <Link
+              href="/admin/operaciones/agenda"
+              className="
+                inline-flex rounded-2xl border border-white/10 bg-white/[0.03]
+                px-4 py-2 text-sm font-medium text-white/80
+                transition hover:bg-white/[0.06]
+              "
+            >
+              Volver a agenda
+            </Link>
           </div>
-        </div>
+        </Section>
       </div>
     </div>
   )

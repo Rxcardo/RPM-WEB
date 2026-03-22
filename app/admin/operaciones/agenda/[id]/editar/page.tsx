@@ -1,9 +1,14 @@
 'use client'
+
 export const dynamic = 'force-dynamic'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import ActionCard from '@/components/ui/ActionCard'
 
 type Cliente = {
   id: string
@@ -38,6 +43,31 @@ function sumarMinutos(hora: string, minutos: number) {
   return `${hh}:${mm}:00`
 }
 
+function Field({
+  label,
+  children,
+  helper,
+}: {
+  label: string
+  children: React.ReactNode
+  helper?: string
+}) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-medium text-white/75">{label}</label>
+      {children}
+      {helper ? <p className="mt-2 text-xs text-white/45">{helper}</p> : null}
+    </div>
+  )
+}
+
+const inputClassName = `
+  w-full rounded-2xl border border-white/10 bg-white/[0.03]
+  px-4 py-3 text-sm text-white outline-none transition
+  placeholder:text-white/35
+  focus:border-white/20 focus:bg-white/[0.05]
+`
+
 export default function EditarCitaPage() {
   const router = useRouter()
   const params = useParams()
@@ -70,7 +100,7 @@ export default function EditarCitaPage() {
   )
 
   useEffect(() => {
-    loadData()
+    void loadData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
@@ -94,7 +124,10 @@ export default function EditarCitaPage() {
         .eq('rol', 'terapeuta')
         .eq('estado', 'activo')
         .order('nombre', { ascending: true }),
-      supabase.from('servicios').select('id, nombre, duracion_min').order('nombre', { ascending: true }),
+      supabase
+        .from('servicios')
+        .select('id, nombre, duracion_min')
+        .order('nombre', { ascending: true }),
       supabase.from('recursos').select('id, nombre, estado').order('nombre', { ascending: true }),
       supabase
         .from('citas')
@@ -234,125 +267,165 @@ export default function EditarCitaPage() {
   }
 
   return (
-    <div className="p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-900">Editar cita</h1>
-        <p className="mt-1 text-sm text-slate-600">
-          Modifica la cita con validación de terapeuta y recurso.
-        </p>
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm text-white/55">Agenda</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
+            Editar cita
+          </h1>
+          <p className="mt-2 text-sm text-white/55">
+            Modifica la cita con validación de terapeuta y recurso.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <ActionCard
+            title="Ver cita"
+            description="Ir al detalle de la cita."
+            href={`/admin/operaciones/agenda/${id}`}
+          />
+          <ActionCard
+            title="Volver a agenda"
+            description="Regresar al listado general."
+            href="/admin/operaciones/agenda"
+          />
+        </div>
       </div>
 
-      <div className="rounded-2xl border bg-white p-6 shadow-sm">
+      <Section
+        title="Formulario de edición"
+        description="Actualiza cliente, terapeuta, servicio, horario, estado y notas."
+      >
         {loadingData ? (
-          <div className="text-sm text-slate-500">Cargando cita...</div>
+          <Card className="p-6">
+            <p className="text-sm text-white/55">Cargando cita...</p>
+          </Card>
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-800">Cliente</label>
+            <Field label="Cliente">
               <select
                 value={form.cliente_id}
                 onChange={(e) => setForm({ ...form, cliente_id: e.target.value })}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                className={inputClassName}
               >
-                <option value="">Seleccionar cliente</option>
+                <option value="" className="bg-[#11131a] text-white">
+                  Seleccionar cliente
+                </option>
                 {clientes.map((c) => (
-                  <option key={c.id} value={c.id}>
+                  <option key={c.id} value={c.id} className="bg-[#11131a] text-white">
                     {c.nombre}
                   </option>
                 ))}
               </select>
-            </div>
+            </Field>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-800">Terapeuta</label>
+            <Field label="Terapeuta">
               <select
                 value={form.terapeuta_id}
                 onChange={(e) => setForm({ ...form, terapeuta_id: e.target.value })}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                className={inputClassName}
               >
-                <option value="">Seleccionar terapeuta</option>
+                <option value="" className="bg-[#11131a] text-white">
+                  Seleccionar terapeuta
+                </option>
                 {terapeutas.map((t) => (
-                  <option key={t.id} value={t.id}>
+                  <option key={t.id} value={t.id} className="bg-[#11131a] text-white">
                     {t.nombre}
                   </option>
                 ))}
               </select>
-            </div>
+            </Field>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-800">Servicio</label>
+            <Field label="Servicio">
               <select
                 value={form.servicio_id}
                 onChange={(e) => setForm({ ...form, servicio_id: e.target.value })}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                className={inputClassName}
               >
-                <option value="">Seleccionar servicio</option>
+                <option value="" className="bg-[#11131a] text-white">
+                  Seleccionar servicio
+                </option>
                 {servicios.map((s) => (
-                  <option key={s.id} value={s.id}>
+                  <option key={s.id} value={s.id} className="bg-[#11131a] text-white">
                     {s.nombre}
                   </option>
                 ))}
               </select>
-            </div>
+            </Field>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-800">Recurso</label>
+            <Field label="Recurso">
               <select
                 value={form.recurso_id}
                 onChange={(e) => setForm({ ...form, recurso_id: e.target.value })}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                className={inputClassName}
               >
-                <option value="">Sin recurso</option>
+                <option value="" className="bg-[#11131a] text-white">
+                  Sin recurso
+                </option>
                 {recursos.map((r) => (
-                  <option key={r.id} value={r.id}>
+                  <option key={r.id} value={r.id} className="bg-[#11131a] text-white">
                     {r.nombre}
                   </option>
                 ))}
               </select>
-            </div>
+            </Field>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-800">Fecha</label>
+            <Field label="Fecha">
               <input
                 type="date"
                 value={form.fecha}
                 onChange={(e) => setForm({ ...form, fecha: e.target.value })}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                className={inputClassName}
               />
-            </div>
+            </Field>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-800">Estado</label>
+            <Field label="Estado">
               <select
                 value={form.estado}
                 onChange={(e) => setForm({ ...form, estado: e.target.value })}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                className={inputClassName}
               >
-                <option value="programada">Programada</option>
-                <option value="confirmada">Confirmada</option>
-                <option value="reprogramada">Reprogramada</option>
-                <option value="completada">Completada</option>
-                <option value="cancelada">Cancelada</option>
+                <option value="programada" className="bg-[#11131a] text-white">
+                  Programada
+                </option>
+                <option value="confirmada" className="bg-[#11131a] text-white">
+                  Confirmada
+                </option>
+                <option value="reprogramada" className="bg-[#11131a] text-white">
+                  Reprogramada
+                </option>
+                <option value="completada" className="bg-[#11131a] text-white">
+                  Completada
+                </option>
+                <option value="cancelada" className="bg-[#11131a] text-white">
+                  Cancelada
+                </option>
               </select>
-            </div>
+            </Field>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-slate-800">Hora inicio</label>
+            <Field label="Hora inicio">
               <input
                 type="time"
                 value={form.hora_inicio}
                 onChange={(e) => setForm({ ...form, hora_inicio: e.target.value })}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                className={inputClassName}
               />
-            </div>
+            </Field>
 
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <label className="block text-sm font-semibold text-slate-800">Hora fin</label>
+            <Field
+              label="Hora fin"
+              helper={
+                servicioSeleccionado?.duracion_min
+                  ? `Duración del servicio: ${servicioSeleccionado.duracion_min} min.`
+                  : 'Selecciona un servicio para calcular la duración.'
+              }
+            >
+              <div className="mb-2 flex items-center justify-end">
                 <button
                   type="button"
                   onClick={() => setAutoHoraFin((prev) => !prev)}
-                  className="text-xs font-semibold text-slate-500 hover:text-slate-700"
+                  className="text-xs font-medium text-white/45 transition hover:text-white/75"
                 >
                   {autoHoraFin ? 'Auto' : 'Manual'}
                 </button>
@@ -365,25 +438,20 @@ export default function EditarCitaPage() {
                   setAutoHoraFin(false)
                   setForm({ ...form, hora_fin: `${e.target.value}:00` })
                 }}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
+                className={inputClassName}
               />
-
-              <p className="mt-1 text-xs text-slate-500">
-                {servicioSeleccionado?.duracion_min
-                  ? `Duración del servicio: ${servicioSeleccionado.duracion_min} min.`
-                  : 'Selecciona un servicio para calcular la duración.'}
-              </p>
-            </div>
+            </Field>
 
             <div className="md:col-span-2">
-              <label className="mb-2 block text-sm font-semibold text-slate-800">Notas</label>
-              <textarea
-                value={form.notas}
-                onChange={(e) => setForm({ ...form, notas: e.target.value })}
-                rows={4}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-500"
-                placeholder="Notas opcionales..."
-              />
+              <Field label="Notas">
+                <textarea
+                  value={form.notas}
+                  onChange={(e) => setForm({ ...form, notas: e.target.value })}
+                  rows={4}
+                  className={`${inputClassName} resize-none`}
+                  placeholder="Notas opcionales..."
+                />
+              </Field>
             </div>
 
             <div className="md:col-span-2 flex flex-wrap gap-3 pt-2">
@@ -391,7 +459,11 @@ export default function EditarCitaPage() {
                 type="button"
                 onClick={guardarCambios}
                 disabled={saving}
-                className="rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+                className="
+                  rounded-2xl border border-white/10 bg-white/[0.08]
+                  px-5 py-3 text-sm font-semibold text-white transition
+                  hover:bg-white/[0.12] disabled:opacity-60
+                "
               >
                 {saving ? 'Guardando...' : 'Guardar cambios'}
               </button>
@@ -399,14 +471,18 @@ export default function EditarCitaPage() {
               <button
                 type="button"
                 onClick={() => router.push('/admin/operaciones/agenda')}
-                className="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                className="
+                  rounded-2xl border border-white/10 bg-white/[0.03]
+                  px-5 py-3 text-sm font-semibold text-white/80 transition
+                  hover:bg-white/[0.06]
+                "
               >
                 Cancelar
               </button>
             </div>
           </div>
         )}
-      </div>
+      </Section>
     </div>
   )
 }

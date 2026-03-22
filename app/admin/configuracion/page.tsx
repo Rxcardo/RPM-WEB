@@ -42,7 +42,7 @@ export default function ConfiguracionPage() {
           <Link
             key={item.href}
             href={item.href}
-            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md"
+            className="rounded-2xl border border-slate-200 bg-white/[0.04] p-6 shadow-sm transition hover:shadow-md"
           >
             <h2 className="text-lg font-semibold text-slate-900">{item.title}</h2>
             <p className="mt-2 text-sm text-slate-600">{item.description}</p>

@@ -2,9 +2,13 @@
 
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import StatCard from '@/components/ui/StatCard'
+import ActionCard from '@/components/ui/ActionCard'
 
 type Cliente = {
   id: string
@@ -65,15 +69,15 @@ function formatDate(value: string | null | undefined) {
 function estadoBadge(estado: string) {
   switch ((estado || '').toLowerCase()) {
     case 'activo':
-      return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
     case 'inactivo':
-      return 'bg-slate-100 text-slate-700 border-slate-200'
+      return 'border-white/10 bg-white/[0.05] text-white/70'
     case 'pausado':
-      return 'bg-amber-50 text-amber-700 border-amber-200'
+      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
     case 'vencido':
-      return 'bg-rose-50 text-rose-700 border-rose-200'
+      return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
     default:
-      return 'bg-slate-100 text-slate-700 border-slate-200'
+      return 'border-white/10 bg-white/[0.05] text-white/70'
   }
 }
 
@@ -83,6 +87,28 @@ function getRestantes(plan: ClientePlan | null) {
   const usadas = Number(plan.sesiones_usadas || 0)
   return Math.max(0, total - usadas)
 }
+
+function Field({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-medium text-white/75">{label}</label>
+      {children}
+    </div>
+  )
+}
+
+const inputClassName = `
+  w-full rounded-2xl border border-white/10 bg-white/[0.03]
+  px-4 py-3 text-sm text-white outline-none transition
+  placeholder:text-white/35
+  focus:border-white/20 focus:bg-white/[0.05]
+`
 
 export default function ClientesPage() {
   const [loading, setLoading] = useState(true)
@@ -249,93 +275,114 @@ export default function ClientesPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-sm text-slate-500">Administración</p>
-        <div className="mt-1 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Clientes</h1>
-            <p className="text-sm text-slate-600">
-              Listado general de clientes, plan activo, sesiones y último pago.
-            </p>
-          </div>
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm text-white/55">Administración</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
+            Clientes
+          </h1>
+          <p className="mt-2 text-sm text-white/55">
+            Listado general de clientes, plan activo, sesiones y último pago.
+          </p>
+        </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/admin/personas/clientes/nuevo"
-              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
-            >
-              Nuevo cliente
-            </Link>
-          </div>
+        <div className="w-full max-w-sm">
+          <ActionCard
+            title="Nuevo cliente"
+            description="Crear un nuevo cliente en el sistema."
+            href="/admin/personas/clientes/nuevo"
+          />
         </div>
       </div>
 
       {error ? (
-        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          {error}
-        </div>
+        <Card className="p-4">
+          <p className="text-sm font-medium text-rose-400">Error</p>
+          <p className="mt-1 text-sm text-white/55">{error}</p>
+        </Card>
       ) : null}
 
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-sm text-slate-500">Total clientes</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{stats.total}</p>
-        </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <StatCard
+          title="Total clientes"
+          value={stats.total}
+        />
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-sm text-slate-500">Clientes activos</p>
-          <p className="mt-2 text-2xl font-semibold text-emerald-700">{stats.activos}</p>
-        </div>
+        <StatCard
+          title="Clientes activos"
+          value={stats.activos}
+          color="text-emerald-400"
+        />
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-sm text-slate-500">Con plan activo</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{stats.conPlan}</p>
-        </div>
+        <StatCard
+          title="Con plan activo"
+          value={stats.conPlan}
+        />
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-sm text-slate-500">Sin plan activo</p>
-          <p className="mt-2 text-2xl font-semibold text-amber-600">{stats.sinPlan}</p>
-        </div>
+        <StatCard
+          title="Sin plan activo"
+          value={stats.sinPlan}
+          color="text-amber-300"
+        />
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-sm text-slate-500">Planes por vencer</p>
-          <p className="mt-2 text-2xl font-semibold text-rose-600">{stats.porVencer}</p>
-        </div>
-      </section>
+        <StatCard
+          title="Planes por vencer"
+          value={stats.porVencer}
+          color="text-rose-400"
+        />
+      </div>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <Section
+        title="Filtros"
+        description="Busca por nombre, correo, teléfono, estado o plan."
+      >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <div className="md:col-span-2">
-            <label className="mb-1 block text-sm font-medium text-slate-700">Buscar</label>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Nombre, correo, teléfono, estado o plan..."
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none transition focus:border-slate-500"
-            />
+            <Field label="Buscar">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Nombre, correo, teléfono, estado o plan..."
+                className={inputClassName}
+              />
+            </Field>
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Estado</label>
-            <select
-              value={estadoFiltro}
-              onChange={(e) => setEstadoFiltro(e.target.value)}
-              className="w-full rounded-xl border border-slate-300 px-3 py-2 outline-none transition focus:border-slate-500"
-            >
-              <option value="todos">Todos</option>
-              <option value="activo">Activos</option>
-              <option value="inactivo">Inactivos</option>
-              <option value="pausado">Pausados</option>
-            </select>
+            <Field label="Estado">
+              <select
+                value={estadoFiltro}
+                onChange={(e) => setEstadoFiltro(e.target.value)}
+                className={inputClassName}
+              >
+                <option value="todos" className="bg-[#11131a] text-white">
+                  Todos
+                </option>
+                <option value="activo" className="bg-[#11131a] text-white">
+                  Activos
+                </option>
+                <option value="inactivo" className="bg-[#11131a] text-white">
+                  Inactivos
+                </option>
+                <option value="pausado" className="bg-[#11131a] text-white">
+                  Pausados
+                </option>
+              </select>
+            </Field>
           </div>
         </div>
-      </section>
+      </Section>
 
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <Section
+        title="Listado de clientes"
+        description="Vista general de clientes, plan activo, sesiones y pagos."
+        className="p-0"
+        contentClassName="overflow-hidden"
+      >
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200">
-            <thead className="bg-slate-50">
-              <tr className="text-left text-sm text-slate-600">
+          <table className="min-w-full text-sm">
+            <thead className="border-b border-white/10 bg-white/[0.03]">
+              <tr className="text-left text-white/55">
                 <th className="px-4 py-3 font-medium">Cliente</th>
                 <th className="px-4 py-3 font-medium">Contacto</th>
                 <th className="px-4 py-3 font-medium">Estado</th>
@@ -346,32 +393,32 @@ export default function ClientesPage() {
               </tr>
             </thead>
 
-            <tbody className="divide-y divide-slate-100 text-sm">
+            <tbody className="divide-y divide-white/10 text-sm">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={7} className="px-4 py-10 text-center text-white/55">
                     Cargando clientes...
                   </td>
                 </tr>
               ) : clientesFiltrados.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={7} className="px-4 py-10 text-center text-white/55">
                     No hay clientes registrados.
                   </td>
                 </tr>
               ) : (
                 clientesFiltrados.map(({ cliente, planActivo, ultimoPago, sesionesRestantes }) => (
-                  <tr key={cliente.id} className="align-top">
+                  <tr key={cliente.id} className="align-top transition hover:bg-white/[0.03]">
                     <td className="px-4 py-4">
-                      <div className="font-medium text-slate-900">{cliente.nombre}</div>
-                      <div className="mt-1 text-xs text-slate-500">
+                      <div className="font-medium text-white">{cliente.nombre}</div>
+                      <div className="mt-1 text-xs text-white/45">
                         Registro: {formatDate(cliente.created_at)}
                       </div>
                     </td>
 
                     <td className="px-4 py-4">
-                      <div className="text-slate-700">{cliente.email || 'Sin correo'}</div>
-                      <div className="mt-1 text-xs text-slate-500">
+                      <div className="text-white/75">{cliente.email || 'Sin correo'}</div>
+                      <div className="mt-1 text-xs text-white/45">
                         {cliente.telefono || 'Sin teléfono'}
                       </div>
                     </td>
@@ -389,47 +436,47 @@ export default function ClientesPage() {
                     <td className="px-4 py-4">
                       {planActivo ? (
                         <div>
-                          <div className="font-medium text-slate-900">
+                          <div className="font-medium text-white">
                             {planActivo.planes?.nombre || 'Plan'}
                           </div>
-                          <div className="mt-1 text-xs text-slate-500">
+                          <div className="mt-1 text-xs text-white/45">
                             Vence: {formatDate(planActivo.fecha_fin)}
                           </div>
-                          <div className="mt-1 text-xs text-slate-500">
+                          <div className="mt-1 text-xs text-white/45">
                             Valor: {money(planActivo.planes?.precio)}
                           </div>
                         </div>
                       ) : (
-                        <span className="text-slate-500">Sin plan activo</span>
+                        <span className="text-white/55">Sin plan activo</span>
                       )}
                     </td>
 
                     <td className="px-4 py-4">
                       {planActivo ? (
                         <div>
-                          <div className="font-medium text-slate-900">
+                          <div className="font-medium text-white">
                             {Number(planActivo.sesiones_usadas || 0)}/
                             {Number(planActivo.sesiones_totales || 0)}
                           </div>
-                          <div className="mt-1 text-xs text-slate-500">
+                          <div className="mt-1 text-xs text-white/45">
                             Restantes: {sesionesRestantes}
                           </div>
                         </div>
                       ) : (
-                        <span className="text-slate-500">—</span>
+                        <span className="text-white/55">—</span>
                       )}
                     </td>
 
                     <td className="px-4 py-4">
                       {ultimoPago ? (
                         <div>
-                          <div className="font-medium text-slate-900">{money(ultimoPago.monto)}</div>
-                          <div className="mt-1 text-xs text-slate-500">
+                          <div className="font-medium text-white">{money(ultimoPago.monto)}</div>
+                          <div className="mt-1 text-xs text-white/45">
                             {formatDate(ultimoPago.fecha)}
                           </div>
                         </div>
                       ) : (
-                        <span className="text-slate-500">Sin pagos</span>
+                        <span className="text-white/55">Sin pagos</span>
                       )}
                     </td>
 
@@ -437,21 +484,33 @@ export default function ClientesPage() {
                       <div className="flex flex-wrap gap-2">
                         <Link
                           href={`/admin/personas/clientes/${cliente.id}`}
-                          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                          className="
+                            rounded-xl border border-white/10 bg-white/[0.03]
+                            px-3 py-1.5 text-xs font-medium text-white/80
+                            transition hover:bg-white/[0.06]
+                          "
                         >
                           Ver
                         </Link>
 
                         <Link
                           href={`/admin/personas/clientes/${cliente.id}/plan`}
-                          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                          className="
+                            rounded-xl border border-white/10 bg-white/[0.03]
+                            px-3 py-1.5 text-xs font-medium text-white/80
+                            transition hover:bg-white/[0.06]
+                          "
                         >
                           Plan
                         </Link>
 
                         <Link
                           href={`/admin/personas/clientes/${cliente.id}/editar`}
-                          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                          className="
+                            rounded-xl border border-white/10 bg-white/[0.03]
+                            px-3 py-1.5 text-xs font-medium text-white/80
+                            transition hover:bg-white/[0.06]
+                          "
                         >
                           Editar
                         </Link>
@@ -463,7 +522,7 @@ export default function ClientesPage() {
             </tbody>
           </table>
         </div>
-      </section>
+      </Section>
     </div>
   )
 }

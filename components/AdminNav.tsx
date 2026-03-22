@@ -30,12 +30,7 @@ const sections = [
   {
     title: 'Finanzas',
     items: [
-      { label: 'Resumen', href: '/admin/finanzas/resumen' },
-      { label: 'Ingresos', href: '/admin/finanzas/ingresos' },
-      { label: 'Egresos', href: '/admin/finanzas/egresos' },
-      { label: 'Comisiones', href: '/admin/finanzas/comisiones' },
-      { label: 'Cuentas por cobrar', href: '/admin/finanzas/cuentas-por-cobrar' },
-      { label: 'Cierres', href: '/admin/finanzas/cierres' },
+      { label: 'Resumen', href: '/admin/finanzas' },
     ],
   },
   {
@@ -56,20 +51,33 @@ export default function AdminNav() {
   const pathname = usePathname()
 
   return (
-    <aside className="w-full lg:w-72 shrink-0 border-r border-slate-200 bg-white min-h-screen">
-      <div className="border-b border-slate-200 px-5 py-5">
-        <h2 className="text-xl font-bold text-slate-900">Admin RPM</h2>
-        <p className="mt-1 text-sm text-slate-500">Panel de gestión</p>
+    <aside className="w-full h-full bg-[#0f0f17] text-white">
+      <div className="border-b border-white/10 px-6 py-6">
+        <div className="flex items-center gap-3">
+          <div className="h-11 w-11 rounded-2xl bg-gradient-to-br from-purple-500 to-violet-700 shadow-lg" />
+
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.28em] text-white/40">
+              RPM
+            </p>
+            <h2 className="text-xl font-semibold text-white">
+              Admin
+            </h2>
+            <p className="text-sm text-white/45">
+              Panel de gestión
+            </p>
+          </div>
+        </div>
       </div>
 
-      <nav className="p-3 space-y-5">
+      <nav className="px-4 py-5 space-y-6">
         {sections.map((section) => (
           <div key={section.title}>
-            <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+            <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-white/30">
               {section.title}
             </p>
 
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               {section.items.map((item) => {
                 const active =
                   pathname === item.href || pathname.startsWith(item.href + '/')
@@ -78,13 +86,14 @@ export default function AdminNav() {
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`block rounded-xl px-4 py-3 text-sm font-medium transition ${
+                    className={[
+                      'group flex items-center rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200',
                       active
-                        ? 'bg-slate-900 text-white'
-                        : 'text-slate-700 hover:bg-slate-100'
-                    }`}
+                        ? 'bg-gradient-to-r from-purple-600/25 to-violet-600/20 text-white border border-purple-400/20 shadow-[0_0_0_1px_rgba(168,85,247,0.08)]'
+                        : 'text-white/65 hover:text-white hover:bg-white/[0.04] border border-transparent hover:border-white/10',
+                    ].join(' ')}
                   >
-                    {item.label}
+                    <span className="truncate">{item.label}</span>
                   </Link>
                 )
               })}

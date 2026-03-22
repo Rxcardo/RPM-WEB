@@ -277,7 +277,7 @@ export default function AgendaCalendarioPage() {
         </div>
       </div>
 
-      <div className="rounded-3xl border border-black/5 bg-white p-4 shadow-sm">
+    <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-6 backdrop-blur-xl">
         <div className="grid gap-4 lg:grid-cols-4">
           <div>
             <label className="mb-2 block text-sm font-semibold text-neutral-800">

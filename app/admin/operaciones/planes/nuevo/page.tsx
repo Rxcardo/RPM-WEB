@@ -1,8 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import ActionCard from '@/components/ui/ActionCard'
 
 type FormState = {
   nombre: string
@@ -22,6 +25,33 @@ const INITIAL_FORM: FormState = {
   descripcion: '',
 }
 
+const inputClassName = `
+  w-full rounded-2xl border border-white/10 bg-white/[0.03]
+  px-4 py-3 text-sm text-white outline-none transition
+  placeholder:text-white/35
+  focus:border-white/20 focus:bg-white/[0.05]
+`
+
+function Field({
+  label,
+  children,
+  helper,
+}: {
+  label: string
+  children: ReactNode
+  helper?: string
+}) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-medium text-white/75">
+        {label}
+      </label>
+      {children}
+      {helper ? <p className="mt-2 text-xs text-white/45">{helper}</p> : null}
+    </div>
+  )
+}
+
 export default function NuevoPlanPage() {
   const router = useRouter()
 
@@ -30,7 +60,7 @@ export default function NuevoPlanPage() {
   const [errorMsg, setErrorMsg] = useState('')
 
   const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
+    e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
     const { name, value } = e.target
     setForm((prev) => ({ ...prev, [name]: value }))
@@ -50,7 +80,7 @@ export default function NuevoPlanPage() {
     return ''
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setErrorMsg('')
 
@@ -86,74 +116,79 @@ export default function NuevoPlanPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-neutral-900">Nuevo plan</h1>
-          <p className="mt-1 text-neutral-500">
-            Crea un nuevo paquete de sesiones
+          <p className="text-sm text-white/55">Operaciones</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
+            Nuevo plan
+          </h1>
+          <p className="mt-2 text-sm text-white/55">
+            Crea un nuevo paquete de sesiones.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => router.push('/admin/operaciones/planes')}
-          className="rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50"
-        >
-          Volver
-        </button>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <ActionCard
+            title="Ver planes"
+            description="Ir al listado general de planes."
+            href="/admin/operaciones/planes"
+          />
+          <ActionCard
+            title="Cancelar"
+            description="Salir sin guardar cambios."
+            href="/admin/operaciones/planes"
+          />
+        </div>
       </div>
 
-      <form
-        onSubmit={handleSubmit}
-        className="rounded-2xl border border-black/5 bg-white p-6 shadow-sm"
+      {errorMsg ? (
+        <Card className="p-4">
+          <p className="text-sm font-medium text-rose-400">Error</p>
+          <p className="mt-1 text-sm text-white/55">{errorMsg}</p>
+        </Card>
+      ) : null}
+
+      <Section
+        title="Formulario de creación"
+        description="Completa la información principal del plan."
       >
-        <div className="grid gap-5 md:grid-cols-2">
+        <form onSubmit={handleSubmit} className="grid gap-5 md:grid-cols-2">
           <div className="md:col-span-2">
-            <label className="mb-2 block text-sm font-semibold text-neutral-800">
-              Nombre del plan
-            </label>
-            <input
-              name="nombre"
-              value={form.nombre}
-              onChange={handleChange}
-              placeholder="Ej: Recovery 10 sesiones"
-              className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
-            />
+            <Field label="Nombre del plan">
+              <input
+                name="nombre"
+                value={form.nombre}
+                onChange={handleChange}
+                placeholder="Ej: Recovery 10 sesiones"
+                className={inputClassName}
+              />
+            </Field>
           </div>
 
-          <div>
-            <label className="mb-2 block text-sm font-semibold text-neutral-800">
-              Sesiones totales
-            </label>
+          <Field label="Sesiones totales">
             <input
               type="number"
               name="sesiones_totales"
               value={form.sesiones_totales}
               onChange={handleChange}
               min="1"
-              className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
+              className={inputClassName}
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="mb-2 block text-sm font-semibold text-neutral-800">
-              Vigencia en días
-            </label>
+          <Field label="Vigencia en días">
             <input
               type="number"
               name="vigencia_dias"
               value={form.vigencia_dias}
               onChange={handleChange}
               min="1"
-              className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
+              className={inputClassName}
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="mb-2 block text-sm font-semibold text-neutral-800">
-              Precio
-            </label>
+          <Field label="Precio">
             <input
               type="number"
               step="0.01"
@@ -161,65 +196,69 @@ export default function NuevoPlanPage() {
               value={form.precio}
               onChange={handleChange}
               min="0"
-              className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
+              className={inputClassName}
             />
-          </div>
+          </Field>
 
-          <div>
-            <label className="mb-2 block text-sm font-semibold text-neutral-800">
-              Estado
-            </label>
+          <Field label="Estado">
             <select
               name="estado"
               value={form.estado}
               onChange={handleChange}
-              className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
+              className={inputClassName}
             >
-              <option value="activo">Activo</option>
-              <option value="inactivo">Inactivo</option>
+              <option value="activo" className="bg-[#11131a] text-white">
+                Activo
+              </option>
+              <option value="inactivo" className="bg-[#11131a] text-white">
+                Inactivo
+              </option>
             </select>
-          </div>
+          </Field>
 
           <div className="md:col-span-2">
-            <label className="mb-2 block text-sm font-semibold text-neutral-800">
-              Descripción
-            </label>
-            <textarea
-              name="descripcion"
-              value={form.descripcion}
-              onChange={handleChange}
-              rows={5}
-              placeholder="Descripción interna del plan"
-              className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
-            />
+            <Field label="Descripción">
+              <textarea
+                name="descripcion"
+                value={form.descripcion}
+                onChange={handleChange}
+                rows={5}
+                placeholder="Descripción interna del plan"
+                className={`${inputClassName} resize-none`}
+              />
+            </Field>
           </div>
-        </div>
 
-        {errorMsg ? (
-          <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {errorMsg}
+          <div className="md:col-span-2 flex flex-col gap-3 pt-2 sm:flex-row">
+            <button
+              type="submit"
+              disabled={saving}
+              className="
+                rounded-2xl border border-white/10 bg-white/[0.08]
+                px-5 py-3 text-sm font-semibold text-white transition
+                hover:bg-white/[0.12]
+                disabled:cursor-not-allowed disabled:opacity-60
+              "
+            >
+              {saving ? 'Guardando...' : 'Guardar plan'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => router.push('/admin/operaciones/planes')}
+              disabled={saving}
+              className="
+                rounded-2xl border border-white/10 bg-white/[0.03]
+                px-5 py-3 text-sm font-semibold text-white/80 transition
+                hover:bg-white/[0.06]
+                disabled:cursor-not-allowed disabled:opacity-60
+              "
+            >
+              Cancelar
+            </button>
           </div>
-        ) : null}
-
-        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-          <button
-            type="submit"
-            disabled={saving}
-            className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {saving ? 'Guardando...' : 'Guardar plan'}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => router.push('/admin/operaciones/planes')}
-            disabled={saving}
-            className="rounded-xl border border-neutral-200 bg-white px-5 py-3 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Cancelar
-          </button>
-        </div>
-      </form>
+        </form>
+      </Section>
     </div>
   )
 }

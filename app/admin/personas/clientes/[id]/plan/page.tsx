@@ -1,8 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import ActionCard from '@/components/ui/ActionCard'
 
 type Cliente = {
   id: string
@@ -33,6 +36,26 @@ type ClientePlan = {
   planes: Plan | null
 }
 
+type MonedaPago = 'USD' | 'EUR' | 'BS'
+type ReferenciaTasa = 'USD' | 'EUR'
+
+type MetodoPagoOption = {
+  value: string
+  label: string
+  moneda: MonedaPago
+}
+
+const METODOS_PAGO: MetodoPagoOption[] = [
+  { value: 'efectivo_usd', label: 'Efectivo USD', moneda: 'USD' },
+  { value: 'zelle', label: 'Zelle', moneda: 'USD' },
+  { value: 'binance_usdt', label: 'Binance USDT', moneda: 'USD' },
+  { value: 'transferencia_eur', label: 'Transferencia EUR', moneda: 'EUR' },
+  { value: 'efectivo_bs', label: 'Efectivo Bs', moneda: 'BS' },
+  { value: 'pago_movil_bs', label: 'Pago móvil Bs', moneda: 'BS' },
+  { value: 'transferencia_bs', label: 'Transferencia Bs', moneda: 'BS' },
+  { value: 'tarjeta_bs', label: 'Tarjeta Bs', moneda: 'BS' },
+]
+
 function getTodayLocal() {
   const now = new Date()
   const year = now.getFullYear()
@@ -50,11 +73,20 @@ function formatDate(value: string | null) {
   }
 }
 
-function formatMoney(value: number | null | undefined) {
+function formatMoney(value: number | null | undefined, currency: 'USD' | 'EUR' = 'USD') {
   if (value == null) return '—'
   return new Intl.NumberFormat('es-ES', {
     style: 'currency',
-    currency: 'USD',
+    currency,
+    maximumFractionDigits: 2,
+  }).format(Number(value))
+}
+
+function formatBs(value: number | null | undefined) {
+  if (value == null) return '—'
+  return new Intl.NumberFormat('es-VE', {
+    style: 'currency',
+    currency: 'VES',
     maximumFractionDigits: 2,
   }).format(Number(value))
 }
@@ -69,6 +101,31 @@ function addDaysToDate(dateString: string, days: number) {
 
   return `${year}-${month}-${day}`
 }
+
+function Field({
+  label,
+  children,
+  helper,
+}: {
+  label: string
+  children: ReactNode
+  helper?: string
+}) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-medium text-white/75">{label}</label>
+      {children}
+      {helper ? <p className="mt-2 text-xs text-white/45">{helper}</p> : null}
+    </div>
+  )
+}
+
+const inputClassName = `
+  w-full rounded-2xl border border-white/10 bg-white/[0.03]
+  px-4 py-3 text-sm text-white outline-none transition
+  placeholder:text-white/35
+  focus:border-white/20 focus:bg-white/[0.05]
+`
 
 export default function ClientePlanPage() {
   const params = useParams()
@@ -86,6 +143,12 @@ export default function ClientePlanPage() {
 
   const [selectedPlanId, setSelectedPlanId] = useState('')
   const [fechaInicio, setFechaInicio] = useState(getTodayLocal())
+
+  const [metodoPago, setMetodoPago] = useState('')
+  const [monedaPago, setMonedaPago] = useState<MonedaPago>('USD')
+  const [referenciaTasa, setReferenciaTasa] = useState<ReferenciaTasa>('USD')
+  const [tasaBCV, setTasaBCV] = useState('')
+  const [montoReferencia, setMontoReferencia] = useState('')
 
   const fetchAll = useCallback(async () => {
     if (!id) return
@@ -167,13 +230,32 @@ export default function ClientePlanPage() {
   }, [id])
 
   useEffect(() => {
-    fetchAll()
+    void fetchAll()
   }, [fetchAll])
 
   const selectedPlan = useMemo(
     () => planes.find((p) => p.id === selectedPlanId) || null,
     [planes, selectedPlanId]
   )
+
+  const metodoSeleccionado = useMemo(
+    () => METODOS_PAGO.find((item) => item.value === metodoPago) || null,
+    [metodoPago]
+  )
+
+  useEffect(() => {
+    if (selectedPlan?.precio != null) {
+      setMontoReferencia(String(selectedPlan.precio))
+    } else {
+      setMontoReferencia('')
+    }
+  }, [selectedPlanId, selectedPlan?.precio])
+
+  useEffect(() => {
+    if (metodoSeleccionado) {
+      setMonedaPago(metodoSeleccionado.moneda)
+    }
+  }, [metodoSeleccionado])
 
   const sesionesRestantes = planActivo
     ? Math.max(Number(planActivo.sesiones_totales) - Number(planActivo.sesiones_usadas), 0)
@@ -188,6 +270,14 @@ export default function ClientePlanPage() {
         100
       )
     : 0
+
+  const montoReferenciaNumero = Number(montoReferencia || 0)
+  const tasaBCVNumero = Number(tasaBCV || 0)
+
+  const montoCalculadoBs =
+    monedaPago === 'BS' && montoReferenciaNumero > 0 && tasaBCVNumero > 0
+      ? montoReferenciaNumero * tasaBCVNumero
+      : 0
 
   const handleAsignarPlan = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -207,6 +297,28 @@ export default function ClientePlanPage() {
     if (!fechaInicio) {
       setErrorMsg('Debes seleccionar una fecha de inicio.')
       return
+    }
+
+    if (!metodoPago) {
+      setErrorMsg('Debes seleccionar un método de pago.')
+      return
+    }
+
+    if (monedaPago === 'BS') {
+      if (!referenciaTasa) {
+        setErrorMsg('Debes elegir si trabajarás con tasa dólar o euro.')
+        return
+      }
+
+      if (!tasaBCV || Number(tasaBCV) <= 0) {
+        setErrorMsg('Debes indicar la tasa BCV para pagos en Bs.')
+        return
+      }
+
+      if (!montoReferencia || Number(montoReferencia) <= 0) {
+        setErrorMsg('Debes indicar el monto de referencia para calcular en Bs.')
+        return
+      }
     }
 
     const plan = selectedPlan
@@ -249,6 +361,11 @@ export default function ClientePlanPage() {
 
       await fetchAll()
       setSelectedPlanId('')
+      setMetodoPago('')
+      setMonedaPago('USD')
+      setReferenciaTasa('USD')
+      setTasaBCV('')
+      setMontoReferencia('')
       setSuccessMsg('Plan asignado correctamente.')
       router.refresh()
     } catch (error: any) {
@@ -263,13 +380,14 @@ export default function ClientePlanPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold text-neutral-900">Plan del cliente</h1>
-          <p className="mt-1 text-neutral-500">Cargando información...</p>
+          <p className="text-sm text-white/55">Clientes / Plan</p>
+          <h1 className="mt-1 text-2xl font-semibold text-white">Plan del cliente</h1>
+          <p className="mt-2 text-white/55">Cargando información...</p>
         </div>
 
-        <div className="rounded-2xl border border-black/5 bg-white p-6 shadow-sm">
-          <p className="text-sm text-neutral-500">Cargando plan del cliente...</p>
-        </div>
+        <Card className="p-6">
+          <p className="text-sm text-white/55">Cargando plan del cliente...</p>
+        </Card>
       </div>
     )
   }
@@ -278,20 +396,25 @@ export default function ClientePlanPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold text-neutral-900">Plan del cliente</h1>
-          <p className="mt-1 text-neutral-500">No fue posible cargar el módulo.</p>
+          <p className="text-sm text-white/55">Clientes / Plan</p>
+          <h1 className="mt-1 text-2xl font-semibold text-white">Plan del cliente</h1>
+          <p className="mt-2 text-white/55">No fue posible cargar el módulo.</p>
         </div>
 
-        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 shadow-sm">
-          <p className="text-sm font-medium text-red-700">{errorMsg}</p>
+        <Card className="p-6">
+          <p className="text-sm font-medium text-rose-400">{errorMsg}</p>
 
           <button
-            onClick={() => router.push('/admin/clientes')}
-            className="mt-4 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-500"
+            type="button"
+            onClick={() => router.push('/admin/personas/clientes')}
+            className="
+              mt-4 rounded-2xl border border-white/10 bg-white/[0.08]
+              px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.12]
+            "
           >
             Volver a clientes
           </button>
-        </div>
+        </Card>
       </div>
     )
   }
@@ -300,203 +423,311 @@ export default function ClientePlanPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-neutral-900">Plan del cliente</h1>
-          <p className="mt-1 text-neutral-500">
-            {cliente?.nombre || 'Cliente'} · Gestión de plan y sesiones
+          <p className="text-sm text-white/55">Clientes / Plan</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
+            Plan del cliente
+          </h1>
+          <p className="mt-2 text-sm text-white/55">
+            {cliente?.nombre || 'Cliente'} · Gestión de plan, sesiones y pago.
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-3">
-          <button
-            onClick={() => router.push(`/admin/personas/clientes/${id}`)}
-            className="rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50"
-          >
-            Volver al cliente
-          </button>
-
-          <button
-            onClick={() => router.push(`/admin/operaciones/agenda/nueva?cliente=${id}`)}
-            className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-500"
-          >
-            Crear cita
-          </button>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <ActionCard
+            title="Volver al cliente"
+            description="Regresar al detalle del cliente."
+            href={`/admin/personas/clientes/${id}`}
+          />
+          <ActionCard
+            title="Crear cita"
+            description="Abrir agenda con este cliente."
+            href={`/admin/operaciones/agenda/nueva?cliente=${id}`}
+          />
         </div>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <div className="xl:col-span-2 rounded-2xl border border-black/5 bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-semibold text-neutral-900">Asignar nuevo plan</h2>
-
-          <form onSubmit={handleAsignarPlan} className="mt-6 space-y-5">
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-neutral-800">
-                Seleccionar plan
-              </label>
-              <select
-                value={selectedPlanId}
-                onChange={(e) => setSelectedPlanId(e.target.value)}
-                className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
-              >
-                <option value="">Seleccionar</option>
-                {planes.map((plan) => (
-                  <option key={plan.id} value={plan.id}>
-                    {plan.nombre} · {plan.sesiones_totales} sesiones · {plan.vigencia_dias} días
+        <div className="xl:col-span-2">
+          <Section
+            title="Asignar nuevo plan"
+            description="Selecciona el plan, la fecha de inicio y el método de pago."
+          >
+            <form onSubmit={handleAsignarPlan} className="space-y-5">
+              <Field label="Seleccionar plan">
+                <select
+                  value={selectedPlanId}
+                  onChange={(e) => setSelectedPlanId(e.target.value)}
+                  className={inputClassName}
+                >
+                  <option value="" className="bg-[#11131a] text-white">
+                    Seleccionar
                   </option>
-                ))}
-              </select>
-            </div>
+                  {planes.map((plan) => (
+                    <option key={plan.id} value={plan.id} className="bg-[#11131a] text-white">
+                      {plan.nombre} · {plan.sesiones_totales} sesiones · {plan.vigencia_dias} días
+                    </option>
+                  ))}
+                </select>
+              </Field>
 
-            <div>
-              <label className="mb-2 block text-sm font-semibold text-neutral-800">
-                Fecha de inicio
-              </label>
-              <input
-                type="date"
-                value={fechaInicio}
-                onChange={(e) => setFechaInicio(e.target.value)}
-                className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
-              />
-            </div>
+              <Field label="Fecha de inicio">
+                <input
+                  type="date"
+                  value={fechaInicio}
+                  onChange={(e) => setFechaInicio(e.target.value)}
+                  className={inputClassName}
+                />
+              </Field>
 
-            {selectedPlan ? (
-              <div className="rounded-2xl bg-neutral-50 p-4">
-                <p className="text-sm font-semibold text-neutral-900">{selectedPlan.nombre}</p>
+              {selectedPlan ? (
+                <Card className="p-4">
+                  <p className="text-sm font-semibold text-white">{selectedPlan.nombre}</p>
 
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Sesiones</p>
-                    <p className="mt-1 text-sm text-neutral-800">{selectedPlan.sesiones_totales}</p>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-white/45">Sesiones</p>
+                      <p className="mt-1 text-sm text-white/80">{selectedPlan.sesiones_totales}</p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-white/45">Vigencia</p>
+                      <p className="mt-1 text-sm text-white/80">{selectedPlan.vigencia_dias} días</p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-white/45">Precio</p>
+                      <p className="mt-1 text-sm text-white/80">{formatMoney(selectedPlan.precio)}</p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-white/45">Fecha fin</p>
+                      <p className="mt-1 text-sm text-white/80">
+                        {fechaInicio
+                          ? formatDate(addDaysToDate(fechaInicio, selectedPlan.vigencia_dias))
+                          : '—'}
+                      </p>
+                    </div>
                   </div>
 
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Vigencia</p>
-                    <p className="mt-1 text-sm text-neutral-800">{selectedPlan.vigencia_dias} días</p>
-                  </div>
+                  {selectedPlan.descripcion ? (
+                    <p className="mt-3 text-sm text-white/55">{selectedPlan.descripcion}</p>
+                  ) : null}
+                </Card>
+              ) : null}
 
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Precio</p>
-                    <p className="mt-1 text-sm text-neutral-800">{formatMoney(selectedPlan.precio)}</p>
-                  </div>
+              <Section
+                title="Método de pago"
+                description="Selecciona cómo se pagará el plan. Si es en Bs, se activa el cálculo por tasa."
+                className="p-4"
+              >
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label="Método de pago">
+                    <select
+                      value={metodoPago}
+                      onChange={(e) => setMetodoPago(e.target.value)}
+                      className={inputClassName}
+                    >
+                      <option value="" className="bg-[#11131a] text-white">
+                        Seleccionar método
+                      </option>
+                      {METODOS_PAGO.map((item) => (
+                        <option key={item.value} value={item.value} className="bg-[#11131a] text-white">
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
 
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Fecha fin</p>
-                    <p className="mt-1 text-sm text-neutral-800">
-                      {fechaInicio
-                        ? formatDate(addDaysToDate(fechaInicio, selectedPlan.vigencia_dias))
-                        : '—'}
-                    </p>
-                  </div>
+                  <Field label="Moneda del pago">
+                    <input
+                      value={monedaPago}
+                      readOnly
+                      className={`${inputClassName} cursor-not-allowed opacity-80`}
+                    />
+                  </Field>
+
+                  {monedaPago === 'BS' ? (
+                    <>
+                      <div className="md:col-span-2">
+                        <Card className="border-dashed p-4">
+                          <p className="text-sm font-medium text-white">agg api/bcv</p>
+                          <p className="mt-1 text-sm text-white/55">
+                            Aquí conectaremos la tasa BCV de dólar o euro según la opción elegida.
+                          </p>
+                        </Card>
+                      </div>
+
+                      <Field label="Trabajar con tasa">
+                        <select
+                          value={referenciaTasa}
+                          onChange={(e) => setReferenciaTasa(e.target.value as ReferenciaTasa)}
+                          className={inputClassName}
+                        >
+                          <option value="USD" className="bg-[#11131a] text-white">
+                            Dólar
+                          </option>
+                          <option value="EUR" className="bg-[#11131a] text-white">
+                            Euro
+                          </option>
+                        </select>
+                      </Field>
+
+                      <Field label={`Tasa BCV ${referenciaTasa}`} helper="Por ahora se carga manual hasta conectar la API BCV.">
+                        <input
+                          type="number"
+                          step="0.0001"
+                          min="0"
+                          value={tasaBCV}
+                          onChange={(e) => setTasaBCV(e.target.value)}
+                          placeholder="Ej: 36.52"
+                          className={inputClassName}
+                        />
+                      </Field>
+
+                      <Field
+                        label={`Monto de referencia en ${referenciaTasa}`}
+                        helper="Puedes dejar el precio del plan o ajustarlo manualmente."
+                      >
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={montoReferencia}
+                          onChange={(e) => setMontoReferencia(e.target.value)}
+                          className={inputClassName}
+                        />
+                      </Field>
+
+                      <Field label="Total calculado en Bs">
+                        <input
+                          readOnly
+                          value={montoCalculadoBs > 0 ? formatBs(montoCalculadoBs) : '—'}
+                          className={`${inputClassName} cursor-not-allowed opacity-80`}
+                        />
+                      </Field>
+                    </>
+                  ) : null}
                 </div>
+              </Section>
 
-                {selectedPlan.descripcion ? (
-                  <p className="mt-3 text-sm text-neutral-600">{selectedPlan.descripcion}</p>
-                ) : null}
+              {errorMsg ? (
+                <Card className="p-4">
+                  <p className="text-sm text-rose-400">{errorMsg}</p>
+                </Card>
+              ) : null}
+
+              {successMsg ? (
+                <Card className="p-4">
+                  <p className="text-sm text-emerald-400">{successMsg}</p>
+                </Card>
+              ) : null}
+
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="
+                    rounded-2xl border border-white/10 bg-white/[0.08]
+                    px-5 py-3 text-sm font-semibold text-white transition
+                    hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-60
+                  "
+                >
+                  {saving ? 'Asignando...' : 'Asignar plan'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => router.push(`/admin/personas/clientes/${id}`)}
+                  className="
+                    rounded-2xl border border-white/10 bg-white/[0.03]
+                    px-5 py-3 text-sm font-semibold text-white/80 transition
+                    hover:bg-white/[0.06]
+                  "
+                >
+                  Cancelar
+                </button>
               </div>
-            ) : null}
-
-            {errorMsg ? (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {errorMsg}
-              </div>
-            ) : null}
-
-            {successMsg ? (
-              <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-                {successMsg}
-              </div>
-            ) : null}
-
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <button
-                type="submit"
-                disabled={saving}
-                className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {saving ? 'Asignando...' : 'Asignar plan'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => router.push(`/admin/personas/clientes/${id}`)}
-                className="rounded-xl border border-neutral-200 bg-white px-5 py-3 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50"
-              >
-                Cancelar
-              </button>
-            </div>
-          </form>
+            </form>
+          </Section>
         </div>
 
         <div className="space-y-6">
-          <div className="rounded-2xl border border-black/5 bg-white p-6 shadow-sm">
-            <h2 className="text-lg font-semibold text-neutral-900">Plan activo</h2>
-
+          <Section
+            title="Plan activo"
+            description="Resumen del plan actual del cliente."
+          >
             {!planActivo ? (
-              <p className="mt-3 text-sm text-neutral-500">
+              <p className="text-sm text-white/55">
                 Este cliente no tiene un plan activo.
               </p>
             ) : (
-              <div className="mt-4 space-y-4">
+              <div className="space-y-4">
                 <div>
-                  <p className="text-xs uppercase tracking-wide text-neutral-500">Plan</p>
-                  <p className="mt-1 text-sm font-medium text-neutral-900">
+                  <p className="text-xs uppercase tracking-wide text-white/45">Plan</p>
+                  <p className="mt-1 text-sm font-medium text-white">
                     {planActivo.planes?.nombre || '—'}
                   </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Totales</p>
-                    <p className="mt-1 text-sm text-neutral-800">{planActivo.sesiones_totales}</p>
+                    <p className="text-xs uppercase tracking-wide text-white/45">Totales</p>
+                    <p className="mt-1 text-sm text-white/80">{planActivo.sesiones_totales}</p>
                   </div>
 
                   <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Usadas</p>
-                    <p className="mt-1 text-sm text-neutral-800">{planActivo.sesiones_usadas}</p>
+                    <p className="text-xs uppercase tracking-wide text-white/45">Usadas</p>
+                    <p className="mt-1 text-sm text-white/80">{planActivo.sesiones_usadas}</p>
                   </div>
 
                   <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Restantes</p>
-                    <p className="mt-1 text-sm text-neutral-800">{sesionesRestantes}</p>
+                    <p className="text-xs uppercase tracking-wide text-white/45">Restantes</p>
+                    <p className="mt-1 text-sm text-white/80">{sesionesRestantes}</p>
                   </div>
 
                   <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Estado</p>
-                    <p className="mt-1 text-sm capitalize text-neutral-800">{planActivo.estado}</p>
+                    <p className="text-xs uppercase tracking-wide text-white/45">Estado</p>
+                    <p className="mt-1 text-sm capitalize text-white/80">{planActivo.estado}</p>
                   </div>
                 </div>
 
                 <div>
-                  <p className="text-xs uppercase tracking-wide text-neutral-500">Inicio</p>
-                  <p className="mt-1 text-sm text-neutral-800">{formatDate(planActivo.fecha_inicio)}</p>
+                  <p className="text-xs uppercase tracking-wide text-white/45">Inicio</p>
+                  <p className="mt-1 text-sm text-white/80">{formatDate(planActivo.fecha_inicio)}</p>
                 </div>
 
                 <div>
-                  <p className="text-xs uppercase tracking-wide text-neutral-500">Fin</p>
-                  <p className="mt-1 text-sm text-neutral-800">{formatDate(planActivo.fecha_fin)}</p>
+                  <p className="text-xs uppercase tracking-wide text-white/45">Fin</p>
+                  <p className="mt-1 text-sm text-white/80">{formatDate(planActivo.fecha_fin)}</p>
                 </div>
 
                 <div>
-                  <p className="text-xs uppercase tracking-wide text-neutral-500">Progreso de uso</p>
+                  <p className="text-xs uppercase tracking-wide text-white/45">Progreso de uso</p>
 
-                  <div className="mt-2 h-3 w-full overflow-hidden rounded-full bg-neutral-200">
+                  <div className="mt-2 h-3 w-full overflow-hidden rounded-full bg-white/10">
                     <div
-                      className="h-full rounded-full bg-violet-600 transition-all"
+                      className="h-full rounded-full bg-white/60 transition-all"
                       style={{ width: `${progresoUso}%` }}
                     />
                   </div>
 
-                  <p className="mt-2 text-sm text-neutral-800">{progresoUso}% usado</p>
+                  <p className="mt-2 text-sm text-white/80">{progresoUso}% usado</p>
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => router.push(`/admin/operaciones/agenda/nueva?cliente=${id}`)}
-                  className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50"
+                  className="
+                    w-full rounded-2xl border border-white/10 bg-white/[0.03]
+                    px-4 py-3 text-sm font-semibold text-white/80 transition
+                    hover:bg-white/[0.06]
+                  "
                 >
                   Crear cita con este cliente
                 </button>
               </div>
             )}
-          </div>
+          </Section>
         </div>
       </div>
     </div>

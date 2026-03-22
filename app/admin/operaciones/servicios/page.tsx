@@ -1,8 +1,13 @@
 'use client'
+
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import StatCard from '@/components/ui/StatCard'
+import ActionCard from '@/components/ui/ActionCard'
 
 type Servicio = {
   id: string
@@ -36,11 +41,39 @@ const INITIAL_FORM: FormState = {
   color: '#0f172a',
 }
 
+const inputClassName = `
+  w-full rounded-2xl border border-white/10 bg-white/[0.03]
+  px-4 py-3 text-sm text-white outline-none transition
+  placeholder:text-white/35
+  focus:border-white/20 focus:bg-white/[0.05]
+`
+
 function money(value: number) {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
   }).format(Number(value || 0))
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-medium text-white/75">{label}</label>
+      {children}
+    </div>
+  )
+}
+
+function estadoBadgeClasses(estado: string) {
+  return estado === 'activo'
+    ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+    : 'border-white/10 bg-white/[0.05] text-white/70'
 }
 
 export default function ServiciosPage() {
@@ -54,7 +87,7 @@ export default function ServiciosPage() {
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
 
   useEffect(() => {
-    cargarServicios()
+    void cargarServicios()
   }, [])
 
   async function cargarServicios() {
@@ -105,7 +138,7 @@ export default function ServiciosPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  async function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: FormEvent) {
     e.preventDefault()
 
     if (!form.nombre.trim()) {
@@ -205,16 +238,35 @@ export default function ServiciosPage() {
   const totalInactivos = servicios.filter((s) => s.estado !== 'activo').length
 
   return (
-    <div className="px-4 py-6 lg:px-6">
-      <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Servicios</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Administra los servicios del centro
+          <p className="text-sm text-white/55">Operaciones</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
+            Servicios
+          </h1>
+          <p className="mt-2 text-sm text-white/55">
+            Administra los servicios del centro.
           </p>
         </div>
 
+        <div className="w-full max-w-sm">
+          <ActionCard
+            title={showForm ? 'Cerrar formulario' : 'Nuevo servicio'}
+            description={
+              showForm
+                ? 'Ocultar el formulario actual.'
+                : 'Crear un nuevo servicio en el catálogo.'
+            }
+            href="#"
+            className="pointer-events-none"
+          />
+        </div>
+      </div>
+
+      <div className="-mt-3">
         <button
+          type="button"
           onClick={() => {
             if (showForm && !editingId) {
               setShowForm(false)
@@ -224,194 +276,196 @@ export default function ServiciosPage() {
               setShowForm(true)
             }
           }}
-          className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white transition hover:opacity-90"
+          className="
+            rounded-2xl border border-white/10 bg-white/[0.08]
+            px-4 py-3 text-sm font-semibold text-white transition
+            hover:bg-white/[0.12]
+          "
         >
           {showForm ? 'Cerrar formulario' : 'Nuevo servicio'}
         </button>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-slate-500">Total servicios</p>
-          <p className="text-2xl font-bold">{servicios.length}</p>
-        </div>
-
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-slate-500">Activos</p>
-          <p className="text-2xl font-bold">{totalActivos}</p>
-        </div>
-
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-slate-500">Inactivos</p>
-          <p className="text-2xl font-bold">{totalInactivos}</p>
-        </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatCard
+          title="Total servicios"
+          value={servicios.length}
+        />
+        <StatCard
+          title="Activos"
+          value={totalActivos}
+          color="text-emerald-400"
+        />
+        <StatCard
+          title="Inactivos"
+          value={totalInactivos}
+          color="text-white/80"
+        />
       </div>
 
       {error ? (
-        <div className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4">
-          <p className="text-sm text-red-700">{error}</p>
-        </div>
+        <Card className="p-4">
+          <p className="text-sm font-medium text-rose-400">Error</p>
+          <p className="mt-1 text-sm text-white/55">{error}</p>
+        </Card>
       ) : null}
 
       {showForm ? (
-        <form onSubmit={onSubmit} className="mb-6 rounded-2xl border bg-white p-5">
-          <div className="mb-4">
-            <h2 className="text-lg font-semibold">
-              {editingId ? 'Editar servicio' : 'Crear servicio'}
-            </h2>
-            <p className="text-sm text-slate-500">
-              Completa la información principal
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <Section
+          title={editingId ? 'Editar servicio' : 'Crear servicio'}
+          description="Completa la información principal del servicio."
+        >
+          <form onSubmit={onSubmit} className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div className="md:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Nombre
-              </label>
-              <input
-                value={form.nombre}
-                onChange={(e) => onChange('nombre', e.target.value)}
-                className="w-full rounded-xl border px-3 py-3 outline-none focus:ring-2 focus:ring-slate-300"
-                placeholder="Ej: Evaluación fisioterapéutica"
-              />
+              <Field label="Nombre">
+                <input
+                  value={form.nombre}
+                  onChange={(e) => onChange('nombre', e.target.value)}
+                  className={inputClassName}
+                  placeholder="Ej: Evaluación fisioterapéutica"
+                />
+              </Field>
             </div>
 
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Categoría
-              </label>
+            <Field label="Categoría">
               <input
                 value={form.categoria}
                 onChange={(e) => onChange('categoria', e.target.value)}
-                className="w-full rounded-xl border px-3 py-3 outline-none focus:ring-2 focus:ring-slate-300"
+                className={inputClassName}
                 placeholder="Ej: Terapia, evaluación, masaje"
               />
-            </div>
+            </Field>
 
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Estado
-              </label>
+            <Field label="Estado">
               <select
                 value={form.estado}
                 onChange={(e) => onChange('estado', e.target.value)}
-                className="w-full rounded-xl border px-3 py-3 outline-none focus:ring-2 focus:ring-slate-300"
+                className={inputClassName}
               >
-                <option value="activo">Activo</option>
-                <option value="inactivo">Inactivo</option>
+                <option value="activo" className="bg-[#11131a] text-white">
+                  Activo
+                </option>
+                <option value="inactivo" className="bg-[#11131a] text-white">
+                  Inactivo
+                </option>
               </select>
-            </div>
+            </Field>
 
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Duración (min)
-              </label>
+            <Field label="Duración (min)">
               <input
                 type="number"
                 min="0"
                 value={form.duracion_minutos}
                 onChange={(e) => onChange('duracion_minutos', e.target.value)}
-                className="w-full rounded-xl border px-3 py-3 outline-none focus:ring-2 focus:ring-slate-300"
+                className={inputClassName}
                 placeholder="60"
               />
-            </div>
+            </Field>
 
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Precio
-              </label>
+            <Field label="Precio">
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={form.precio}
                 onChange={(e) => onChange('precio', e.target.value)}
-                className="w-full rounded-xl border px-3 py-3 outline-none focus:ring-2 focus:ring-slate-300"
+                className={inputClassName}
                 placeholder="0.00"
               />
-            </div>
+            </Field>
 
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Color
-              </label>
-              <input
-                type="color"
-                value={form.color}
-                onChange={(e) => onChange('color', e.target.value)}
-                className="h-12 w-full rounded-xl border px-2 py-2"
-              />
-            </div>
+            <Field label="Color">
+              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3">
+                <input
+                  type="color"
+                  value={form.color}
+                  onChange={(e) => onChange('color', e.target.value)}
+                  className="h-10 w-14 cursor-pointer rounded-lg border border-white/10 bg-transparent"
+                />
+                <span className="text-sm text-white/55">{form.color}</span>
+              </div>
+            </Field>
 
             <div className="md:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-slate-700">
-                Descripción
-              </label>
-              <textarea
-                value={form.descripcion}
-                onChange={(e) => onChange('descripcion', e.target.value)}
-                className="min-h-[120px] w-full rounded-xl border px-3 py-3 outline-none focus:ring-2 focus:ring-slate-300"
-                placeholder="Describe brevemente el servicio"
-              />
+              <Field label="Descripción">
+                <textarea
+                  value={form.descripcion}
+                  onChange={(e) => onChange('descripcion', e.target.value)}
+                  className={`${inputClassName} min-h-[120px] resize-none`}
+                  placeholder="Describe brevemente el servicio"
+                />
+              </Field>
             </div>
-          </div>
 
-          <div className="mt-5 flex flex-wrap gap-3">
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-60"
-            >
-              {saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Crear servicio'}
-            </button>
+            <div className="md:col-span-2 flex flex-wrap gap-3 pt-2">
+              <button
+                type="submit"
+                disabled={saving}
+                className="
+                  rounded-2xl border border-white/10 bg-white/[0.08]
+                  px-4 py-3 text-sm font-semibold text-white transition
+                  hover:bg-white/[0.12] disabled:opacity-60
+                "
+              >
+                {saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Crear servicio'}
+              </button>
 
-            <button
-              type="button"
-              onClick={resetForm}
-              className="rounded-xl border px-4 py-3 text-sm font-medium text-slate-700"
-            >
-              Cancelar
-            </button>
-          </div>
-        </form>
+              <button
+                type="button"
+                onClick={resetForm}
+                className="
+                  rounded-2xl border border-white/10 bg-white/[0.03]
+                  px-4 py-3 text-sm font-semibold text-white/80 transition
+                  hover:bg-white/[0.06]
+                "
+              >
+                Cancelar
+              </button>
+            </div>
+          </form>
+        </Section>
       ) : null}
 
-      <div className="rounded-2xl border bg-white">
-        <div className="border-b p-4">
+      <Section
+        title="Listado de servicios"
+        description="Busca por nombre, categoría, descripción o estado."
+        className="p-0"
+        contentClassName="overflow-hidden"
+      >
+        <div className="border-b border-white/10 p-4">
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar por nombre, categoría, descripción o estado"
-            className="w-full rounded-xl border px-3 py-3 outline-none focus:ring-2 focus:ring-slate-300"
+            className={inputClassName}
           />
         </div>
 
         {loading ? (
           <div className="p-5">
-            <p className="text-sm text-slate-500">Cargando servicios...</p>
+            <p className="text-sm text-white/55">Cargando servicios...</p>
           </div>
         ) : serviciosFiltrados.length === 0 ? (
           <div className="p-5">
-            <p className="text-sm text-slate-500">No hay servicios registrados.</p>
+            <p className="text-sm text-white/55">No hay servicios registrados.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-50">
+              <thead className="border-b border-white/10 bg-white/[0.03]">
                 <tr>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-600">Servicio</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-600">Categoría</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-600">Duración</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-600">Precio</th>
-                  <th className="px-4 py-3 text-left font-semibold text-slate-600">Estado</th>
-                  <th className="px-4 py-3 text-right font-semibold text-slate-600">Acciones</th>
+                  <th className="px-4 py-3 text-left font-medium text-white/55">Servicio</th>
+                  <th className="px-4 py-3 text-left font-medium text-white/55">Categoría</th>
+                  <th className="px-4 py-3 text-left font-medium text-white/55">Duración</th>
+                  <th className="px-4 py-3 text-left font-medium text-white/55">Precio</th>
+                  <th className="px-4 py-3 text-left font-medium text-white/55">Estado</th>
+                  <th className="px-4 py-3 text-right font-medium text-white/55">Acciones</th>
                 </tr>
               </thead>
 
-              <tbody>
+              <tbody className="divide-y divide-white/10">
                 {serviciosFiltrados.map((servicio) => (
-                  <tr key={servicio.id} className="border-t">
+                  <tr key={servicio.id} className="transition hover:bg-white/[0.03]">
                     <td className="px-4 py-4">
                       <div className="flex items-start gap-3">
                         <span
@@ -419,33 +473,31 @@ export default function ServiciosPage() {
                           style={{ backgroundColor: servicio.color || '#0f172a' }}
                         />
                         <div>
-                          <p className="font-medium text-slate-900">{servicio.nombre}</p>
-                          <p className="text-xs text-slate-500">
+                          <p className="font-medium text-white">{servicio.nombre}</p>
+                          <p className="text-xs text-white/45">
                             {servicio.descripcion || 'Sin descripción'}
                           </p>
                         </div>
                       </div>
                     </td>
 
-                    <td className="px-4 py-4 text-slate-700">
+                    <td className="px-4 py-4 text-white/75">
                       {servicio.categoria || '—'}
                     </td>
 
-                    <td className="px-4 py-4 text-slate-700">
+                    <td className="px-4 py-4 text-white/75">
                       {servicio.duracion_minutos} min
                     </td>
 
-                    <td className="px-4 py-4 text-slate-700">
+                    <td className="px-4 py-4 text-white/75">
                       {money(servicio.precio)}
                     </td>
 
                     <td className="px-4 py-4">
                       <span
-                        className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${
-                          servicio.estado === 'activo'
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-slate-200 text-slate-700'
-                        }`}
+                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${estadoBadgeClasses(
+                          servicio.estado
+                        )}`}
                       >
                         {servicio.estado}
                       </span>
@@ -454,22 +506,37 @@ export default function ServiciosPage() {
                     <td className="px-4 py-4">
                       <div className="flex justify-end gap-2">
                         <button
+                          type="button"
                           onClick={() => onEdit(servicio)}
-                          className="rounded-lg border px-3 py-2 text-xs font-medium text-slate-700"
+                          className="
+                            rounded-xl border border-white/10 bg-white/[0.03]
+                            px-3 py-2 text-xs font-medium text-white/80 transition
+                            hover:bg-white/[0.06]
+                          "
                         >
                           Editar
                         </button>
 
                         <button
+                          type="button"
                           onClick={() => cambiarEstado(servicio.id, servicio.estado)}
-                          className="rounded-lg border px-3 py-2 text-xs font-medium text-slate-700"
+                          className="
+                            rounded-xl border border-white/10 bg-white/[0.03]
+                            px-3 py-2 text-xs font-medium text-white/80 transition
+                            hover:bg-white/[0.06]
+                          "
                         >
                           {servicio.estado === 'activo' ? 'Inactivar' : 'Activar'}
                         </button>
 
                         <button
+                          type="button"
                           onClick={() => eliminarServicio(servicio.id)}
-                          className="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600"
+                          className="
+                            rounded-xl border border-rose-400/20 bg-rose-400/10
+                            px-3 py-2 text-xs font-medium text-rose-300 transition
+                            hover:bg-rose-400/15
+                          "
                         >
                           Eliminar
                         </button>
@@ -481,7 +548,7 @@ export default function ServiciosPage() {
             </table>
           </div>
         )}
-      </div>
+      </Section>
     </div>
   )
 }

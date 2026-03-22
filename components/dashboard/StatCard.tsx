@@ -1,21 +1,23 @@
-type StatCardProps = {
-  title: string;
-  value: string | number;
-  subtitle?: string;
-};
+import type { ReactNode } from 'react'
 
-export default function StatCard({
-  title,
-  value,
-  subtitle,
-}: StatCardProps) {
+type CardProps = {
+  children: ReactNode
+  className?: string
+}
+
+export default function Card({ children, className = '' }: CardProps) {
   return (
-    <div className="rounded-2xl border bg-white p-5 shadow-sm">
-      <p className="text-sm text-gray-500">{title}</p>
-      <h3 className="mt-2 text-3xl font-bold text-gray-900">{value}</h3>
-      {subtitle ? (
-        <p className="mt-1 text-sm text-gray-400">{subtitle}</p>
-      ) : null}
+    <div
+      className={`
+        rounded-3xl
+        border border-white/10
+        bg-white/[0.04]
+        backdrop-blur-xl
+        shadow-[0_8px_30px_rgba(0,0,0,0.35)]
+        ${className}
+      `}
+    >
+      {children}
     </div>
-  );
+  )
 }

@@ -1,15 +1,31 @@
 'use client'
+
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useMemo, useState } from 'react'
-import Link from 'next/link'
+import {
+  useEffect,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type ReactNode,
+} from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import ActionCard from '@/components/ui/ActionCard'
 
-type Cliente = {
+type ClienteDB = {
   id: string
-  nombre: string
-  estado: string
+  nombre: string | null
+  telefono: string | null
+  email: string | null
+  genero: string | null
+  direccion: string | null
+  fecha_nacimiento: string | null
+  estado: string | null
+  notas: string | null
+  terapeuta_id: string | null
 }
 
 type Empleado = {
@@ -19,81 +35,72 @@ type Empleado = {
   estado: string
 }
 
-type Servicio = {
-  id: string
-  nombre: string
-  categoria: string | null
-  duracion_min: number
-  precio: number
-  estado: string
-}
-
-type CitaDB = {
-  id: string
-  cliente_id: string | null
-  terapeuta_id: string | null
-  servicio_id: string | null
-  fecha: string | null
-  hora_inicio: string | null
-  hora_fin: string | null
-  estado: 'programada' | 'confirmada' | 'cancelada' | 'completada' | 'reprogramada'
-  notas: string | null
-}
-
 type FormState = {
-  cliente_id: string
-  terapeuta_id: string
-  servicio_id: string
-  fecha: string
-  hora_inicio: string
-  hora_fin: string
-  estado: 'programada' | 'confirmada' | 'cancelada' | 'completada' | 'reprogramada'
+  nombre: string
+  telefono: string
+  email: string
+  genero: string
+  direccion: string
+  fecha_nacimiento: string
+  estado: string
   notas: string
+  terapeuta_id: string
 }
 
 const INITIAL_FORM: FormState = {
-  cliente_id: '',
-  terapeuta_id: '',
-  servicio_id: '',
-  fecha: '',
-  hora_inicio: '',
-  hora_fin: '',
-  estado: 'programada',
+  nombre: '',
+  telefono: '',
+  email: '',
+  genero: '',
+  direccion: '',
+  fecha_nacimiento: '',
+  estado: 'activo',
   notas: '',
+  terapeuta_id: '',
 }
 
-function normalizeTime(value: string | null | undefined) {
-  if (!value) return ''
-  return value.slice(0, 5)
+const inputClassName = `
+  w-full rounded-2xl border border-white/10 bg-white/[0.03]
+  px-4 py-3 text-sm text-white outline-none transition
+  placeholder:text-white/35
+  focus:border-white/20 focus:bg-white/[0.05]
+`
+
+function Field({
+  label,
+  children,
+  helper,
+}: {
+  label: string
+  children: ReactNode
+  helper?: string
+}) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-medium text-white/75">
+        {label}
+      </label>
+      {children}
+      {helper ? <p className="mt-2 text-xs text-white/45">{helper}</p> : null}
+    </div>
+  )
 }
 
-function addMinutesToTime(time: string, minutesToAdd: number) {
-  if (!time) return ''
-
-  const [hours, minutes] = time.split(':').map(Number)
-  const totalMinutes = hours * 60 + minutes + minutesToAdd
-
-  const normalized = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
-  const newHours = Math.floor(normalized / 60)
-  const newMinutes = normalized % 60
-
-  return `${String(newHours).padStart(2, '0')}:${String(newMinutes).padStart(2, '0')}`
+function isUUID(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  )
 }
 
-function toDbTime(time: string) {
-  if (!time) return null
-  return `${time}:00`
-}
-
-export default function EditarCitaPage() {
+export default function EditarClientePage() {
   const params = useParams()
   const router = useRouter()
-  const id = params?.id as string
+
+  const rawId = params?.id
+  const id = Array.isArray(rawId) ? rawId[0] : rawId ?? ''
 
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
-  const [clientes, setClientes] = useState<Cliente[]>([])
   const [terapeutas, setTerapeutas] = useState<Empleado[]>([])
-  const [servicios, setServicios] = useState<Servicio[]>([])
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -101,7 +108,18 @@ export default function EditarCitaPage() {
   const [errorMsg, setErrorMsg] = useState('')
 
   useEffect(() => {
-    if (!id) return
+    if (!id) {
+      setBootError('No se recibió un identificador de cliente válido.')
+      setLoading(false)
+      return
+    }
+
+    if (!isUUID(id)) {
+      setBootError('El identificador del cliente no es válido.')
+      setLoading(false)
+      return
+    }
+
     void fetchAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
@@ -112,141 +130,84 @@ export default function EditarCitaPage() {
     setErrorMsg('')
 
     try {
-      const [
-        citaRes,
-        clientesRes,
-        terapeutasRes,
-        serviciosRes,
-      ] = await Promise.all([
-        supabase
-          .from('citas')
-          .select(`
-            id,
-            cliente_id,
-            terapeuta_id,
-            servicio_id,
-            fecha,
-            hora_inicio,
-            hora_fin,
-            estado,
-            notas
-          `)
-          .eq('id', id)
-          .single(),
+      const [clienteRes, terapeutasRes] = await Promise.all([
         supabase
           .from('clientes')
-          .select('id, nombre, estado')
-          .eq('estado', 'activo')
-          .order('nombre', { ascending: true }),
+          .select(`
+            id,
+            nombre,
+            telefono,
+            email,
+            genero,
+            direccion,
+            fecha_nacimiento,
+            estado,
+            notas,
+            terapeuta_id
+          `)
+          .eq('id', id)
+          .limit(1)
+          .maybeSingle(),
+
         supabase
           .from('empleados')
           .select('id, nombre, rol, estado')
           .eq('rol', 'terapeuta')
           .eq('estado', 'activo')
           .order('nombre', { ascending: true }),
-        supabase
-          .from('servicios')
-          .select('id, nombre, categoria, duracion_min, precio, estado')
-          .eq('estado', 'activo')
-          .order('nombre', { ascending: true }),
       ])
 
-      if (citaRes.error || !citaRes.data) {
-        throw new Error(citaRes.error?.message || 'No se pudo cargar la cita.')
+      if (clienteRes.error) {
+        throw new Error(clienteRes.error.message || 'No se pudo cargar el cliente.')
       }
 
-      setClientes((clientesRes.data || []) as Cliente[])
-      setTerapeutas((terapeutasRes.data || []) as Empleado[])
-      setServicios((serviciosRes.data || []) as Servicio[])
+      if (!clienteRes.data) {
+        throw new Error('No se encontró el cliente.')
+      }
 
-      const cita = citaRes.data as CitaDB
+      if (terapeutasRes.error) {
+        throw new Error(terapeutasRes.error.message || 'No se pudieron cargar los terapeutas.')
+      }
+
+      const cliente = clienteRes.data as ClienteDB
+
+      setTerapeutas((terapeutasRes.data || []) as Empleado[])
 
       setForm({
-        cliente_id: cita.cliente_id || '',
-        terapeuta_id: cita.terapeuta_id || '',
-        servicio_id: cita.servicio_id || '',
-        fecha: cita.fecha || '',
-        hora_inicio: normalizeTime(cita.hora_inicio),
-        hora_fin: normalizeTime(cita.hora_fin),
-        estado: cita.estado || 'programada',
-        notas: cita.notas || '',
+        nombre: cliente.nombre || '',
+        telefono: cliente.telefono || '',
+        email: cliente.email || '',
+        genero: cliente.genero || '',
+        direccion: cliente.direccion || '',
+        fecha_nacimiento: cliente.fecha_nacimiento || '',
+        estado: cliente.estado || 'activo',
+        notas: cliente.notas || '',
+        terapeuta_id: cliente.terapeuta_id || '',
       })
     } catch (err: any) {
-      setBootError(err?.message || 'No se pudo cargar la cita.')
+      console.error('Error al cargar edición de cliente:', err)
+      setBootError(err?.message || 'No se pudo cargar el cliente.')
     } finally {
       setLoading(false)
     }
   }
 
-  const selectedServicio = useMemo(() => {
-    return servicios.find((s) => s.id === form.servicio_id) || null
-  }, [servicios, form.servicio_id])
-
-  useEffect(() => {
-    if (!selectedServicio || !form.hora_inicio) return
-
-    const autoHoraFin = addMinutesToTime(form.hora_inicio, selectedServicio.duracion_min)
-
-    setForm((prev) => {
-      if (!prev.hora_fin) {
-        return { ...prev, hora_fin: autoHoraFin }
-      }
-
-      const previousService = servicios.find((s) => s.id === prev.servicio_id)
-      const oldAuto = previousService
-        ? addMinutesToTime(prev.hora_inicio, previousService.duracion_min)
-        : ''
-
-      if (prev.hora_fin === oldAuto || prev.hora_fin === '') {
-        return { ...prev, hora_fin: autoHoraFin }
-      }
-
-      return prev
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedServicio?.id, form.hora_inicio])
-
   function handleChange(
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
+    e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) {
     const { name, value } = e.target
-
-    setForm((prev) => {
-      const next = {
-        ...prev,
-        [name]: value,
-      }
-
-      if (name === 'servicio_id') {
-        const servicio = servicios.find((s) => s.id === value)
-        if (servicio && next.hora_inicio) {
-          next.hora_fin = addMinutesToTime(next.hora_inicio, servicio.duracion_min)
-        }
-      }
-
-      if (name === 'hora_inicio') {
-        const servicio = servicios.find((s) => s.id === next.servicio_id)
-        if (servicio) {
-          next.hora_fin = addMinutesToTime(value, servicio.duracion_min)
-        }
-      }
-
-      return next
-    })
+    setForm((prev) => ({
+      ...prev,
+      [name]: value,
+    }))
   }
 
   function validateForm() {
-    if (!form.cliente_id) return 'Debes seleccionar un cliente.'
-    if (!form.terapeuta_id) return 'Debes seleccionar un terapeuta.'
-    if (!form.servicio_id) return 'Debes seleccionar un servicio.'
-    if (!form.fecha) return 'Debes seleccionar una fecha.'
-    if (!form.hora_inicio) return 'Debes indicar la hora de inicio.'
-    if (!form.hora_fin) return 'Debes indicar la hora de fin.'
-    if (form.hora_fin <= form.hora_inicio) return 'La hora final debe ser mayor que la inicial.'
+    if (!form.nombre.trim()) return 'Debes indicar el nombre del cliente.'
     return ''
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setErrorMsg('')
 
@@ -260,29 +221,31 @@ export default function EditarCitaPage() {
 
     try {
       const payload = {
-        cliente_id: form.cliente_id,
-        terapeuta_id: form.terapeuta_id,
-        servicio_id: form.servicio_id,
-        fecha: form.fecha,
-        hora_inicio: toDbTime(form.hora_inicio),
-        hora_fin: toDbTime(form.hora_fin),
-        estado: form.estado,
+        nombre: form.nombre.trim(),
+        telefono: form.telefono.trim() || null,
+        email: form.email.trim() || null,
+        genero: form.genero || null,
+        direccion: form.direccion.trim() || null,
+        fecha_nacimiento: form.fecha_nacimiento || null,
+        estado: form.estado || 'activo',
         notas: form.notas.trim() || null,
+        terapeuta_id: form.terapeuta_id || null,
       }
 
       const { error } = await supabase
-        .from('citas')
+        .from('clientes')
         .update(payload)
         .eq('id', id)
 
       if (error) {
-        throw new Error(error.message || 'No se pudo actualizar la cita.')
+        throw new Error(error.message || 'No se pudo actualizar el cliente.')
       }
 
-      router.push(`/admin/operaciones/agenda/${id}`)
+      router.push(`/admin/personas/clientes/${id}`)
       router.refresh()
     } catch (err: any) {
-      setErrorMsg(err?.message || 'No se pudo actualizar la cita.')
+      console.error('Error al actualizar cliente:', err)
+      setErrorMsg(err?.message || 'No se pudo actualizar el cliente.')
     } finally {
       setSaving(false)
     }
@@ -290,274 +253,239 @@ export default function EditarCitaPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50">
+      <div className="space-y-6">
+        <div>
+          <p className="text-sm text-white/55">Clientes</p>
+          <h1 className="mt-1 text-2xl font-semibold text-white">Editar cliente</h1>
+          <p className="mt-2 text-white/55">Cargando información...</p>
+        </div>
 
-        <main className="mx-auto max-w-5xl px-4 py-6">
-          <div className="space-y-6">
-            <div>
-              <h1 className="text-3xl font-bold text-neutral-900">Editar cita</h1>
-              <p className="mt-1 text-neutral-500">Cargando información...</p>
-            </div>
-
-            <div className="rounded-2xl border border-black/5 bg-white p-6 shadow-sm">
-              <p className="text-sm text-neutral-500">Cargando formulario...</p>
-            </div>
-          </div>
-        </main>
+        <Card className="p-6">
+          <p className="text-sm text-white/55">Cargando formulario...</p>
+        </Card>
       </div>
     )
   }
 
   if (bootError) {
     return (
-      <div className="min-h-screen bg-slate-50">
+      <div className="space-y-6">
+        <div>
+          <p className="text-sm text-white/55">Clientes</p>
+          <h1 className="mt-1 text-2xl font-semibold text-white">Editar cliente</h1>
+          <p className="mt-2 text-white/55">No fue posible abrir el registro.</p>
+        </div>
 
-        <main className="mx-auto max-w-5xl px-4 py-6">
-          <div className="space-y-6">
-            <div>
-              <h1 className="text-3xl font-bold text-neutral-900">Editar cita</h1>
-              <p className="mt-1 text-neutral-500">No fue posible abrir el registro.</p>
-            </div>
+        <Card className="p-6">
+          <p className="text-sm font-medium text-rose-400">{bootError}</p>
 
-            <div className="rounded-2xl border border-red-200 bg-red-50 p-6 shadow-sm">
-              <p className="text-sm font-medium text-red-700">{bootError}</p>
+          <div className="mt-4 flex gap-3">
+            <button
+              type="button"
+              onClick={() => router.push('/admin/personas/clientes')}
+              className="rounded-2xl border border-white/10 bg-white/[0.08] px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.12]"
+            >
+              Volver a clientes
+            </button>
 
-              <div className="mt-4 flex gap-3">
-                <button
-                  onClick={() => router.push('/admin/operaciones/agenda')}
-                  className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-500"
-                >
-                  Volver a agenda
-                </button>
-
-                <button
-                  onClick={() => void fetchAll()}
-                  className="rounded-xl border border-red-200 bg-white px-4 py-3 text-sm font-semibold text-red-700 transition hover:bg-red-100"
-                >
-                  Reintentar
-                </button>
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => void fetchAll()}
+              className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm font-semibold text-rose-300 transition hover:bg-rose-400/15"
+            >
+              Reintentar
+            </button>
           </div>
-        </main>
+        </Card>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm text-white/55">Clientes</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
+            Editar cliente
+          </h1>
+          <p className="mt-2 text-sm text-white/55">
+            Actualiza los datos personales y de contacto del cliente.
+          </p>
+        </div>
 
+        <div className="w-full max-w-sm">
+          <ActionCard
+            title="Volver"
+            description="Regresar al detalle del cliente."
+            href={`/admin/personas/clientes/${id}`}
+          />
+        </div>
+      </div>
 
-      <main className="mx-auto max-w-5xl px-4 py-6">
-        <div className="mx-auto max-w-4xl space-y-6">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-neutral-900">Editar cita</h1>
-              <p className="mt-1 text-neutral-500">
-                Ajusta cliente, terapeuta, servicio, horario y estado
-              </p>
+      <Section
+        title="Formulario de edición"
+        description="Actualiza los datos principales del cliente."
+      >
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="grid gap-5 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <Field label="Nombre">
+                <input
+                  type="text"
+                  name="nombre"
+                  value={form.nombre}
+                  onChange={handleChange}
+                  placeholder="Nombre completo"
+                  className={inputClassName}
+                />
+              </Field>
             </div>
 
-            <div className="flex gap-2">
-              <Link
-                href={`/admin/operaciones/agenda/${id}`}
-                className="rounded-xl border border-neutral-200 bg-white px-4 py-3 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50"
+            <Field label="Teléfono">
+              <input
+                type="text"
+                name="telefono"
+                value={form.telefono}
+                onChange={handleChange}
+                placeholder="Teléfono"
+                className={inputClassName}
+              />
+            </Field>
+
+            <Field label="Email">
+              <input
+                type="email"
+                name="email"
+                value={form.email}
+                onChange={handleChange}
+                placeholder="Correo electrónico"
+                className={inputClassName}
+              />
+            </Field>
+
+            <Field label="Género">
+              <select
+                name="genero"
+                value={form.genero}
+                onChange={handleChange}
+                className={inputClassName}
               >
-                Volver
-              </Link>
+                <option value="" className="bg-[#11131a] text-white">
+                  Seleccionar género
+                </option>
+                <option value="femenino" className="bg-[#11131a] text-white">
+                  Femenino
+                </option>
+                <option value="masculino" className="bg-[#11131a] text-white">
+                  Masculino
+                </option>
+                <option value="otro" className="bg-[#11131a] text-white">
+                  Otro
+                </option>
+              </select>
+            </Field>
+
+            <Field label="Fecha de nacimiento">
+              <input
+                type="date"
+                name="fecha_nacimiento"
+                value={form.fecha_nacimiento}
+                onChange={handleChange}
+                className={inputClassName}
+              />
+            </Field>
+
+            <Field label="Estado">
+              <select
+                name="estado"
+                value={form.estado}
+                onChange={handleChange}
+                className={inputClassName}
+              >
+                <option value="activo" className="bg-[#11131a] text-white">
+                  Activo
+                </option>
+                <option value="inactivo" className="bg-[#11131a] text-white">
+                  Inactivo
+                </option>
+                <option value="pausado" className="bg-[#11131a] text-white">
+                  Pausado
+                </option>
+              </select>
+            </Field>
+
+            <Field label="Terapeuta asignado">
+              <select
+                name="terapeuta_id"
+                value={form.terapeuta_id}
+                onChange={handleChange}
+                className={inputClassName}
+              >
+                <option value="" className="bg-[#11131a] text-white">
+                  Sin asignar
+                </option>
+                {terapeutas.map((terapeuta) => (
+                  <option key={terapeuta.id} value={terapeuta.id} className="bg-[#11131a] text-white">
+                    {terapeuta.nombre}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <div className="md:col-span-2">
+              <Field label="Dirección">
+                <textarea
+                  name="direccion"
+                  value={form.direccion}
+                  onChange={handleChange}
+                  rows={3}
+                  placeholder="Dirección"
+                  className={`${inputClassName} resize-none`}
+                />
+              </Field>
             </div>
-          </div>
 
-          <form
-            onSubmit={handleSubmit}
-            className="rounded-2xl border border-black/5 bg-white p-6 shadow-sm"
-          >
-            <div className="grid gap-5 md:grid-cols-2">
-              <div className="md:col-span-2">
-                <label className="mb-2 block text-sm font-semibold text-neutral-800">
-                  Cliente
-                </label>
-                <select
-                  name="cliente_id"
-                  value={form.cliente_id}
-                  onChange={handleChange}
-                  className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
-                >
-                  <option value="">Seleccionar cliente</option>
-                  {clientes.map((cliente) => (
-                    <option key={cliente.id} value={cliente.id}>
-                      {cliente.nombre}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-neutral-800">
-                  Terapeuta
-                </label>
-                <select
-                  name="terapeuta_id"
-                  value={form.terapeuta_id}
-                  onChange={handleChange}
-                  className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
-                >
-                  <option value="">Seleccionar terapeuta</option>
-                  {terapeutas.map((terapeuta) => (
-                    <option key={terapeuta.id} value={terapeuta.id}>
-                      {terapeuta.nombre}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-neutral-800">
-                  Servicio
-                </label>
-                <select
-                  name="servicio_id"
-                  value={form.servicio_id}
-                  onChange={handleChange}
-                  className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
-                >
-                  <option value="">Seleccionar servicio</option>
-                  {servicios.map((servicio) => (
-                    <option key={servicio.id} value={servicio.id}>
-                      {servicio.nombre} · {servicio.duracion_min} min
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-neutral-800">
-                  Fecha
-                </label>
-                <input
-                  type="date"
-                  name="fecha"
-                  value={form.fecha}
-                  onChange={handleChange}
-                  className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
-                />
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-neutral-800">
-                  Hora inicio
-                </label>
-                <input
-                  type="time"
-                  name="hora_inicio"
-                  value={form.hora_inicio}
-                  onChange={handleChange}
-                  className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
-                />
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-neutral-800">
-                  Hora fin
-                </label>
-                <input
-                  type="time"
-                  name="hora_fin"
-                  value={form.hora_fin}
-                  onChange={handleChange}
-                  className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
-                />
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-neutral-800">
-                  Estado
-                </label>
-                <select
-                  name="estado"
-                  value={form.estado}
-                  onChange={handleChange}
-                  className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
-                >
-                  <option value="programada">Programada</option>
-                  <option value="confirmada">Confirmada</option>
-                  <option value="cancelada">Cancelada</option>
-                  <option value="completada">Completada</option>
-                  <option value="reprogramada">Reprogramada</option>
-                </select>
-              </div>
-
-              <div className="md:col-span-2">
-                <label className="mb-2 block text-sm font-semibold text-neutral-800">
-                  Notas
-                </label>
+            <div className="md:col-span-2">
+              <Field label="Notas">
                 <textarea
                   name="notas"
                   value={form.notas}
                   onChange={handleChange}
                   rows={5}
-                  placeholder="Notas de la cita"
-                  className="w-full rounded-xl border border-neutral-200 px-4 py-3 text-sm outline-none transition focus:border-violet-400"
+                  placeholder="Notas del cliente"
+                  className={`${inputClassName} resize-none`}
                 />
-              </div>
+              </Field>
             </div>
+          </div>
 
-            {selectedServicio ? (
-              <div className="mt-5 rounded-2xl bg-neutral-50 p-4">
-                <p className="text-sm font-semibold text-neutral-900">{selectedServicio.nombre}</p>
+          {errorMsg ? (
+            <Card className="p-4">
+              <p className="text-sm text-rose-400">{errorMsg}</p>
+            </Card>
+          ) : null}
 
-                <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Categoría</p>
-                    <p className="mt-1 text-sm text-neutral-800">{selectedServicio.categoria || '—'}</p>
-                  </div>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <button
+              type="submit"
+              disabled={saving}
+              className="rounded-2xl border border-white/10 bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {saving ? 'Guardando cambios...' : 'Guardar cambios'}
+            </button>
 
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Duración</p>
-                    <p className="mt-1 text-sm text-neutral-800">{selectedServicio.duracion_min} min</p>
-                  </div>
-
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-neutral-500">Precio</p>
-                    <p className="mt-1 text-sm text-neutral-800">
-                      {new Intl.NumberFormat('es-ES', {
-                        style: 'currency',
-                        currency: 'USD',
-                        maximumFractionDigits: 2,
-                      }).format(Number(selectedServicio.precio || 0))}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            {errorMsg ? (
-              <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {errorMsg}
-              </div>
-            ) : null}
-
-            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-              <button
-                type="submit"
-                disabled={saving}
-                className="rounded-xl bg-violet-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {saving ? 'Guardando cambios...' : 'Guardar cambios'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => router.push(`/admin/operaciones/agenda/${id}`)}
-                disabled={saving}
-                className="rounded-xl border border-neutral-200 bg-white px-5 py-3 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Cancelar
-              </button>
-            </div>
-          </form>
-        </div>
-      </main>
+            <button
+              type="button"
+              onClick={() => router.push(`/admin/personas/clientes/${id}`)}
+              disabled={saving}
+              className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Cancelar
+            </button>
+          </div>
+        </form>
+      </Section>
     </div>
   )
 }

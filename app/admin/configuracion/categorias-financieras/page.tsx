@@ -170,7 +170,7 @@ export default function MetodosPagoConfigPage() {
 
         <Link
           href="/admin/configuracion"
-          className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+          className="rounded-xl border border-slate-200 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
         >
           Volver a configuración
         </Link>
@@ -189,7 +189,7 @@ export default function MetodosPagoConfigPage() {
       ) : null}
 
       <div className="grid gap-6 xl:grid-cols-3">
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm xl:col-span-1">
+        <section className="rounded-2xl border border-slate-200 bg-white/[0.04] p-6 shadow-sm xl:col-span-1">
           <h2 className="mb-4 text-lg font-semibold text-slate-900">
             {editingId ? 'Editar método' : 'Nuevo método'}
           </h2>
@@ -240,7 +240,7 @@ export default function MetodosPagoConfigPage() {
                 <button
                   type="button"
                   onClick={resetForm}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  className="rounded-xl border border-slate-200 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
                 >
                   Cancelar
                 </button>
@@ -249,7 +249,7 @@ export default function MetodosPagoConfigPage() {
           </form>
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm xl:col-span-2 overflow-hidden">
+        <section className="rounded-2xl border border-slate-200 bg-white/[0.04] shadow-sm xl:col-span-2 overflow-hidden">
           <div className="border-b bg-slate-50 px-5 py-4">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <h2 className="text-lg font-semibold text-slate-900">Listado</h2>
@@ -296,14 +296,14 @@ export default function MetodosPagoConfigPage() {
                         <div className="flex flex-wrap gap-2">
                           <button
                             onClick={() => startEdit(row)}
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            className="rounded-lg border border-slate-200 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                           >
                             Editar
                           </button>
 
                           <button
                             onClick={() => toggleEstado(row)}
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            className="rounded-lg border border-slate-200 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                           >
                             {row.estado === 'activo' ? 'Desactivar' : 'Activar'}
                           </button>

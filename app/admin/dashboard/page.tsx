@@ -1,59 +1,48 @@
 'use client'
+
 export const dynamic = 'force-dynamic'
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import StatCard from '@/components/ui/StatCard'
+import ActionCard from '@/components/ui/ActionCard'
+
+type Cliente = {
+  id: string
+  estado?: string | null
+  created_at?: string | null
+}
+
+type CitaRaw = {
+  id: string
+  fecha?: string | null
+  estado?: string | null
+  [key: string]: any
+}
 
 type Pago = {
   id: string
-  fecha: string
-  concepto: string
-  monto: number
-  estado: string
-  clientes: {
-    nombre: string
-  } | null
-  metodos_pago: {
-    nombre: string
-  } | null
+  fecha?: string | null
+  monto?: number | null
+  estado?: string | null
 }
 
-type Cita = {
+type Empleado = {
   id: string
-  fecha: string
-  hora_inicio: string
-  estado: string
-  clientes: {
-    nombre: string
-  } | null
+  nombre?: string | null
+  estado?: string | null
 }
 
-type PlanProximo = {
+type PlanCliente = {
   id: string
-  fecha_fin: string | null
-  sesiones_totales: number
-  sesiones_usadas: number
-  clientes: {
-    nombre: string
-  } | null
-  planes: {
-    nombre: string
-    precio: number
-  } | null
+  fecha_fin?: string | null
+  estado?: string | null
 }
 
-type CuentaVencida = {
-  id: string
-  fecha: string
-  monto: number
-  concepto: string
-  clientes: {
-    nombre: string
-  } | null
-}
-
-function money(value: number) {
+function money(value: number | string | null | undefined) {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
@@ -61,571 +50,415 @@ function money(value: number) {
   }).format(Number(value || 0))
 }
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10)
+function sameMonth(dateStr: string | null | undefined, today: Date) {
+  if (!dateStr) return false
+  const d = new Date(dateStr)
+  return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth()
 }
 
-function addDays(base: string, days: number) {
-  const date = new Date(`${base}T00:00:00`)
-  date.setDate(date.getDate() + days)
-  return date.toISOString().slice(0, 10)
+function sameDay(dateStr: string | null | undefined, todayStr: string) {
+  if (!dateStr) return false
+  return dateStr === todayStr
 }
 
-function formatDate(value: string | null) {
-  if (!value) return '—'
-  try {
-    return new Date(`${value}T00:00:00`).toLocaleDateString()
-  } catch {
-    return value
+function getFirstExistingKey(obj: Record<string, any>, keys: string[]) {
+  for (const key of keys) {
+    if (key in obj) return key
   }
+  return null
+}
+
+function getDateKey(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 export default function DashboardPage() {
-  const [ingresosHoy, setIngresosHoy] = useState(0)
-  const [ingresosMes, setIngresosMes] = useState(0)
-  const [cuentasPorCobrar, setCuentasPorCobrar] = useState(0)
-  const [cuentasVencidasTotal, setCuentasVencidasTotal] = useState(0)
-
-  const [citasHoy, setCitasHoy] = useState(0)
-  const [clientesActivos, setClientesActivos] = useState(0)
-  const [planesActivos, setPlanesActivos] = useState(0)
-  const [serviciosActivos, setServiciosActivos] = useState(0)
-  const [personalActivo, setPersonalActivo] = useState(0)
-
-  const [ultimosPagos, setUltimosPagos] = useState<Pago[]>([])
-  const [proximasCitas, setProximasCitas] = useState<Cita[]>([])
-  const [planesPorVencer, setPlanesPorVencer] = useState<PlanProximo[]>([])
-  const [clientesSinSesiones, setClientesSinSesiones] = useState<PlanProximo[]>([])
-  const [cuentasVencidas, setCuentasVencidas] = useState<CuentaVencida[]>([])
-
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
+  const [clientes, setClientes] = useState<Cliente[]>([])
+  const [citas, setCitas] = useState<CitaRaw[]>([])
+  const [pagos, setPagos] = useState<Pago[]>([])
+  const [empleados, setEmpleados] = useState<Empleado[]>([])
+  const [clientesPlanes, setClientesPlanes] = useState<PlanCliente[]>([])
+
   useEffect(() => {
-    void cargarDashboard()
+    void loadDashboard()
   }, [])
 
-  async function cargarDashboard() {
+  async function loadDashboard() {
+    setLoading(true)
+    setError('')
+
     try {
-      setLoading(true)
-      setError('')
+      const [clientesRes, citasRes, pagosRes, empleadosRes, clientesPlanesRes] =
+        await Promise.all([
+          supabase.from('clientes').select('id, estado, created_at'),
+          supabase.from('citas').select('*'),
+          supabase.from('pagos').select('id, fecha, monto, estado'),
+          supabase.from('empleados').select('id, nombre, estado'),
+          supabase.from('clientes_planes').select('id, fecha_fin, estado'),
+        ])
 
-      const hoy = todayISO()
-      const mes = new Date().toISOString().slice(0, 7)
-      const proximaSemana = addDays(hoy, 7)
-      const hace7 = addDays(hoy, -7)
+      if (clientesRes.error) throw new Error(clientesRes.error.message)
+      if (citasRes.error) throw new Error(citasRes.error.message)
+      if (pagosRes.error) throw new Error(pagosRes.error.message)
+      if (empleadosRes.error) throw new Error(empleadosRes.error.message)
+      if (clientesPlanesRes.error) throw new Error(clientesPlanesRes.error.message)
 
-      const [
-        pagosHoy,
-        pagosMes,
-        pagosPendientes,
-        pagosVencidos,
-        citas,
-        clientes,
-        planes,
-        pagos,
-        citasProx,
-        servicios,
-        empleados,
-        planesVencen,
-      ] = await Promise.all([
-        supabase
-          .from('pagos')
-          .select('monto')
-          .eq('fecha', hoy)
-          .eq('estado', 'pagado'),
-
-        supabase
-          .from('pagos')
-          .select('monto, fecha')
-          .gte('fecha', `${mes}-01`)
-          .eq('estado', 'pagado'),
-
-        supabase
-          .from('pagos')
-          .select('monto')
-          .eq('estado', 'pendiente'),
-
-        supabase
-          .from('pagos')
-          .select(`
-            id,
-            fecha,
-            monto,
-            concepto,
-            clientes:cliente_id (
-              nombre
-            )
-          `)
-          .eq('estado', 'pendiente')
-          .lt('fecha', hace7)
-          .order('fecha', { ascending: true })
-          .limit(8),
-
-        supabase
-          .from('citas')
-          .select('id')
-          .eq('fecha', hoy)
-          .neq('estado', 'cancelada'),
-
-        supabase
-          .from('clientes')
-          .select('id')
-          .eq('estado', 'activo'),
-
-        supabase
-          .from('clientes_planes')
-          .select('id')
-          .eq('estado', 'activo'),
-
-        supabase
-          .from('pagos')
-          .select(`
-            id,
-            fecha,
-            concepto,
-            monto,
-            estado,
-            clientes:cliente_id (
-              nombre
-            ),
-            metodos_pago:metodo_pago_id (
-              nombre
-            )
-          `)
-          .order('created_at', { ascending: false })
-          .limit(8),
-
-        supabase
-          .from('citas')
-          .select(`
-            id,
-            fecha,
-            hora_inicio,
-            estado,
-            clientes:cliente_id (
-              nombre
-            )
-          `)
-          .gte('fecha', hoy)
-          .neq('estado', 'cancelada')
-          .order('fecha', { ascending: true })
-          .order('hora_inicio', { ascending: true })
-          .limit(8),
-
-        supabase
-          .from('servicios')
-          .select('id')
-          .eq('estado', 'activo'),
-
-        supabase
-          .from('empleados')
-          .select('id')
-          .eq('estado', 'activo'),
-
-        supabase
-          .from('clientes_planes')
-          .select(`
-            id,
-            fecha_fin,
-            sesiones_totales,
-            sesiones_usadas,
-            clientes:cliente_id (
-              nombre
-            ),
-            planes:plan_id (
-              nombre,
-              precio
-            )
-          `)
-          .eq('estado', 'activo')
-          .lte('fecha_fin', proximaSemana)
-          .gte('fecha_fin', hoy)
-          .order('fecha_fin', { ascending: true }),
-      ])
-
-      if (pagosHoy.error) throw pagosHoy.error
-      if (pagosMes.error) throw pagosMes.error
-      if (pagosPendientes.error) throw pagosPendientes.error
-      if (pagosVencidos.error) throw pagosVencidos.error
-      if (citas.error) throw citas.error
-      if (clientes.error) throw clientes.error
-      if (planes.error) throw planes.error
-      if (pagos.error) throw pagos.error
-      if (citasProx.error) throw citasProx.error
-      if (servicios.error) throw servicios.error
-      if (empleados.error) throw empleados.error
-      if (planesVencen.error) throw planesVencen.error
-
-      const totalHoy =
-        pagosHoy.data?.reduce((acc, item) => acc + Number(item.monto), 0) || 0
-
-      const totalMes =
-        pagosMes.data?.reduce((acc, item) => acc + Number(item.monto), 0) || 0
-
-      const totalPendiente =
-        pagosPendientes.data?.reduce((acc, item) => acc + Number(item.monto), 0) || 0
-
-      const totalVencido =
-        pagosVencidos.data?.reduce((acc, item) => acc + Number(item.monto), 0) || 0
-
-      const planesVencer = ((planesVencen.data as unknown as PlanProximo[]) || []).filter(
-        (item) => {
-          const restantes =
-            Number(item.sesiones_totales || 0) - Number(item.sesiones_usadas || 0)
-          return restantes > 0
-        }
-      )
-
-      const sinSesiones = ((planesVencen.data as unknown as PlanProximo[]) || []).filter(
-        (item) => {
-          const restantes =
-            Number(item.sesiones_totales || 0) - Number(item.sesiones_usadas || 0)
-          return restantes <= 0
-        }
-      )
-
-      setIngresosHoy(totalHoy)
-      setIngresosMes(totalMes)
-      setCuentasPorCobrar(totalPendiente)
-      setCuentasVencidasTotal(totalVencido)
-      setCitasHoy(citas.data?.length || 0)
-      setClientesActivos(clientes.data?.length || 0)
-      setPlanesActivos(planes.data?.length || 0)
-      setServiciosActivos(servicios.data?.length || 0)
-      setPersonalActivo(empleados.data?.length || 0)
-      setUltimosPagos((pagos.data as Pago[]) || [])
-      setProximasCitas((citasProx.data as Cita[]) || [])
-      setPlanesPorVencer(planesVencer)
-      setClientesSinSesiones(sinSesiones)
-      setCuentasVencidas((pagosVencidos.data as unknown as CuentaVencida[]) || [])
+      setClientes((clientesRes.data || []) as Cliente[])
+      setCitas((citasRes.data || []) as CitaRaw[])
+      setPagos((pagosRes.data || []) as Pago[])
+      setEmpleados((empleadosRes.data || []) as Empleado[])
+      setClientesPlanes((clientesPlanesRes.data || []) as PlanCliente[])
     } catch (err: any) {
       console.error(err)
-      setError(err.message || 'No se pudo cargar el dashboard')
+      setError(err?.message || 'No se pudo cargar el dashboard.')
+      setClientes([])
+      setCitas([])
+      setPagos([])
+      setEmpleados([])
+      setClientesPlanes([])
     } finally {
       setLoading(false)
     }
   }
 
-  const cards = [
-    {
-      label: 'Ingresos hoy',
-      value: money(ingresosHoy),
-      href: '/admin/finanzas/resumen',
-    },
-    {
-      label: 'Ingresos mes',
-      value: money(ingresosMes),
-      href: '/admin/finanzas/resumen',
-    },
-    {
-      label: 'Cuentas por cobrar',
-      value: money(cuentasPorCobrar),
-      href: '/admin/finanzas/cuentas-por-cobrar',
-    },
-    {
-      label: 'Cuentas vencidas',
-      value: money(cuentasVencidasTotal),
-      href: '/admin/finanzas/cuentas-por-cobrar',
-    },
-    {
-      label: 'Citas hoy',
-      value: String(citasHoy),
-      href: '/admin/operaciones/agenda',
-    },
-    {
-      label: 'Clientes activos',
-      value: String(clientesActivos),
-      href: '/admin/personas/clientes',
-    },
-    {
-      label: 'Planes activos',
-      value: String(planesActivos),
-      href: '/admin/operaciones/planes',
-    },
-    {
-      label: 'Personal activo',
-      value: String(personalActivo),
-      href: '/admin/personas/personal',
-    },
-  ]
+  const today = useMemo(() => new Date(), [])
+  const hoy = useMemo(() => getDateKey(today), [today])
+
+  const stats = useMemo(() => {
+    const clientesActivos = clientes.filter(
+      (c) => c.estado?.toLowerCase() === 'activo'
+    ).length
+
+    const clientesNuevosMes = clientes.filter((c) =>
+      sameMonth(c.created_at, today)
+    ).length
+
+    const citasHoy = citas.filter((c) => sameDay(c.fecha, hoy)).length
+
+    const programadasHoy = citas.filter(
+      (c) => sameDay(c.fecha, hoy) && c.estado?.toLowerCase() === 'programada'
+    ).length
+
+    const confirmadasHoy = citas.filter(
+      (c) => sameDay(c.fecha, hoy) && c.estado?.toLowerCase() === 'confirmada'
+    ).length
+
+    const completadasMes = citas.filter(
+      (c) => sameMonth(c.fecha, today) && c.estado?.toLowerCase() === 'completada'
+    ).length
+
+    const canceladasMes = citas.filter(
+      (c) => sameMonth(c.fecha, today) && c.estado?.toLowerCase() === 'cancelada'
+    ).length
+
+    const ingresosMes = pagos
+      .filter((p) => p.estado?.toLowerCase() === 'pagado' && sameMonth(p.fecha, today))
+      .reduce((acc, pago) => acc + Number(pago.monto || 0), 0)
+
+    const pagosHoy = pagos
+      .filter((p) => p.estado?.toLowerCase() === 'pagado' && sameDay(p.fecha, hoy))
+      .reduce((acc, pago) => acc + Number(pago.monto || 0), 0)
+
+    const personalActivo = empleados.filter(
+      (e) => e.estado?.toLowerCase() === 'activo'
+    ).length
+
+    const planesPorVencer = clientesPlanes.filter((cp) => {
+      if (cp.estado?.toLowerCase() !== 'activo' || !cp.fecha_fin) return false
+
+      const fin = new Date(cp.fecha_fin)
+      const diff = fin.getTime() - today.getTime()
+      const dias = Math.ceil(diff / (1000 * 60 * 60 * 24))
+
+      return dias >= 0 && dias <= 7
+    }).length
+
+    return {
+      clientesActivos,
+      clientesNuevosMes,
+      citasHoy,
+      programadasHoy,
+      confirmadasHoy,
+      completadasMes,
+      canceladasMes,
+      ingresosMes,
+      pagosHoy,
+      personalActivo,
+      planesPorVencer,
+    }
+  }, [clientes, citas, pagos, empleados, clientesPlanes, today, hoy])
+
+  const topPersonal = useMemo(() => {
+    const counts = new Map<string, number>()
+
+    for (const cita of citas) {
+      if (!sameMonth(cita.fecha, today)) continue
+
+      const empleadoKey = getFirstExistingKey(cita, [
+        'empleado_id',
+        'personal_id',
+        'staff_id',
+        'terapeuta_id',
+        'trainer_id',
+        'empleadoId',
+        'personalId',
+      ])
+
+      const empleadoId = empleadoKey ? cita[empleadoKey] : null
+      if (!empleadoId) continue
+
+      counts.set(empleadoId, (counts.get(empleadoId) || 0) + 1)
+    }
+
+    return empleados
+      .map((empleado) => ({
+        id: empleado.id,
+        nombre: empleado.nombre || 'Sin nombre',
+        total: counts.get(empleado.id) || 0,
+      }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5)
+  }, [citas, empleados, today])
 
   const alertas = useMemo(() => {
-    const items: string[] = []
+    const items: { titulo: string; detalle: string }[] = []
 
-    if (planesPorVencer.length > 0) {
-      items.push(`${planesPorVencer.length} planes vencen en los próximos 7 días`)
+    if (stats.planesPorVencer > 0) {
+      items.push({
+        titulo: 'Planes por vencer',
+        detalle: `${stats.planesPorVencer} plan(es) vencen en los próximos 7 días.`,
+      })
     }
 
-    if (clientesSinSesiones.length > 0) {
-      items.push(`${clientesSinSesiones.length} clientes ya no tienen sesiones disponibles`)
+    if (stats.canceladasMes > 0) {
+      items.push({
+        titulo: 'Citas canceladas',
+        detalle: `${stats.canceladasMes} cita(s) canceladas este mes.`,
+      })
     }
 
-    if (cuentasPorCobrar > 0) {
-      items.push(`Hay ${money(cuentasPorCobrar)} pendientes por cobrar`)
+    if (stats.programadasHoy > stats.confirmadasHoy) {
+      items.push({
+        titulo: 'Citas pendientes por confirmar',
+        detalle: `${stats.programadasHoy} programadas hoy y ${stats.confirmadasHoy} confirmadas.`,
+      })
     }
 
-    if (cuentasVencidasTotal > 0) {
-      items.push(`Hay ${money(cuentasVencidasTotal)} en cuentas vencidas`)
-    }
-
-    if (citasHoy === 0) {
-      items.push('No hay citas programadas para hoy')
+    if (items.length === 0) {
+      items.push({
+        titulo: 'Todo en orden',
+        detalle: 'No hay alertas críticas por el momento.',
+      })
     }
 
     return items
-  }, [planesPorVencer, clientesSinSesiones, cuentasPorCobrar, cuentasVencidasTotal, citasHoy])
+  }, [stats])
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <p className="text-sm text-white/55">Administración</p>
+          <h1 className="mt-1 text-2xl font-semibold text-white">Dashboard</h1>
+        </div>
+
+        <Card className="p-6">
+          <p className="text-white/55">Cargando dashboard...</p>
+        </Card>
+      </div>
+    )
+  }
 
   return (
-    <div className="px-4 py-6 lg:px-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-900">Dashboard</h1>
-        <p className="mt-1 text-sm text-slate-500">Resumen ejecutivo del centro</p>
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm text-white/55">Administración</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
+            Dashboard
+          </h1>
+          <p className="mt-2 text-sm text-white/55">
+            Resumen general de clientes, agenda, ingresos y personal.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <ActionCard
+            title="Nueva cita"
+            description="Registrar una cita rápidamente."
+            href="/admin/operaciones/agenda/nueva"
+          />
+          <ActionCard
+            title="Nuevo cliente"
+            description="Crear un cliente y activar su perfil."
+            href="/admin/personas/clientes/nuevo"
+          />
+          <ActionCard
+            title="Finanzas"
+            description="Ir al módulo financiero."
+            href="/admin/finanzas"
+          />
+        </div>
       </div>
 
-      {loading ? (
-        <div className="rounded-xl border bg-white p-6">
-          <p className="text-sm text-slate-500">Cargando dashboard...</p>
+      {error ? (
+        <Card className="p-4">
+          <p className="text-sm font-medium text-rose-400">Error al cargar</p>
+          <p className="mt-1 text-sm text-white/55">{error}</p>
+        </Card>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <StatCard
+          title="Clientes activos"
+          value={stats.clientesActivos}
+          subtitle={`Nuevos este mes: ${stats.clientesNuevosMes}`}
+        />
+
+        <StatCard
+          title="Citas hoy"
+          value={stats.citasHoy}
+          subtitle={`Programadas: ${stats.programadasHoy} · Confirmadas: ${stats.confirmadasHoy}`}
+          color="text-sky-400"
+        />
+
+        <StatCard
+          title="Ingresos del mes"
+          value={money(stats.ingresosMes)}
+          subtitle={`Hoy: ${money(stats.pagosHoy)}`}
+          color="text-emerald-400"
+        />
+
+        <StatCard
+          title="Personal activo"
+          value={stats.personalActivo}
+          subtitle="Carga mensual abajo"
+        />
+
+        <StatCard
+          title="Planes por vencer"
+          value={stats.planesPorVencer}
+          subtitle="Próximos 7 días"
+          color="text-rose-400"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <div className="xl:col-span-2">
+          <Section
+            title="Resumen operativo"
+            description="Vista rápida del comportamiento del mes y del día."
+          >
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <StatCard
+                title="Citas completadas este mes"
+                value={stats.completadasMes}
+                color="text-violet-400"
+              />
+
+              <StatCard
+                title="Citas canceladas este mes"
+                value={stats.canceladasMes}
+                color="text-rose-400"
+              />
+
+              <StatCard
+                title="Pagos recibidos hoy"
+                value={money(stats.pagosHoy)}
+                color="text-emerald-400"
+              />
+
+              <StatCard
+                title="Clientes nuevos este mes"
+                value={stats.clientesNuevosMes}
+              />
+            </div>
+          </Section>
         </div>
-      ) : error ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-6">
-          <p className="text-sm text-red-700">{error}</p>
-        </div>
-      ) : (
-        <>
-          <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {cards.map((card) => (
-              <Link
-                key={card.label}
-                href={card.href}
-                className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md"
-              >
-                <p className="text-sm text-slate-500">{card.label}</p>
-                <p className="mt-2 text-3xl font-bold text-slate-900">{card.value}</p>
-              </Link>
+
+        <Section
+          title="Alertas"
+          description="Puntos que requieren atención."
+        >
+          <div className="space-y-3">
+            {alertas.map((alerta, index) => (
+              <Card key={`${alerta.titulo}-${index}`} className="p-4">
+                <p className="font-medium text-white">{alerta.titulo}</p>
+                <p className="mt-1 text-sm text-white/55">{alerta.detalle}</p>
+              </Card>
             ))}
           </div>
+        </Section>
+      </div>
 
-          <div className="mb-6 grid gap-6 xl:grid-cols-3">
-            <div className="xl:col-span-2 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-slate-900">Alertas ejecutivas</h2>
-                <Link
-                  href="/admin/reportes"
-                  className="text-sm font-medium text-slate-700 hover:text-slate-900"
-                >
-                  Ver reportes
-                </Link>
-              </div>
-
-              {alertas.length === 0 ? (
-                <p className="text-sm text-slate-500">Sin alertas importantes por ahora.</p>
-              ) : (
-                <div className="space-y-3">
-                  {alertas.map((alerta, index) => (
-                    <div
-                      key={index}
-                      className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
-                    >
-                      {alerta}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <Section
+          title="Personal con más citas"
+          description="Top 5 del mes actual."
+        >
+          <div className="space-y-3">
+            {topPersonal.length === 0 ? (
+              <Card className="p-4">
+                <p className="text-sm text-white/55">
+                  No hay datos de personal para mostrar.
+                </p>
+              </Card>
+            ) : (
+              topPersonal.map((item, index) => (
+                <Card key={item.id} className="p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-medium text-white">
+                        {index + 1}. {item.nombre}
+                      </p>
+                      <p className="text-sm text-white/55">Citas este mes</p>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="mb-4 text-lg font-semibold text-slate-900">Acciones rápidas</h2>
-
-              <div className="space-y-3">
-                <Link
-                  href="/admin/operaciones/agenda/nueva"
-                  className="block rounded-xl bg-slate-900 px-4 py-3 text-center text-sm font-semibold text-white hover:bg-slate-800"
-                >
-                  Nueva cita
-                </Link>
-
-                <Link
-                  href="/admin/personas/clientes/nuevo"
-                  className="block rounded-xl border border-slate-200 px-4 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  Nuevo cliente
-                </Link>
-
-                <Link
-                  href="/admin/finanzas/ingresos"
-                  className="block rounded-xl border border-slate-200 px-4 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  Registrar ingreso
-                </Link>
-
-                <Link
-                  href="/admin/finanzas/egresos"
-                  className="block rounded-xl border border-slate-200 px-4 py-3 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  Registrar egreso
-                </Link>
-              </div>
-            </div>
+                    <p className="text-xl font-semibold text-white">{item.total}</p>
+                  </div>
+                </Card>
+              ))
+            )}
           </div>
+        </Section>
 
-          <div className="grid gap-6 xl:grid-cols-3">
-            <div className="xl:col-span-2 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <div className="border-b bg-slate-50 px-5 py-4">
-                <h2 className="text-lg font-semibold text-slate-900">Próximas citas</h2>
-              </div>
+        <Section
+          title="Acciones rápidas"
+          description="Atajos a los módulos principales."
+        >
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <ActionCard
+              title="Clientes"
+              description="Ver listado y planes activos."
+              href="/admin/personas/clientes"
+            />
 
-              <div className="divide-y divide-slate-100">
-                {proximasCitas.length === 0 ? (
-                  <div className="px-5 py-6 text-sm text-slate-500">
-                    No hay próximas citas registradas.
-                  </div>
-                ) : (
-                  proximasCitas.map((item) => (
-                    <div key={item.id} className="px-5 py-4">
-                      <div className="flex items-center justify-between gap-4">
-                        <div>
-                          <p className="font-medium text-slate-900">
-                            {item.clientes?.nombre || 'Sin cliente'}
-                          </p>
-                          <p className="text-sm text-slate-500">
-                            {item.fecha} · {item.hora_inicio?.slice(0, 5)} · {item.estado}
-                          </p>
-                        </div>
+            <ActionCard
+              title="Agenda"
+              description="Revisar citas y estados."
+              href="/admin/operaciones/agenda"
+            />
 
-                        <Link
-                          href={`/admin/operaciones/agenda/${item.id}`}
-                          className="text-sm font-medium text-slate-700 hover:text-slate-900"
-                        >
-                          Ver
-                        </Link>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
+            <ActionCard
+              title="Personal"
+              description="Ver carga y disponibilidad."
+              href="/admin/personas/personal"
+            />
 
-            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <div className="border-b bg-slate-50 px-5 py-4">
-                <h2 className="text-lg font-semibold text-slate-900">Últimos pagos</h2>
-              </div>
-
-              <div className="divide-y divide-slate-100">
-                {ultimosPagos.length === 0 ? (
-                  <div className="px-5 py-6 text-sm text-slate-500">
-                    No hay pagos recientes.
-                  </div>
-                ) : (
-                  ultimosPagos.map((item) => (
-                    <div key={item.id} className="px-5 py-4">
-                      <p className="font-medium text-slate-900">{item.concepto}</p>
-                      <p className="text-sm text-slate-500">
-                        {item.clientes?.nombre || 'Sin cliente'} · {item.fecha}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        Método: {item.metodos_pago?.nombre || '—'}
-                      </p>
-                      <p className="mt-1 text-sm font-semibold text-emerald-700">
-                        {money(item.monto)}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
+            <ActionCard
+              title="Planes"
+              description="Administrar catálogo."
+              href="/admin/operaciones/planes"
+            />
           </div>
-
-          <div className="mt-6 grid gap-6 xl:grid-cols-3">
-            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <div className="border-b bg-slate-50 px-5 py-4">
-                <h2 className="text-lg font-semibold text-slate-900">Planes por vencer</h2>
-              </div>
-
-              <div className="divide-y divide-slate-100">
-                {planesPorVencer.length === 0 ? (
-                  <div className="px-5 py-6 text-sm text-slate-500">
-                    No hay planes por vencer en los próximos 7 días.
-                  </div>
-                ) : (
-                  planesPorVencer.map((item) => {
-                    const restantes =
-                      Number(item.sesiones_totales || 0) - Number(item.sesiones_usadas || 0)
-
-                    return (
-                      <div key={item.id} className="px-5 py-4">
-                        <p className="font-medium text-slate-900">
-                          {item.clientes?.nombre || 'Sin cliente'}
-                        </p>
-                        <p className="text-sm text-slate-500">
-                          {item.planes?.nombre || 'Plan'} · vence {formatDate(item.fecha_fin)}
-                        </p>
-                        <p className="mt-1 text-sm text-slate-700">Restantes: {restantes}</p>
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <div className="border-b bg-slate-50 px-5 py-4">
-                <h2 className="text-lg font-semibold text-slate-900">Clientes sin sesiones</h2>
-              </div>
-
-              <div className="divide-y divide-slate-100">
-                {clientesSinSesiones.length === 0 ? (
-                  <div className="px-5 py-6 text-sm text-slate-500">
-                    No hay clientes sin sesiones en alertas actuales.
-                  </div>
-                ) : (
-                  clientesSinSesiones.map((item) => (
-                    <div key={item.id} className="px-5 py-4">
-                      <p className="font-medium text-slate-900">
-                        {item.clientes?.nombre || 'Sin cliente'}
-                      </p>
-                      <p className="text-sm text-slate-500">
-                        {item.planes?.nombre || 'Plan'} · vence {formatDate(item.fecha_fin)}
-                      </p>
-                      <p className="mt-1 text-sm font-medium text-red-700">
-                        Sin sesiones disponibles
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-              <div className="border-b bg-slate-50 px-5 py-4">
-                <h2 className="text-lg font-semibold text-slate-900">Cuentas vencidas</h2>
-              </div>
-
-              <div className="divide-y divide-slate-100">
-                {cuentasVencidas.length === 0 ? (
-                  <div className="px-5 py-6 text-sm text-slate-500">
-                    No hay cuentas vencidas.
-                  </div>
-                ) : (
-                  cuentasVencidas.map((item) => (
-                    <div key={item.id} className="px-5 py-4">
-                      <p className="font-medium text-slate-900">
-                        {item.clientes?.nombre || 'Sin cliente'}
-                      </p>
-                      <p className="text-sm text-slate-500">
-                        {item.concepto} · {item.fecha}
-                      </p>
-                      <p className="mt-1 text-sm font-medium text-red-700">
-                        {money(item.monto)}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </div>
-        </>
-      )}
+        </Section>
+      </div>
     </div>
   )
 }
