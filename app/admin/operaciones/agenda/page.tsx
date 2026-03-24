@@ -10,56 +10,36 @@ import Section from '@/components/ui/Section'
 import StatCard from '@/components/ui/StatCard'
 import ActionCard from '@/components/ui/ActionCard'
 
-type Cliente = {
-  id: string
-  nombre?: string | null
-  telefono?: string | null
-  email?: string | null
-  [key: string]: any
-}
-
-type Empleado = {
-  id: string
-  nombre?: string | null
-  rol?: string | null
-  [key: string]: any
-}
-
-type Servicio = {
-  id: string
-  nombre?: string | null
-  precio?: number | null
-  [key: string]: any
-}
-
-type CitaRaw = {
-  id: string
-  fecha?: string | null
-  hora?: string | null
-  duracion_minutos?: number | null
-  estado?: string | null
-  notas?: string | null
-  created_at?: string | null
-  [key: string]: any
-}
-
-type CitaView = {
+type CitaRow = {
   id: string
   fecha: string | null
-  hora: string | null
-  duracion_minutos: number | null
+  hora_inicio: string | null  // ✅ nombre real en BD
+  hora_fin: string | null     // ✅ nombre real en BD
   estado: string
   notas: string | null
   created_at: string | null
-  cliente: Cliente | null
-  empleado: Empleado | null
-  servicio: Servicio | null
+  clientes: {
+    id: string
+    nombre: string | null
+    telefono: string | null
+    email: string | null
+  } | null
+  empleados: {
+    id: string
+    nombre: string | null
+    rol: string | null
+  } | null
+  servicios: {
+    id: string
+    nombre: string | null
+    duracion_minutos: number | null  // ✅ nombre real en BD
+  } | null
 }
 
 function formatDate(value: string | null | undefined) {
   if (!value) return '—'
   try {
-    return new Date(value).toLocaleDateString()
+    return new Date(`${value}T00:00:00`).toLocaleDateString()
   } catch {
     return value
   }
@@ -67,7 +47,8 @@ function formatDate(value: string | null | undefined) {
 
 function formatDateTime(fecha: string | null | undefined, hora?: string | null) {
   if (!fecha) return '—'
-  return hora ? `${formatDate(fecha)} · ${hora}` : formatDate(fecha)
+  const fechaStr = formatDate(fecha)
+  return hora ? `${fechaStr} · ${hora.slice(0, 5)}` : fechaStr
 }
 
 function estadoBadge(estado: string) {
@@ -80,49 +61,19 @@ function estadoBadge(estado: string) {
       return 'border-violet-400/20 bg-violet-400/10 text-violet-300'
     case 'cancelada':
       return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+    case 'reprogramada':
+      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
     case 'no_asistio':
     case 'no asistio':
-      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+      return 'border-orange-400/20 bg-orange-400/10 text-orange-300'
     default:
       return 'border-white/10 bg-white/[0.05] text-white/70'
   }
 }
 
-function getFirstExistingKey(obj: Record<string, any>, keys: string[]) {
-  for (const key of keys) {
-    if (key in obj) return key
-  }
-  return null
-}
-
-function getDurationFromServicio(servicio: Servicio | null) {
-  if (!servicio) return 0
-
-  const possibleKeys = [
-    'duracion_minutos',
-    'duracion',
-    'tiempo',
-    'tiempo_minutos',
-    'minutos',
-    'duracionMinutos',
-  ]
-
-  for (const key of possibleKeys) {
-    if (key in servicio && servicio[key] != null) {
-      const value = Number(servicio[key])
-      if (!Number.isNaN(value) && value > 0) return value
-    }
-  }
-
-  return 0
-}
-
 export default function AgendaPage() {
   const [loading, setLoading] = useState(true)
-  const [citas, setCitas] = useState<CitaRaw[]>([])
-  const [clientes, setClientes] = useState<Cliente[]>([])
-  const [empleados, setEmpleados] = useState<Empleado[]>([])
-  const [servicios, setServicios] = useState<Servicio[]>([])
+  const [citas, setCitas] = useState<CitaRow[]>([])
   const [search, setSearch] = useState('')
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
   const [fechaFiltro, setFechaFiltro] = useState('')
@@ -137,93 +88,48 @@ export default function AgendaPage() {
     setError('')
 
     try {
-      const [citasRes, clientesRes, empleadosRes, serviciosRes] = await Promise.all([
-        supabase.from('citas').select('*').order('fecha', { ascending: true }),
-        supabase.from('clientes').select('*'),
-        supabase.from('empleados').select('*'),
-        supabase.from('servicios').select('*'),
-      ])
+      // ✅ Un solo query con joins — más eficiente y sin problemas de mapeo manual
+      const { data, error: err } = await supabase
+        .from('citas')
+        .select(`
+          id,
+          fecha,
+          hora_inicio,
+          hora_fin,
+          estado,
+          notas,
+          created_at,
+          clientes:cliente_id ( id, nombre, telefono, email ),
+          empleados:terapeuta_id ( id, nombre, rol ),
+          servicios:servicio_id ( id, nombre, duracion_minutos )
+        `)
+        .order('fecha', { ascending: true })
+        .order('hora_inicio', { ascending: true })
 
-      if (citasRes.error) throw new Error(citasRes.error.message)
-      if (clientesRes.error) throw new Error(clientesRes.error.message)
-      if (empleadosRes.error) throw new Error(empleadosRes.error.message)
-      if (serviciosRes.error) throw new Error(serviciosRes.error.message)
+      if (err) throw new Error(err.message)
 
-      setCitas((citasRes.data || []) as CitaRaw[])
-      setClientes((clientesRes.data || []) as Cliente[])
-      setEmpleados((empleadosRes.data || []) as Empleado[])
-      setServicios((serviciosRes.data || []) as Servicio[])
+      setCitas((data || []) as unknown as CitaRow[])
     } catch (err: any) {
       console.error(err)
       setError(err?.message || 'No se pudo cargar la agenda.')
       setCitas([])
-      setClientes([])
-      setEmpleados([])
-      setServicios([])
     } finally {
       setLoading(false)
     }
   }
 
-  const citasView = useMemo<CitaView[]>(() => {
-    const clienteMap = new Map(clientes.map((item) => [item.id, item]))
-    const empleadoMap = new Map(empleados.map((item) => [item.id, item]))
-    const servicioMap = new Map(servicios.map((item) => [item.id, item]))
-
-    return citas.map((cita) => {
-      const clienteKey = getFirstExistingKey(cita, [
-        'cliente_id',
-        'id_cliente',
-        'clienteId',
-      ])
-
-      const empleadoKey = getFirstExistingKey(cita, [
-        'empleado_id',
-        'personal_id',
-        'staff_id',
-        'terapeuta_id',
-        'trainer_id',
-        'empleadoId',
-        'personalId',
-      ])
-
-      const servicioKey = getFirstExistingKey(cita, [
-        'servicio_id',
-        'id_servicio',
-        'servicioId',
-      ])
-
-      const clienteId = clienteKey ? cita[clienteKey] : null
-      const empleadoId = empleadoKey ? cita[empleadoKey] : null
-      const servicioId = servicioKey ? cita[servicioKey] : null
-
-      return {
-        id: cita.id,
-        fecha: cita.fecha || null,
-        hora: cita.hora || null,
-        duracion_minutos: cita.duracion_minutos ?? null,
-        estado: cita.estado || 'sin estado',
-        notas: cita.notas || null,
-        created_at: cita.created_at || null,
-        cliente: clienteId ? clienteMap.get(clienteId) || null : null,
-        empleado: empleadoId ? empleadoMap.get(empleadoId) || null : null,
-        servicio: servicioId ? servicioMap.get(servicioId) || null : null,
-      }
-    })
-  }, [citas, clientes, empleados, servicios])
-
   const citasFiltradas = useMemo(() => {
     const q = search.trim().toLowerCase()
 
-    return citasView.filter((cita) => {
+    return citas.filter((cita) => {
       const matchSearch =
         !q ||
-        cita.cliente?.nombre?.toLowerCase().includes(q) ||
-        cita.cliente?.telefono?.toLowerCase().includes(q) ||
-        cita.cliente?.email?.toLowerCase().includes(q) ||
-        cita.empleado?.nombre?.toLowerCase().includes(q) ||
-        cita.empleado?.rol?.toLowerCase().includes(q) ||
-        cita.servicio?.nombre?.toLowerCase().includes(q) ||
+        cita.clientes?.nombre?.toLowerCase().includes(q) ||
+        cita.clientes?.telefono?.toLowerCase().includes(q) ||
+        cita.clientes?.email?.toLowerCase().includes(q) ||
+        cita.empleados?.nombre?.toLowerCase().includes(q) ||
+        cita.empleados?.rol?.toLowerCase().includes(q) ||
+        cita.servicios?.nombre?.toLowerCase().includes(q) ||
         cita.estado?.toLowerCase().includes(q) ||
         cita.notas?.toLowerCase().includes(q)
 
@@ -235,32 +141,22 @@ export default function AgendaPage() {
 
       return Boolean(matchSearch && matchEstado && matchFecha)
     })
-  }, [citasView, search, estadoFiltro, fechaFiltro])
+  }, [citas, search, estadoFiltro, fechaFiltro])
 
-  const stats = useMemo(() => {
-    const total = citasView.length
-    const programadas = citasView.filter((c) => c.estado?.toLowerCase() === 'programada').length
-    const confirmadas = citasView.filter((c) => c.estado?.toLowerCase() === 'confirmada').length
-    const completadas = citasView.filter((c) => c.estado?.toLowerCase() === 'completada').length
-    const canceladas = citasView.filter((c) => c.estado?.toLowerCase() === 'cancelada').length
-
-    return {
-      total,
-      programadas,
-      confirmadas,
-      completadas,
-      canceladas,
-    }
-  }, [citasView])
+  const stats = useMemo(() => ({
+    total: citas.length,
+    programadas: citas.filter((c) => c.estado?.toLowerCase() === 'programada').length,
+    confirmadas: citas.filter((c) => c.estado?.toLowerCase() === 'confirmada').length,
+    completadas: citas.filter((c) => c.estado?.toLowerCase() === 'completada').length,
+    canceladas: citas.filter((c) => c.estado?.toLowerCase() === 'cancelada').length,
+  }), [citas])
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <p className="text-sm text-white/55">Operaciones</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
-            Agenda
-          </h1>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">Agenda</h1>
           <p className="mt-2 text-sm text-white/55">
             Gestión de citas, estados, clientes, personal y servicios.
           </p>
@@ -283,30 +179,11 @@ export default function AgendaPage() {
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard
-          title="Total citas"
-          value={stats.total}
-        />
-        <StatCard
-          title="Programadas"
-          value={stats.programadas}
-          color="text-sky-400"
-        />
-        <StatCard
-          title="Confirmadas"
-          value={stats.confirmadas}
-          color="text-emerald-400"
-        />
-        <StatCard
-          title="Completadas"
-          value={stats.completadas}
-          color="text-violet-400"
-        />
-        <StatCard
-          title="Canceladas"
-          value={stats.canceladas}
-          color="text-rose-400"
-        />
+        <StatCard title="Total citas" value={stats.total} />
+        <StatCard title="Programadas" value={stats.programadas} color="text-sky-400" />
+        <StatCard title="Confirmadas" value={stats.confirmadas} color="text-emerald-400" />
+        <StatCard title="Completadas" value={stats.completadas} color="text-violet-400" />
+        <StatCard title="Canceladas" value={stats.canceladas} color="text-rose-400" />
       </div>
 
       <Section
@@ -315,9 +192,7 @@ export default function AgendaPage() {
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
           <div className="md:col-span-2">
-            <label className="mb-2 block text-sm font-medium text-white/75">
-              Buscar
-            </label>
+            <label className="mb-2 block text-sm font-medium text-white/75">Buscar</label>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -325,16 +200,13 @@ export default function AgendaPage() {
               className="
                 w-full rounded-2xl border border-white/10 bg-white/[0.03]
                 px-4 py-3 text-sm text-white outline-none transition
-                placeholder:text-white/35
-                focus:border-white/20 focus:bg-white/[0.05]
+                placeholder:text-white/35 focus:border-white/20 focus:bg-white/[0.05]
               "
             />
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-medium text-white/75">
-              Estado
-            </label>
+            <label className="mb-2 block text-sm font-medium text-white/75">Estado</label>
             <select
               value={estadoFiltro}
               onChange={(e) => setEstadoFiltro(e.target.value)}
@@ -349,14 +221,13 @@ export default function AgendaPage() {
               <option value="confirmada" className="bg-[#11131a] text-white">Confirmadas</option>
               <option value="completada" className="bg-[#11131a] text-white">Completadas</option>
               <option value="cancelada" className="bg-[#11131a] text-white">Canceladas</option>
+              <option value="reprogramada" className="bg-[#11131a] text-white">Reprogramadas</option>
               <option value="no_asistio" className="bg-[#11131a] text-white">No asistió</option>
             </select>
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-medium text-white/75">
-              Fecha
-            </label>
+            <label className="mb-2 block text-sm font-medium text-white/75">Fecha</label>
             <input
               type="date"
               value={fechaFiltro}
@@ -407,41 +278,45 @@ export default function AgendaPage() {
                 </tr>
               ) : (
                 citasFiltradas.map((cita) => {
-                  const duracion =
-                    Number(cita.duracion_minutos || 0) || getDurationFromServicio(cita.servicio)
+                  const duracion = cita.servicios?.duracion_minutos || 0
 
                   return (
                     <tr key={cita.id} className="align-top transition hover:bg-white/[0.03]">
                       <td className="px-4 py-4">
                         <div className="font-medium text-white">
-                          {formatDateTime(cita.fecha, cita.hora)}
+                          {formatDateTime(cita.fecha, cita.hora_inicio)}
                         </div>
-                        <div className="mt-1 text-xs text-white/45">
-                          Registro: {formatDate(cita.created_at)}
-                        </div>
-                      </td>
-
-                      <td className="px-4 py-4">
-                        <div className="font-medium text-white">
-                          {cita.cliente?.nombre || 'Sin cliente'}
-                        </div>
-                        <div className="mt-1 text-xs text-white/45">
-                          {cita.cliente?.telefono || cita.cliente?.email || 'Sin contacto'}
+                        {cita.hora_fin ? (
+                          <div className="mt-0.5 text-xs text-white/45">
+                            hasta {cita.hora_fin.slice(0, 5)}
+                          </div>
+                        ) : null}
+                        <div className="mt-1 text-xs text-white/35">
+                          Registro: {cita.created_at ? new Date(cita.created_at).toLocaleDateString() : '—'}
                         </div>
                       </td>
 
                       <td className="px-4 py-4">
                         <div className="font-medium text-white">
-                          {cita.empleado?.nombre || 'Sin asignar'}
+                          {cita.clientes?.nombre || 'Sin cliente'}
                         </div>
                         <div className="mt-1 text-xs text-white/45">
-                          {cita.empleado?.rol || 'Sin rol'}
+                          {cita.clientes?.telefono || cita.clientes?.email || 'Sin contacto'}
                         </div>
                       </td>
 
                       <td className="px-4 py-4">
                         <div className="font-medium text-white">
-                          {cita.servicio?.nombre || 'Sin servicio'}
+                          {cita.empleados?.nombre || 'Sin asignar'}
+                        </div>
+                        <div className="mt-1 text-xs text-white/45">
+                          {cita.empleados?.rol || 'Sin rol'}
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <div className="font-medium text-white">
+                          {cita.servicios?.nombre || 'Sin servicio'}
                         </div>
                       </td>
 
@@ -453,9 +328,7 @@ export default function AgendaPage() {
 
                       <td className="px-4 py-4">
                         <span
-                          className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoBadge(
-                            cita.estado
-                          )}`}
+                          className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoBadge(cita.estado)}`}
                         >
                           {cita.estado}
                         </span>
@@ -479,7 +352,6 @@ export default function AgendaPage() {
                           >
                             Ver
                           </Link>
-
                           <Link
                             href={`/admin/operaciones/agenda/${cita.id}/editar`}
                             className="

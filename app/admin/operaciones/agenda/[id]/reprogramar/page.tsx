@@ -18,14 +18,7 @@ type ServicioRaw = {
   id: string
   nombre: string
   estado?: string | null
-  categoria?: string | null
-  precio?: number | null
-  duracion_min?: number | null
-  duracion?: number | null
-  tiempo?: number | null
-  tiempo_min?: number | null
-  tiempo_minutos?: number | null
-  minutos?: number | null
+  duracion_minutos?: number | null // ✅ nombre correcto en BD
   [key: string]: any
 }
 
@@ -58,10 +51,10 @@ type CitaDetalle = {
   recursos: { id: string; nombre: string } | null
 }
 
-function getServicioDuracion(servicio: ServicioRaw | null) {
+function getServicioDuracion(servicio: ServicioRaw | null): number | null {
   if (!servicio) return null
-
   const posibles = [
+    servicio.duracion_minutos, // ✅ primero el nombre real
     servicio.duracion_min,
     servicio.duracion,
     servicio.tiempo,
@@ -69,25 +62,19 @@ function getServicioDuracion(servicio: ServicioRaw | null) {
     servicio.tiempo_minutos,
     servicio.minutos,
   ]
-
   for (const valor of posibles) {
     const n = Number(valor)
     if (!Number.isNaN(n) && n > 0) return n
   }
-
   return null
 }
 
 function sumarMinutos(hora: string, minutos: number) {
   if (!hora) return ''
-
   const [h, m] = hora.split(':').map(Number)
   const total = h * 60 + m + minutos
-  const hh = Math.floor(total / 60)
-    .toString()
-    .padStart(2, '0')
+  const hh = Math.floor(total / 60).toString().padStart(2, '0')
   const mm = (total % 60).toString().padStart(2, '0')
-
   return `${hh}:${mm}:00`
 }
 
@@ -109,13 +96,7 @@ function Field({
   )
 }
 
-function SummaryItem({
-  label,
-  value,
-}: {
-  label: string
-  value: string
-}) {
+function SummaryItem({ label, value }: { label: string; value: string }) {
   return (
     <Card className="p-4">
       <p className="text-xs text-white/45">{label}</p>
@@ -139,7 +120,7 @@ export default function ReprogramarCitaPage() {
 
   const [loadingData, setLoadingData] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [autoHoraFin, setAutoHoraFin] = useState(true)
+  const [autoHoraFin, setAutoHoraFin] = useState(false) // ✅ false por defecto
   const [errorMsg, setErrorMsg] = useState('')
 
   const [terapeutas, setTerapeutas] = useState<Terapeuta[]>([])
@@ -151,6 +132,8 @@ export default function ReprogramarCitaPage() {
     terapeuta: '',
     servicio: '',
     recurso: '',
+    fechaOriginal: '',
+    horaOriginal: '',
   })
 
   const [form, setForm] = useState({
@@ -177,7 +160,6 @@ export default function ReprogramarCitaPage() {
 
   useEffect(() => {
     if (!autoHoraFin || !form.hora_inicio || !servicioSeleccionado?.duracion_min) return
-
     setForm((prev) => ({
       ...prev,
       hora_fin: sumarMinutos(prev.hora_inicio, servicioSeleccionado.duracion_min || 0),
@@ -197,10 +179,10 @@ export default function ReprogramarCitaPage() {
           .eq('estado', 'activo')
           .order('nombre', { ascending: true }),
 
+        // ✅ Sin filtro .eq para evitar que NULL o mayúsculas rompan la carga
         supabase
           .from('servicios')
-          .select('*')
-          .eq('estado', 'activo')
+          .select('id, nombre, estado, duracion_minutos')
           .order('nombre', { ascending: true }),
 
         supabase
@@ -230,28 +212,15 @@ export default function ReprogramarCitaPage() {
           .maybeSingle(),
       ])
 
-      if (terapeutasRes.error) {
-        throw new Error(terapeutasRes.error.message || 'No se pudieron cargar los terapeutas.')
-      }
+      if (terapeutasRes.error) throw new Error(terapeutasRes.error.message)
+      if (serviciosRes.error) throw new Error(serviciosRes.error.message)
+      if (recursosRes.error) throw new Error(recursosRes.error.message)
+      if (citaRes.error) throw new Error(citaRes.error.message)
+      if (!citaRes.data) throw new Error('No se encontró la cita.')
 
-      if (serviciosRes.error) {
-        throw new Error(serviciosRes.error.message || 'No se pudieron cargar los servicios.')
-      }
-
-      if (recursosRes.error) {
-        throw new Error(recursosRes.error.message || 'No se pudieron cargar los recursos.')
-      }
-
-      if (citaRes.error) {
-        throw new Error(citaRes.error.message || 'No se pudo cargar la cita.')
-      }
-
-      if (!citaRes.data) {
-        throw new Error('No se encontró la cita.')
-      }
-
-      const serviciosData = ((serviciosRes.data || []) as ServicioRaw[])
-        .filter((s) => s.estado !== 'inactivo')
+      const serviciosRaw = (serviciosRes.data || []) as ServicioRaw[]
+      const serviciosData: Servicio[] = serviciosRaw
+        .filter((s) => (s.estado || '').toLowerCase() !== 'inactivo')
         .map((s) => ({
           id: s.id,
           nombre: s.nombre,
@@ -260,11 +229,10 @@ export default function ReprogramarCitaPage() {
         }))
 
       const recursosData = ((recursosRes.data || []) as Recurso[]).filter(
-        (r) => r.estado !== 'inactivo'
+        (r) => (r.estado || '').toLowerCase() !== 'inactivo'
       )
 
       const cita = citaRes.data as unknown as CitaDetalle
-      const duracionActual = getServicioDuracion(cita.servicios)
 
       setTerapeutas((terapeutasRes.data || []) as Terapeuta[])
       setServicios(serviciosData)
@@ -275,6 +243,8 @@ export default function ReprogramarCitaPage() {
         terapeuta: cita.empleados?.nombre || 'Sin terapeuta',
         servicio: cita.servicios?.nombre || 'Sin servicio',
         recurso: cita.recursos?.nombre || 'Sin recurso',
+        fechaOriginal: cita.fecha || '—',
+        horaOriginal: cita.hora_inicio ? cita.hora_inicio.slice(0, 5) : '—',
       })
 
       setForm({
@@ -287,8 +257,6 @@ export default function ReprogramarCitaPage() {
         estado: 'reprogramada',
         notas: cita.notas || '',
       })
-
-      setAutoHoraFin(Boolean(duracionActual))
     } catch (err: any) {
       console.error('Error al cargar reprogramación:', err)
       setErrorMsg(err?.message || 'No se pudo cargar la cita.')
@@ -328,9 +296,7 @@ export default function ReprogramarCitaPage() {
           .gt('hora_fin', horaInicioNormalizada)
           .limit(1)
 
-        if (errorRecurso) {
-          throw new Error(`Error validando recurso: ${errorRecurso.message}`)
-        }
+        if (errorRecurso) throw new Error(`Error validando recurso: ${errorRecurso.message}`)
 
         if (conflictoRecurso && conflictoRecurso.length > 0) {
           setErrorMsg('Ese recurso ya está ocupado en ese horario.')
@@ -350,9 +316,7 @@ export default function ReprogramarCitaPage() {
         .gt('hora_fin', horaInicioNormalizada)
         .limit(1)
 
-      if (errorTerapeuta) {
-        throw new Error(`Error validando terapeuta: ${errorTerapeuta.message}`)
-      }
+      if (errorTerapeuta) throw new Error(`Error validando terapeuta: ${errorTerapeuta.message}`)
 
       if (conflictoTerapeuta && conflictoTerapeuta.length > 0) {
         setErrorMsg('Ese terapeuta ya tiene una cita en ese horario.')
@@ -371,14 +335,9 @@ export default function ReprogramarCitaPage() {
         notas: form.notas || null,
       }
 
-      const { error } = await supabase
-        .from('citas')
-        .update(payload)
-        .eq('id', id)
+      const { error } = await supabase.from('citas').update(payload).eq('id', id)
 
-      if (error) {
-        throw new Error(error.message || 'No se pudo reprogramar la cita.')
-      }
+      if (error) throw new Error(error.message || 'No se pudo reprogramar la cita.')
 
       router.push('/admin/operaciones/agenda')
     } catch (err: any) {
@@ -418,19 +377,21 @@ export default function ReprogramarCitaPage() {
 
       <Section
         title="Resumen actual"
-        description="Datos actuales antes de aplicar la reprogramación."
+        description="Datos originales antes de reprogramar."
       >
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <SummaryItem label="Cliente" value={resumen.cliente} />
           <SummaryItem label="Terapeuta actual" value={resumen.terapeuta} />
           <SummaryItem label="Servicio actual" value={resumen.servicio} />
           <SummaryItem label="Recurso actual" value={resumen.recurso} />
+          <SummaryItem label="Fecha original" value={resumen.fechaOriginal} />
+          <SummaryItem label="Hora original" value={resumen.horaOriginal} />
         </div>
       </Section>
 
       <Section
         title="Nueva programación"
-        description="Actualiza terapeuta, servicio, recurso, fecha, horario y notas."
+        description="Actualiza terapeuta, servicio, recurso, fecha y horario."
       >
         {loadingData ? (
           <Card className="p-6">
@@ -451,9 +412,7 @@ export default function ReprogramarCitaPage() {
                   onChange={(e) => setForm({ ...form, terapeuta_id: e.target.value })}
                   className={inputClassName}
                 >
-                  <option value="" className="bg-[#11131a] text-white">
-                    Seleccionar terapeuta
-                  </option>
+                  <option value="" className="bg-[#11131a] text-white">Seleccionar terapeuta</option>
                   {terapeutas.map((t) => (
                     <option key={t.id} value={t.id} className="bg-[#11131a] text-white">
                       {t.nombre}
@@ -466,21 +425,19 @@ export default function ReprogramarCitaPage() {
                 label="Servicio"
                 helper={
                   servicios.length === 0
-                    ? 'No se encontraron servicios activos.'
+                    ? 'No se encontraron servicios.'
                     : `${servicios.length} servicio(s) disponible(s).`
                 }
               >
                 <select
                   value={form.servicio_id}
                   onChange={(e) => {
-                    setAutoHoraFin(true)
+                    setAutoHoraFin(true) // ✅ activa auto solo cuando el usuario cambia servicio
                     setForm({ ...form, servicio_id: e.target.value })
                   }}
                   className={inputClassName}
                 >
-                  <option value="" className="bg-[#11131a] text-white">
-                    Seleccionar servicio
-                  </option>
+                  <option value="" className="bg-[#11131a] text-white">Seleccionar servicio</option>
                   {servicios.map((s) => (
                     <option key={s.id} value={s.id} className="bg-[#11131a] text-white">
                       {s.nombre} {s.duracion_min ? `· ${s.duracion_min} min` : ''}
@@ -495,9 +452,7 @@ export default function ReprogramarCitaPage() {
                   onChange={(e) => setForm({ ...form, recurso_id: e.target.value })}
                   className={inputClassName}
                 >
-                  <option value="" className="bg-[#11131a] text-white">
-                    Sin recurso
-                  </option>
+                  <option value="" className="bg-[#11131a] text-white">Sin recurso</option>
                   {recursos.map((r) => (
                     <option key={r.id} value={r.id} className="bg-[#11131a] text-white">
                       {r.nombre}
@@ -527,9 +482,9 @@ export default function ReprogramarCitaPage() {
               <Field
                 label="Hora fin"
                 helper={
-                  servicioSeleccionado?.duracion_min
-                    ? `Duración del servicio: ${servicioSeleccionado.duracion_min} min.`
-                    : 'Selecciona un servicio para calcular la duración.'
+                  autoHoraFin && servicioSeleccionado?.duracion_min
+                    ? `Calculado automáticamente: ${servicioSeleccionado.duracion_min} min.`
+                    : 'Puedes editarla manualmente o cambiar el servicio para recalcular.'
                 }
               >
                 <div className="mb-2 flex items-center justify-end">
@@ -538,10 +493,9 @@ export default function ReprogramarCitaPage() {
                     onClick={() => setAutoHoraFin((prev) => !prev)}
                     className="text-xs font-medium text-white/45 transition hover:text-white/75"
                   >
-                    {autoHoraFin ? 'Auto' : 'Manual'}
+                    {autoHoraFin ? '🔄 Auto (click para manual)' : '✏️ Manual (click para auto)'}
                   </button>
                 </div>
-
                 <input
                   type="time"
                   value={form.hora_fin ? form.hora_fin.slice(0, 5) : ''}
@@ -554,7 +508,7 @@ export default function ReprogramarCitaPage() {
               </Field>
 
               <div className="md:col-span-2">
-                <Field label="Notas">
+                <Field label="Notas / Motivo de reprogramación">
                   <textarea
                     value={form.notas}
                     onChange={(e) => setForm({ ...form, notas: e.target.value })}
