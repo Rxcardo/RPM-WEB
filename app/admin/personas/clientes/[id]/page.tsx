@@ -49,6 +49,10 @@ type Pago = {
   concepto: string
   categoria: string
   monto: number
+  monto_pago: number | null
+  monto_equivalente_usd: number | null
+  monto_equivalente_bs: number | null
+  moneda_pago: string | null
   estado: string
   tipo_origen: string
   notas: string | null
@@ -75,12 +79,32 @@ type EventoPlan = {
   created_at: string
 }
 
-function money(value: number | string | null | undefined) {
+function money(
+  value: number | string | null | undefined,
+  moneda: string | null | undefined = 'USD'
+) {
+  const amount = Number(value || 0)
+  const monedaNormalizada = (moneda || 'USD').toUpperCase()
+
+  if (monedaNormalizada === 'BS') {
+    return `Bs ${amount.toLocaleString('es-VE', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`
+  }
+
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: 2,
-  }).format(Number(value || 0))
+  }).format(amount)
+}
+
+function truncateText(value: string | null | undefined, max = 24) {
+  const text = (value || '').trim()
+  if (!text) return 'Sin plan activo'
+  if (text.length <= max) return text
+  return `${text.slice(0, max).trimEnd()}…`
 }
 
 function formatDate(value: string | null | undefined) {
@@ -259,13 +283,17 @@ export default function ClienteDetallePage() {
           concepto,
           categoria,
           monto,
+          monto_pago,
+          monto_equivalente_usd,
+          monto_equivalente_bs,
+          moneda_pago,
           estado,
           tipo_origen,
           notas,
           metodos_pago:metodo_pago_id ( nombre )
         `)
         .eq('cliente_id', id)
-        .order('fecha', { ascending: false })
+        .order('created_at', { ascending: false })
         .limit(20)
 
       if (pagosRes.error) {
@@ -346,13 +374,43 @@ export default function ClienteDetallePage() {
   }, [planActivo])
 
   const resumenPagos = useMemo(() => {
-    const totalPagado = pagos
-      .filter((p) => p.estado === 'pagado')
-      .reduce((acc, p) => acc + Number(p.monto || 0), 0)
+    const pagosPagados = pagos.filter((p) => (p.estado || '').toLowerCase() === 'pagado')
+
+    const monedas = Array.from(
+      new Set(
+        pagosPagados
+          .map((p) => (p.moneda_pago || '').toUpperCase().trim())
+          .filter(Boolean)
+      )
+    )
+
+    const todosBS = monedas.length === 1 && monedas[0] === 'BS'
+    const todosUSD = monedas.length === 1 && monedas[0] === 'USD'
+
+    let totalPagado = 0
+    let monedaResumen: 'BS' | 'USD' = 'USD'
+
+    if (todosBS) {
+      monedaResumen = 'BS'
+      totalPagado = pagosPagados.reduce((acc, p) => {
+        return acc + Number(p.monto_equivalente_bs || 0)
+      }, 0)
+    } else if (todosUSD) {
+      monedaResumen = 'USD'
+      totalPagado = pagosPagados.reduce((acc, p) => {
+        return acc + Number(p.monto_equivalente_usd || 0)
+      }, 0)
+    } else {
+      monedaResumen = 'USD'
+      totalPagado = pagosPagados.reduce((acc, p) => {
+        return acc + Number(p.monto_equivalente_usd ?? 0)
+      }, 0)
+    }
 
     return {
       totalPagado,
-      cantidad: pagos.length,
+      cantidad: pagosPagados.length,
+      monedaResumen,
     }
   }, [pagos])
 
@@ -477,8 +535,8 @@ export default function ClienteDetallePage() {
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <StatCard
           title="Plan activo"
-          value={planActivo?.planes?.nombre || 'Sin plan activo'}
-          subtitle="Resumen actual del cliente"
+          value={truncateText(planActivo?.planes?.nombre, 22)}
+          subtitle={planActivo?.planes?.nombre || 'Resumen actual del cliente'}
         />
 
         <StatCard
@@ -493,7 +551,7 @@ export default function ClienteDetallePage() {
 
         <StatCard
           title="Pagado"
-          value={money(resumenPagos.totalPagado)}
+          value={money(resumenPagos.totalPagado, resumenPagos.monedaResumen)}
           color="text-emerald-400"
         />
 
@@ -549,16 +607,20 @@ export default function ClienteDetallePage() {
                       return (
                         <tr key={item.id} className="transition hover:bg-white/[0.03]">
                           <td className="px-4 py-3">
-                            <p className="font-medium text-white">
-                              {item.planes?.nombre || 'Plan'}
-                            </p>
-                            {item.planes?.descripcion ? (
-                              <p className="text-xs text-white/45">{item.planes.descripcion}</p>
-                            ) : null}
+                            <div className="max-w-[260px]">
+                              <p className="font-medium text-white break-words whitespace-normal">
+                                {item.planes?.nombre || 'Plan'}
+                              </p>
+                              {item.planes?.descripcion ? (
+                                <p className="text-xs text-white/45 break-words whitespace-normal">
+                                  {item.planes.descripcion}
+                                </p>
+                              ) : null}
+                            </div>
                           </td>
 
                           <td className="px-4 py-3 text-white/75">
-                            {money(item.planes?.precio || 0)}
+                            {money(item.planes?.precio || 0, 'USD')}
                           </td>
 
                           <td className="px-4 py-3 text-white/75">{item.fecha_inicio || '—'}</td>
@@ -635,13 +697,19 @@ export default function ClienteDetallePage() {
                         <td className="px-4 py-3 text-white/75">{pago.fecha}</td>
 
                         <td className="px-4 py-3">
-                          <p className="font-medium text-white">{pago.concepto}</p>
-                          <p className="text-xs text-white/45">
-                            {pago.categoria} · {pago.tipo_origen}
-                          </p>
-                          {pago.notas ? (
-                            <p className="mt-1 text-xs text-white/45">{pago.notas}</p>
-                          ) : null}
+                          <div className="max-w-[380px]">
+                            <p className="font-medium text-white break-words whitespace-normal">
+                              {pago.concepto}
+                            </p>
+                            <p className="text-xs text-white/45">
+                              {pago.categoria} · {pago.tipo_origen}
+                            </p>
+                            {pago.notas ? (
+                              <p className="mt-1 text-xs text-white/45 break-words whitespace-normal">
+                                {pago.notas}
+                              </p>
+                            ) : null}
+                          </div>
                         </td>
 
                         <td className="px-4 py-3 text-white/75">
@@ -659,7 +727,12 @@ export default function ClienteDetallePage() {
                         </td>
 
                         <td className="px-4 py-3 font-semibold text-emerald-400">
-                          {money(pago.monto)}
+                          {money(
+                            pago.moneda_pago === 'BS'
+                              ? Number(pago.monto_equivalente_bs || 0)
+                              : Number(pago.monto_equivalente_usd || 0),
+                            pago.moneda_pago || 'USD'
+                          )}
                         </td>
                       </tr>
                     ))
@@ -680,9 +753,11 @@ export default function ClienteDetallePage() {
             ) : (
               <div className="space-y-3">
                 <div>
-                  <p className="font-medium text-white">{planActivo.planes?.nombre}</p>
+                  <p className="font-medium text-white break-words whitespace-normal">
+                    {planActivo.planes?.nombre}
+                  </p>
                   <p className="text-sm text-white/55">
-                    {money(planActivo.planes?.precio || 0)}
+                    {money(planActivo.planes?.precio || 0, 'USD')}
                   </p>
                 </div>
 

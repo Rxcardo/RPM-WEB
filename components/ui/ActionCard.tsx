@@ -15,25 +15,31 @@ export default function ActionCard({
   className = '',
 }: ActionCardProps) {
   return (
-    <Link href={href} className="block">
+    <Link href={href} className="block h-full">
       <Card
         className={`
+          h-full
+          min-h-[96px]
           cursor-pointer
-          p-5
+          p-4
           transition
           duration-200
-          hover:bg-white/[0.06]
           hover:border-white/15
+          hover:bg-white/[0.06]
+          sm:min-h-[110px]
+          sm:p-5
           ${className}
         `}
       >
-        <p className="font-medium text-white">
-          {title}
-        </p>
+        <div className="flex h-full flex-col justify-between">
+          <p className="text-sm font-medium leading-5 text-white sm:text-base">
+            {title}
+          </p>
 
-        <p className="mt-1 text-sm text-white/55">
-          {description}
-        </p>
+          <p className="mt-2 text-xs leading-5 text-white/55 sm:text-sm">
+            {description}
+          </p>
+        </div>
       </Card>
     </Link>
   )

@@ -2,28 +2,18 @@
 
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import ActionCard from '@/components/ui/ActionCard'
 
-type Cliente = {
-  id: string
-  nombre: string
-}
-
-type Terapeuta = {
-  id: string
-  nombre: string
-}
-
 type ServicioRaw = {
   id: string
   nombre: string
   estado?: string | null
-  duracion_minutos?: number | null // ✅ nombre correcto en BD
+  duracion_minutos?: number | null
   [key: string]: any
 }
 
@@ -40,18 +30,28 @@ type Recurso = {
   estado: string | null
 }
 
-function sumarMinutos(hora: string, minutos: number) {
-  if (!hora) return ''
-  const [h, m] = hora.split(':').map(Number)
-  const total = h * 60 + m + minutos
-  const hh = Math.floor(total / 60).toString().padStart(2, '0')
-  const mm = (total % 60).toString().padStart(2, '0')
-  return `${hh}:${mm}:00`
+type CitaDetalle = {
+  id: string
+  cliente_id: string
+  terapeuta_id: string | null
+  servicio_id: string | null
+  recurso_id: string | null
+  fecha: string | null
+  hora_inicio: string | null
+  hora_fin: string | null
+  estado: string | null
+  notas: string | null
+  clientes: { nombre: string } | null
+  empleados: { nombre: string } | null
+  servicios: ServicioRaw | null
+  recursos: { id: string; nombre: string } | null
 }
 
-function getServicioDuracion(servicio: ServicioRaw): number | null {
+function getServicioDuracion(servicio: ServicioRaw | null): number | null {
+  if (!servicio) return null
+
   const posibles = [
-    servicio.duracion_minutos, // ✅ primero el nombre real
+    servicio.duracion_minutos,
     servicio.duracion_min,
     servicio.duracion,
     servicio.tiempo,
@@ -59,10 +59,12 @@ function getServicioDuracion(servicio: ServicioRaw): number | null {
     servicio.tiempo_minutos,
     servicio.minutos,
   ]
+
   for (const valor of posibles) {
     const n = Number(valor)
     if (!Number.isNaN(n) && n > 0) return n
   }
+
   return null
 }
 
@@ -72,7 +74,7 @@ function Field({
   helper,
 }: {
   label: string
-  children: React.ReactNode
+  children: ReactNode
   helper?: string
 }) {
   return (
@@ -81,6 +83,15 @@ function Field({
       {children}
       {helper ? <p className="mt-2 text-xs text-white/45">{helper}</p> : null}
     </div>
+  )
+}
+
+function SummaryItem({ label, value }: { label: string; value: string }) {
+  return (
+    <Card className="p-4">
+      <p className="text-xs text-white/45">{label}</p>
+      <p className="mt-1 font-medium text-white">{value}</p>
+    </Card>
   )
 }
 
@@ -94,27 +105,31 @@ const inputClassName = `
 export default function EditarCitaPage() {
   const router = useRouter()
   const params = useParams()
-  const id = params?.id as string
+  const rawId = params?.id
+  const id = Array.isArray(rawId) ? rawId[0] : (rawId as string)
 
   const [loadingData, setLoadingData] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [autoHoraFin, setAutoHoraFin] = useState(false) // ✅ false por defecto para no sobreescribir al cargar
+  const [errorMsg, setErrorMsg] = useState('')
 
-  const [clientes, setClientes] = useState<Cliente[]>([])
-  const [terapeutas, setTerapeutas] = useState<Terapeuta[]>([])
   const [servicios, setServicios] = useState<Servicio[]>([])
   const [recursos, setRecursos] = useState<Recurso[]>([])
 
+  const [resumen, setResumen] = useState({
+    cliente: '',
+    terapeuta: '',
+    fecha: '',
+    horaInicio: '',
+    horaFin: '',
+    estado: '',
+    notas: '',
+    servicioActual: '',
+    recursoActual: '',
+  })
+
   const [form, setForm] = useState({
-    cliente_id: '',
-    terapeuta_id: '',
     servicio_id: '',
     recurso_id: '',
-    fecha: '',
-    hora_inicio: '',
-    hora_fin: '',
-    estado: 'programada',
-    notas: '',
   })
 
   const servicioSeleccionado = useMemo(
@@ -123,173 +138,162 @@ export default function EditarCitaPage() {
   )
 
   useEffect(() => {
+    if (!id) return
     void loadData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
-  // ✅ Solo recalcula hora_fin si el usuario activó el modo auto manualmente
-  useEffect(() => {
-    if (autoHoraFin && form.hora_inicio && servicioSeleccionado?.duracion_min) {
-      setForm((prev) => ({
-        ...prev,
-        hora_fin: sumarMinutos(prev.hora_inicio, servicioSeleccionado.duracion_min || 0),
-      }))
-    }
-  }, [form.hora_inicio, servicioSeleccionado, autoHoraFin])
-
   async function loadData() {
     setLoadingData(true)
+    setErrorMsg('')
 
-    const [clientesRes, terapeutasRes, serviciosRes, recursosRes, citaRes] = await Promise.all([
-      supabase.from('clientes').select('id, nombre').order('nombre', { ascending: true }),
-      supabase
-        .from('empleados')
-        .select('id, nombre')
-        .eq('rol', 'terapeuta')
-        .eq('estado', 'activo')
-        .order('nombre', { ascending: true }),
-      // ✅ Sin filtro .eq para evitar que NULL o mayúsculas rompan la carga
-      supabase
-        .from('servicios')
-        .select('id, nombre, estado, duracion_minutos')
-        .order('nombre', { ascending: true }),
-      supabase.from('recursos').select('id, nombre, estado').order('nombre', { ascending: true }),
-      supabase
-        .from('citas')
-        .select('id, cliente_id, terapeuta_id, servicio_id, recurso_id, fecha, hora_inicio, hora_fin, estado, notas')
-        .eq('id', id)
-        .single(),
-    ])
+    try {
+      const [serviciosRes, recursosRes, citaRes] = await Promise.all([
+        supabase
+          .from('servicios')
+          .select('id, nombre, estado, duracion_minutos')
+          .order('nombre', { ascending: true }),
 
-    setClientes((clientesRes.data || []) as Cliente[])
-    setTerapeutas((terapeutasRes.data || []) as Terapeuta[])
+        supabase
+          .from('recursos')
+          .select('id, nombre, estado')
+          .order('nombre', { ascending: true }),
 
-    const serviciosRaw = (serviciosRes.data || []) as ServicioRaw[]
-    const serviciosData: Servicio[] = serviciosRaw
-      .filter((s) => (s.estado || '').toLowerCase() !== 'inactivo')
-      .map((s) => ({
-        id: s.id,
-        nombre: s.nombre,
-        estado: s.estado ?? null,
-        duracion_min: getServicioDuracion(s),
-      }))
-    setServicios(serviciosData)
+        supabase
+          .from('citas')
+          .select(`
+            id,
+            cliente_id,
+            terapeuta_id,
+            servicio_id,
+            recurso_id,
+            fecha,
+            hora_inicio,
+            hora_fin,
+            estado,
+            notas,
+            clientes:cliente_id ( nombre ),
+            empleados:terapeuta_id ( nombre ),
+            servicios:servicio_id ( * ),
+            recursos:recurso_id ( id, nombre )
+          `)
+          .eq('id', id)
+          .limit(1)
+          .maybeSingle(),
+      ])
 
-    setRecursos(
-      ((recursosRes.data || []) as Recurso[]).filter(
+      if (serviciosRes.error) throw new Error(serviciosRes.error.message)
+      if (recursosRes.error) throw new Error(recursosRes.error.message)
+      if (citaRes.error) throw new Error(citaRes.error.message)
+      if (!citaRes.data) throw new Error('No se encontró la cita.')
+
+      const serviciosRaw = (serviciosRes.data || []) as ServicioRaw[]
+      const serviciosData: Servicio[] = serviciosRaw
+        .filter((s) => (s.estado || '').toLowerCase() !== 'inactivo')
+        .map((s) => ({
+          id: s.id,
+          nombre: s.nombre,
+          estado: s.estado ?? null,
+          duracion_min: getServicioDuracion(s),
+        }))
+
+      const recursosData = ((recursosRes.data || []) as Recurso[]).filter(
         (r) => (r.estado || '').toLowerCase() !== 'inactivo'
       )
-    )
 
-    if (citaRes.error || !citaRes.data) {
-      console.error(citaRes.error)
-      alert('No se pudo cargar la cita.')
-      router.push('/admin/operaciones/agenda')
-      return
+      const cita = citaRes.data as unknown as CitaDetalle
+
+      setServicios(serviciosData)
+      setRecursos(recursosData)
+
+      setResumen({
+        cliente: cita.clientes?.nombre || 'Sin cliente',
+        terapeuta: cita.empleados?.nombre || 'Sin terapeuta',
+        fecha: cita.fecha || '—',
+        horaInicio: cita.hora_inicio ? cita.hora_inicio.slice(0, 5) : '—',
+        horaFin: cita.hora_fin ? cita.hora_fin.slice(0, 5) : '—',
+        estado: cita.estado || '—',
+        notas: cita.notas || 'Sin notas',
+        servicioActual: cita.servicios?.nombre || 'Sin servicio',
+        recursoActual: cita.recursos?.nombre || 'Sin recurso',
+      })
+
+      setForm({
+        servicio_id: cita.servicio_id || '',
+        recurso_id: cita.recurso_id || '',
+      })
+    } catch (err: any) {
+      console.error('Error al cargar edición:', err)
+      setErrorMsg(err?.message || 'No se pudo cargar la cita.')
+    } finally {
+      setLoadingData(false)
     }
-
-    const cita = citaRes.data
-
-    setForm({
-      cliente_id: cita.cliente_id || '',
-      terapeuta_id: cita.terapeuta_id || '',
-      servicio_id: cita.servicio_id || '',
-      recurso_id: cita.recurso_id || '',
-      fecha: cita.fecha || '',
-      hora_inicio: cita.hora_inicio ? cita.hora_inicio.slice(0, 5) : '',
-      hora_fin: cita.hora_fin ? cita.hora_fin.slice(0, 8) : '',
-      estado: cita.estado || 'programada',
-      notas: cita.notas || '',
-    })
-
-    setLoadingData(false)
   }
 
   async function guardarCambios() {
-    if (!form.cliente_id || !form.terapeuta_id || !form.servicio_id || !form.fecha || !form.hora_inicio) {
-      alert('Completa cliente, terapeuta, servicio, fecha y hora.')
-      return
-    }
+    setErrorMsg('')
 
-    if (!form.hora_fin) {
-      alert('La hora final es obligatoria.')
+    if (!form.servicio_id) {
+      setErrorMsg('Selecciona un servicio.')
       return
     }
 
     setSaving(true)
 
-    const horaInicioNormalizada =
-      form.hora_inicio.length === 5 ? `${form.hora_inicio}:00` : form.hora_inicio
-
-    if (form.recurso_id) {
-      const { data: conflictoRecurso, error: errorRecurso } = await supabase
+    try {
+      // Buscar la cita actual para validar conflicto de recurso usando su fecha y horas bloqueadas
+      const { data: citaActual, error: citaActualError } = await supabase
         .from('citas')
-        .select('id')
-        .eq('recurso_id', form.recurso_id)
-        .eq('fecha', form.fecha)
-        .neq('estado', 'cancelada')
-        .neq('id', id)
-        .lt('hora_inicio', form.hora_fin)
-        .gt('hora_fin', horaInicioNormalizada)
-        .limit(1)
+        .select('id, fecha, hora_inicio, hora_fin')
+        .eq('id', id)
+        .single()
 
-      if (errorRecurso) {
-        alert('Error validando recurso.')
-        setSaving(false)
-        return
+      if (citaActualError || !citaActual) {
+        throw new Error('No se pudo cargar la cita actual para validar cambios.')
       }
 
-      if (conflictoRecurso && conflictoRecurso.length > 0) {
-        alert('Ese recurso ya está ocupado en ese horario.')
-        setSaving(false)
-        return
+      const horaInicioNormalizada = citaActual.hora_inicio
+      const horaFinNormalizada = citaActual.hora_fin
+
+      if (form.recurso_id) {
+        const { data: conflictoRecurso, error: errorRecurso } = await supabase
+          .from('citas')
+          .select('id')
+          .eq('recurso_id', form.recurso_id)
+          .eq('fecha', citaActual.fecha)
+          .neq('estado', 'cancelada')
+          .neq('id', id)
+          .lt('hora_inicio', horaFinNormalizada)
+          .gt('hora_fin', horaInicioNormalizada)
+          .limit(1)
+
+        if (errorRecurso) {
+          throw new Error(`Error validando recurso: ${errorRecurso.message}`)
+        }
+
+        if (conflictoRecurso && conflictoRecurso.length > 0) {
+          setErrorMsg('Ese recurso ya está ocupado en ese horario.')
+          setSaving(false)
+          return
+        }
       }
-    }
 
-    const { data: conflictoTerapeuta, error: errorTerapeuta } = await supabase
-      .from('citas')
-      .select('id')
-      .eq('terapeuta_id', form.terapeuta_id)
-      .eq('fecha', form.fecha)
-      .neq('estado', 'cancelada')
-      .neq('id', id)
-      .lt('hora_inicio', form.hora_fin)
-      .gt('hora_fin', horaInicioNormalizada)
-      .limit(1)
+      const payload = {
+        servicio_id: form.servicio_id,
+        recurso_id: form.recurso_id || null,
+      }
 
-    if (errorTerapeuta) {
-      alert('Error validando terapeuta.')
+      const { error } = await supabase.from('citas').update(payload).eq('id', id)
+
+      if (error) throw new Error(error.message || 'No se pudo actualizar la cita.')
+
+      router.push('/admin/operaciones/agenda')
+    } catch (err: any) {
+      console.error(err)
+      setErrorMsg(err?.message || 'No se pudo actualizar la cita.')
+    } finally {
       setSaving(false)
-      return
     }
-
-    if (conflictoTerapeuta && conflictoTerapeuta.length > 0) {
-      alert('Ese terapeuta ya tiene una cita en ese horario.')
-      setSaving(false)
-      return
-    }
-
-    const payload = {
-      cliente_id: form.cliente_id,
-      terapeuta_id: form.terapeuta_id,
-      servicio_id: form.servicio_id,
-      recurso_id: form.recurso_id || null,
-      fecha: form.fecha,
-      hora_inicio: horaInicioNormalizada,
-      hora_fin: form.hora_fin.length === 5 ? `${form.hora_fin}:00` : form.hora_fin,
-      estado: form.estado,
-      notas: form.notas || null,
-    }
-
-    const { error } = await supabase.from('citas').update(payload).eq('id', id)
-
-    if (error) {
-      alert('No se pudo actualizar la cita.')
-      setSaving(false)
-      return
-    }
-
-    router.push('/admin/operaciones/agenda')
   }
 
   return (
@@ -301,7 +305,7 @@ export default function EditarCitaPage() {
             Editar cita
           </h1>
           <p className="mt-2 text-sm text-white/55">
-            Modifica la cita con validación de terapeuta y recurso.
+            Solo puedes cambiar servicio y recurso. El resto queda bloqueado.
           </p>
         </div>
 
@@ -320,167 +324,82 @@ export default function EditarCitaPage() {
       </div>
 
       <Section
-        title="Formulario de edición"
-        description="Actualiza cliente, terapeuta, servicio, horario, estado y notas."
+        title="Datos bloqueados"
+        description="Estos datos se muestran solo como referencia."
+      >
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <SummaryItem label="Cliente" value={resumen.cliente} />
+          <SummaryItem label="Terapeuta" value={resumen.terapeuta} />
+          <SummaryItem label="Fecha" value={resumen.fecha} />
+          <SummaryItem label="Hora inicio" value={resumen.horaInicio} />
+          <SummaryItem label="Hora fin" value={resumen.horaFin} />
+          <SummaryItem label="Estado" value={resumen.estado} />
+          <SummaryItem label="Servicio actual" value={resumen.servicioActual} />
+          <SummaryItem label="Recurso actual" value={resumen.recursoActual} />
+          <SummaryItem label="Notas" value={resumen.notas} />
+        </div>
+      </Section>
+
+      <Section
+        title="Campos editables"
+        description="Aquí solo puedes actualizar servicio y recurso."
       >
         {loadingData ? (
           <Card className="p-6">
             <p className="text-sm text-white/55">Cargando cita...</p>
           </Card>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Cliente">
-              <select
-                value={form.cliente_id}
-                onChange={(e) => setForm({ ...form, cliente_id: e.target.value })}
-                className={inputClassName}
+          <div className="space-y-6">
+            {errorMsg ? (
+              <Card className="p-4">
+                <p className="text-sm text-rose-400">{errorMsg}</p>
+              </Card>
+            ) : null}
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field
+                label="Servicio"
+                helper={
+                  servicioSeleccionado?.duracion_min
+                    ? `Duración referencial: ${servicioSeleccionado.duracion_min} min. El horario no se modifica aquí.`
+                    : 'Cambiar servicio no altera fecha ni horas en esta pantalla.'
+                }
               >
-                <option value="" className="bg-[#11131a] text-white">Seleccionar cliente</option>
-                {clientes.map((c) => (
-                  <option key={c.id} value={c.id} className="bg-[#11131a] text-white">
-                    {c.nombre}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field label="Terapeuta">
-              <select
-                value={form.terapeuta_id}
-                onChange={(e) => setForm({ ...form, terapeuta_id: e.target.value })}
-                className={inputClassName}
-              >
-                <option value="" className="bg-[#11131a] text-white">Seleccionar terapeuta</option>
-                {terapeutas.map((t) => (
-                  <option key={t.id} value={t.id} className="bg-[#11131a] text-white">
-                    {t.nombre}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field
-              label="Servicio"
-              helper={
-                servicios.length === 0
-                  ? 'No se encontraron servicios.'
-                  : `${servicios.length} servicio(s) disponible(s).`
-              }
-            >
-              <select
-                value={form.servicio_id}
-                onChange={(e) => {
-                  setAutoHoraFin(true) // ✅ activa auto solo cuando el usuario cambia el servicio
-                  setForm({ ...form, servicio_id: e.target.value })
-                }}
-                className={inputClassName}
-              >
-                <option value="" className="bg-[#11131a] text-white">Seleccionar servicio</option>
-                {servicios.map((s) => (
-                  <option key={s.id} value={s.id} className="bg-[#11131a] text-white">
-                    {s.nombre} {s.duracion_min ? `· ${s.duracion_min} min` : ''}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field label="Recurso">
-              <select
-                value={form.recurso_id}
-                onChange={(e) => setForm({ ...form, recurso_id: e.target.value })}
-                className={inputClassName}
-              >
-                <option value="" className="bg-[#11131a] text-white">Sin recurso</option>
-                {recursos.map((r) => (
-                  <option key={r.id} value={r.id} className="bg-[#11131a] text-white">
-                    {r.nombre}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field label="Fecha">
-              <input
-                type="date"
-                value={form.fecha}
-                onChange={(e) => setForm({ ...form, fecha: e.target.value })}
-                className={inputClassName}
-              />
-            </Field>
-
-            <Field label="Estado">
-              <select
-                value={form.estado}
-                onChange={(e) => setForm({ ...form, estado: e.target.value })}
-                className={inputClassName}
-              >
-                <option value="programada" className="bg-[#11131a] text-white">Programada</option>
-                <option value="confirmada" className="bg-[#11131a] text-white">Confirmada</option>
-                <option value="reprogramada" className="bg-[#11131a] text-white">Reprogramada</option>
-                <option value="completada" className="bg-[#11131a] text-white">Completada</option>
-                <option value="cancelada" className="bg-[#11131a] text-white">Cancelada</option>
-              </select>
-            </Field>
-
-            <Field label="Fecha">
-              <input
-                type="date"
-                value={form.fecha}
-                onChange={(e) => setForm({ ...form, fecha: e.target.value })}
-                className={inputClassName}
-              />
-            </Field>
-
-            <Field label="Hora inicio">
-              <input
-                type="time"
-                value={form.hora_inicio}
-                onChange={(e) => setForm({ ...form, hora_inicio: e.target.value })}
-                className={inputClassName}
-              />
-            </Field>
-
-            <Field
-              label="Hora fin"
-              helper={
-                autoHoraFin && servicioSeleccionado?.duracion_min
-                  ? `Calculado automáticamente: ${servicioSeleccionado.duracion_min} min.`
-                  : 'Puedes editarla manualmente o cambiar el servicio para recalcular.'
-              }
-            >
-              <div className="mb-2 flex items-center justify-end">
-                <button
-                  type="button"
-                  onClick={() => setAutoHoraFin((prev) => !prev)}
-                  className="text-xs font-medium text-white/45 transition hover:text-white/75"
+                <select
+                  value={form.servicio_id}
+                  onChange={(e) => setForm((prev) => ({ ...prev, servicio_id: e.target.value }))}
+                  className={inputClassName}
                 >
-                  {autoHoraFin ? '🔄 Auto (click para manual)' : '✏️ Manual (click para auto)'}
-                </button>
-              </div>
-              <input
-                type="time"
-                value={form.hora_fin ? form.hora_fin.slice(0, 5) : ''}
-                onChange={(e) => {
-                  setAutoHoraFin(false)
-                  setForm({ ...form, hora_fin: `${e.target.value}:00` })
-                }}
-                className={inputClassName}
-              />
-            </Field>
+                  <option value="" className="bg-[#11131a] text-white">
+                    Seleccionar servicio
+                  </option>
+                  {servicios.map((s) => (
+                    <option key={s.id} value={s.id} className="bg-[#11131a] text-white">
+                      {s.nombre} {s.duracion_min ? `· ${s.duracion_min} min` : ''}
+                    </option>
+                  ))}
+                </select>
+              </Field>
 
-            <div className="md:col-span-2">
-              <Field label="Notas">
-                <textarea
-                  value={form.notas}
-                  onChange={(e) => setForm({ ...form, notas: e.target.value })}
-                  rows={4}
-                  className={`${inputClassName} resize-none`}
-                  placeholder="Notas opcionales..."
-                />
+              <Field label="Recurso">
+                <select
+                  value={form.recurso_id}
+                  onChange={(e) => setForm((prev) => ({ ...prev, recurso_id: e.target.value }))}
+                  className={inputClassName}
+                >
+                  <option value="" className="bg-[#11131a] text-white">
+                    Sin recurso
+                  </option>
+                  {recursos.map((r) => (
+                    <option key={r.id} value={r.id} className="bg-[#11131a] text-white">
+                      {r.nombre}
+                    </option>
+                  ))}
+                </select>
               </Field>
             </div>
 
-            <div className="md:col-span-2 flex flex-wrap gap-3 pt-2">
+            <div className="flex flex-wrap gap-3 pt-2">
               <button
                 type="button"
                 onClick={guardarCambios}

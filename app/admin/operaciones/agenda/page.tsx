@@ -13,8 +13,8 @@ import ActionCard from '@/components/ui/ActionCard'
 type CitaRow = {
   id: string
   fecha: string | null
-  hora_inicio: string | null  // ✅ nombre real en BD
-  hora_fin: string | null     // ✅ nombre real en BD
+  hora_inicio: string | null
+  hora_fin: string | null
   estado: string
   notas: string | null
   created_at: string | null
@@ -32,7 +32,7 @@ type CitaRow = {
   servicios: {
     id: string
     nombre: string | null
-    duracion_minutos: number | null  // ✅ nombre real en BD
+    duracion_minutos: number | null
   } | null
 }
 
@@ -71,6 +71,42 @@ function estadoBadge(estado: string) {
   }
 }
 
+function ActionButton({
+  children,
+  onClick,
+  disabled = false,
+  tone = 'default',
+}: {
+  children: React.ReactNode
+  onClick?: () => void
+  disabled?: boolean
+  tone?: 'default' | 'confirm' | 'complete' | 'cancel'
+}) {
+  const toneCls =
+    tone === 'confirm'
+      ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/15'
+      : tone === 'complete'
+        ? 'border-violet-400/20 bg-violet-400/10 text-violet-300 hover:bg-violet-400/15'
+        : tone === 'cancel'
+          ? 'border-rose-400/20 bg-rose-400/10 text-rose-300 hover:bg-rose-400/15'
+          : 'border-white/10 bg-white/[0.03] text-white/80 hover:bg-white/[0.06]'
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`
+        rounded-xl border px-3 py-1.5 text-xs font-medium transition
+        disabled:cursor-not-allowed disabled:opacity-40
+        ${toneCls}
+      `}
+    >
+      {children}
+    </button>
+  )
+}
+
 export default function AgendaPage() {
   const [loading, setLoading] = useState(true)
   const [citas, setCitas] = useState<CitaRow[]>([])
@@ -78,6 +114,8 @@ export default function AgendaPage() {
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
   const [fechaFiltro, setFechaFiltro] = useState('')
   const [error, setError] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [updatingId, setUpdatingId] = useState<string | null>(null)
 
   useEffect(() => {
     void loadAgenda()
@@ -88,7 +126,6 @@ export default function AgendaPage() {
     setError('')
 
     try {
-      // ✅ Un solo query con joins — más eficiente y sin problemas de mapeo manual
       const { data, error: err } = await supabase
         .from('citas')
         .select(`
@@ -118,6 +155,52 @@ export default function AgendaPage() {
     }
   }
 
+  async function cambiarEstado(cita: CitaRow, nuevoEstado: 'confirmada' | 'completada' | 'cancelada') {
+    setActionError('')
+
+    const estadoActual = (cita.estado || '').toLowerCase()
+
+    if (estadoActual === nuevoEstado) return
+
+    if (
+      nuevoEstado === 'cancelada' &&
+      !window.confirm(
+        `¿Seguro que deseas cancelar la cita de ${cita.clientes?.nombre || 'este cliente'}?\n\nSi esta cita tenía una sesión reservada, se liberará automáticamente.`
+      )
+    ) {
+      return
+    }
+
+    if (
+      nuevoEstado === 'completada' &&
+      !window.confirm(
+        `¿Seguro que deseas completar esta cita?\n\nLa sesión ya debió quedar reservada desde que la cita fue creada o puesta en un estado válido.`
+      )
+    ) {
+      return
+    }
+
+    setUpdatingId(cita.id)
+
+    try {
+      const { error: updateError } = await supabase
+        .from('citas')
+        .update({ estado: nuevoEstado })
+        .eq('id', cita.id)
+
+      if (updateError) throw new Error(updateError.message)
+
+      setCitas((prev) =>
+        prev.map((item) => (item.id === cita.id ? { ...item, estado: nuevoEstado } : item))
+      )
+    } catch (err: any) {
+      console.error(err)
+      setActionError(err?.message || 'No se pudo cambiar el estado de la cita.')
+    } finally {
+      setUpdatingId(null)
+    }
+  }
+
   const citasFiltradas = useMemo(() => {
     const q = search.trim().toLowerCase()
 
@@ -143,13 +226,16 @@ export default function AgendaPage() {
     })
   }, [citas, search, estadoFiltro, fechaFiltro])
 
-  const stats = useMemo(() => ({
-    total: citas.length,
-    programadas: citas.filter((c) => c.estado?.toLowerCase() === 'programada').length,
-    confirmadas: citas.filter((c) => c.estado?.toLowerCase() === 'confirmada').length,
-    completadas: citas.filter((c) => c.estado?.toLowerCase() === 'completada').length,
-    canceladas: citas.filter((c) => c.estado?.toLowerCase() === 'cancelada').length,
-  }), [citas])
+  const stats = useMemo(
+    () => ({
+      total: citas.length,
+      programadas: citas.filter((c) => c.estado?.toLowerCase() === 'programada').length,
+      confirmadas: citas.filter((c) => c.estado?.toLowerCase() === 'confirmada').length,
+      completadas: citas.filter((c) => c.estado?.toLowerCase() === 'completada').length,
+      canceladas: citas.filter((c) => c.estado?.toLowerCase() === 'cancelada').length,
+    }),
+    [citas]
+  )
 
   return (
     <div className="space-y-6">
@@ -175,6 +261,13 @@ export default function AgendaPage() {
         <Card className="p-4">
           <p className="text-sm font-medium text-rose-400">Error al cargar</p>
           <p className="mt-1 text-sm text-white/55">{error}</p>
+        </Card>
+      ) : null}
+
+      {actionError ? (
+        <Card className="p-4">
+          <p className="text-sm font-medium text-rose-400">Error en acción</p>
+          <p className="mt-1 text-sm text-white/55">{actionError}</p>
         </Card>
       ) : null}
 
@@ -279,6 +372,14 @@ export default function AgendaPage() {
               ) : (
                 citasFiltradas.map((cita) => {
                   const duracion = cita.servicios?.duracion_minutos || 0
+                  const estado = (cita.estado || '').toLowerCase()
+                  const disabled = updatingId === cita.id
+
+                  const puedeConfirmar = ['programada', 'reprogramada'].includes(estado)
+                  const puedeCompletar = ['programada', 'confirmada', 'reprogramada'].includes(estado)
+                  const puedeCancelar = ['programada', 'confirmada', 'reprogramada'].includes(estado)
+                  const puedeEditar = !['completada', 'cancelada'].includes(estado)
+                  const puedeReprogramar = !['completada', 'cancelada'].includes(estado)
 
                   return (
                     <tr key={cita.id} className="align-top transition hover:bg-white/[0.03]">
@@ -352,16 +453,56 @@ export default function AgendaPage() {
                           >
                             Ver
                           </Link>
+
                           <Link
                             href={`/admin/operaciones/agenda/${cita.id}/editar`}
-                            className="
-                              rounded-xl border border-white/10 bg-white/[0.03]
-                              px-3 py-1.5 text-xs font-medium text-white/80
-                              transition hover:bg-white/[0.06]
-                            "
+                            className={`
+                              rounded-xl border px-3 py-1.5 text-xs font-medium transition
+                              ${puedeEditar
+                                ? 'border-white/10 bg-white/[0.03] text-white/80 hover:bg-white/[0.06]'
+                                : 'cursor-not-allowed border-white/10 bg-white/[0.02] text-white/35 pointer-events-none'
+                              }
+                            `}
                           >
                             Editar
                           </Link>
+
+                          <Link
+                            href={`/admin/operaciones/agenda/${cita.id}/reprogramar`}
+                            className={`
+                              rounded-xl border px-3 py-1.5 text-xs font-medium transition
+                              ${puedeReprogramar
+                                ? 'border-amber-400/20 bg-amber-400/10 text-amber-300 hover:bg-amber-400/15'
+                                : 'cursor-not-allowed border-white/10 bg-white/[0.02] text-white/35 pointer-events-none'
+                              }
+                            `}
+                          >
+                            Reprogramar
+                          </Link>
+
+                          <ActionButton
+                            tone="confirm"
+                            disabled={!puedeConfirmar || disabled}
+                            onClick={() => cambiarEstado(cita, 'confirmada')}
+                          >
+                            {disabled && updatingId === cita.id ? 'Procesando...' : 'Confirmar'}
+                          </ActionButton>
+
+                          <ActionButton
+                            tone="complete"
+                            disabled={!puedeCompletar || disabled}
+                            onClick={() => cambiarEstado(cita, 'completada')}
+                          >
+                            {disabled && updatingId === cita.id ? 'Procesando...' : 'Completar'}
+                          </ActionButton>
+
+                          <ActionButton
+                            tone="cancel"
+                            disabled={!puedeCancelar || disabled}
+                            onClick={() => cambiarEstado(cita, 'cancelada')}
+                          >
+                            {disabled && updatingId === cita.id ? 'Procesando...' : 'Cancelar'}
+                          </ActionButton>
                         </div>
                       </td>
                     </tr>

@@ -1,19 +1,23 @@
 ﻿'use client'
 export const dynamic = 'force-dynamic'
 
-import { useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import ActionCard from '@/components/ui/ActionCard'
 
+type RolUI = 'admin' | 'recepcionista' | 'terapeuta' | 'entrenador'
+
 type FormState = {
   nombre: string
   email: string
   telefono: string
-  rol: string
+  rol: RolUI
   estado: string
+  comision_plan_porcentaje: string
+  comision_cita_porcentaje: string
 }
 
 const INITIAL_FORM: FormState = {
@@ -22,6 +26,8 @@ const INITIAL_FORM: FormState = {
   telefono: '',
   rol: 'terapeuta',
   estado: 'activo',
+  comision_plan_porcentaje: '0',
+  comision_cita_porcentaje: '0',
 }
 
 const inputClassName = `
@@ -51,13 +57,27 @@ function Field({
   )
 }
 
+function parsePorcentaje(value: string): number {
+  const cleaned = value.replace(',', '.').trim()
+  const parsed = Number(cleaned)
+  if (!Number.isFinite(parsed) || parsed < 0) return 0
+  return parsed
+}
+
+function mapearRolCatalogo(rolUI: RolUI): 'admin' | 'recepcionista' | 'terapeuta' {
+  if (rolUI === 'entrenador') return 'terapeuta'
+  return rolUI
+}
+
 export default function NuevoPersonalPage() {
   const router = useRouter()
+
   const [saving, setSaving] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
-
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
+
+  const rolCatalogo = useMemo(() => mapearRolCatalogo(form.rol), [form.rol])
 
   async function guardar() {
     setErrorMsg('')
@@ -71,19 +91,37 @@ export default function NuevoPersonalPage() {
     setSaving(true)
 
     try {
+      const nombre = form.nombre.trim()
+      const email = form.email.trim().toLowerCase() || null
+      const telefono = form.telefono.trim() || null
+      const comisionPlan = parsePorcentaje(form.comision_plan_porcentaje)
+      const comisionCita = parsePorcentaje(form.comision_cita_porcentaje)
+
+      const { data: rolData, error: rolError } = await supabase
+        .from('roles')
+        .select('id, nombre')
+        .eq('nombre', rolCatalogo)
+        .single()
+
+      if (rolError || !rolData) {
+        throw new Error('No se pudo encontrar el rol seleccionado en la tabla roles.')
+      }
+
       const payload = {
-        nombre: form.nombre.trim(),
-        email: form.email.trim() || null,
-        telefono: form.telefono.trim() || null,
-        rol: form.rol,
+        nombre,
+        email,
+        telefono,
+        rol: form.rol, // visual / legado
+        rol_id: rolData.id, // permisos reales
         estado: form.estado,
+        especialidad: form.rol === 'terapeuta' || form.rol === 'entrenador' ? '' : null,
+        comision_plan_porcentaje: comisionPlan,
+        comision_cita_porcentaje: comisionCita,
       }
 
       const { error } = await supabase.from('empleados').insert(payload)
 
-      if (error) {
-        throw error
-      }
+      if (error) throw error
 
       setSuccessMsg('Personal creado correctamente.')
       router.push('/admin/personas/personal')
@@ -133,7 +171,7 @@ export default function NuevoPersonalPage() {
 
       <Section
         title="Formulario de personal"
-        description="Completa nombre, contacto, rol y estado."
+        description="Completa nombre, contacto, rol, estado y comisiones."
       >
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Nombre">
@@ -146,7 +184,7 @@ export default function NuevoPersonalPage() {
             />
           </Field>
 
-          <Field label="Email">
+          <Field label="Email" helper="Opcional. No se enviará invitación.">
             <input
               type="email"
               value={form.email}
@@ -161,15 +199,18 @@ export default function NuevoPersonalPage() {
               type="text"
               value={form.telefono}
               onChange={(e) => setForm({ ...form, telefono: e.target.value })}
-              placeholder="809..."
+              placeholder="0424..."
               className={inputClassName}
             />
           </Field>
 
-          <Field label="Rol">
+          <Field
+            label="Rol"
+            helper={`Rol de permisos real: ${rolCatalogo}`}
+          >
             <select
               value={form.rol}
-              onChange={(e) => setForm({ ...form, rol: e.target.value })}
+              onChange={(e) => setForm({ ...form, rol: e.target.value as RolUI })}
               className={inputClassName}
             >
               <option value="terapeuta" className="bg-[#11131a] text-white">
@@ -178,8 +219,8 @@ export default function NuevoPersonalPage() {
               <option value="entrenador" className="bg-[#11131a] text-white">
                 Entrenador
               </option>
-              <option value="recepcion" className="bg-[#11131a] text-white">
-                Recepción
+              <option value="recepcionista" className="bg-[#11131a] text-white">
+                Recepcionista
               </option>
               <option value="admin" className="bg-[#11131a] text-white">
                 Admin
@@ -203,6 +244,34 @@ export default function NuevoPersonalPage() {
                 Vacaciones
               </option>
             </select>
+          </Field>
+
+          <Field label="Comisión por plan (%)">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.comision_plan_porcentaje}
+              onChange={(e) =>
+                setForm({ ...form, comision_plan_porcentaje: e.target.value })
+              }
+              placeholder="0"
+              className={inputClassName}
+            />
+          </Field>
+
+          <Field label="Comisión por cita (%)">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.comision_cita_porcentaje}
+              onChange={(e) =>
+                setForm({ ...form, comision_cita_porcentaje: e.target.value })
+              }
+              placeholder="0"
+              className={inputClassName}
+            />
           </Field>
         </div>
 

@@ -37,9 +37,14 @@ type ClientePlan = {
 type Pago = {
   id: string
   cliente_id: string | null
+  cliente_plan_id?: string | null
   fecha: string
   monto: number | null
+  moneda_pago: string | null
   estado: string
+  created_at?: string | null
+  monto_equivalente_usd?: number | null
+  monto_equivalente_bs?: number | null
 }
 
 type ClienteRow = {
@@ -49,12 +54,24 @@ type ClienteRow = {
   sesionesRestantes: number
 }
 
-function money(value: number | string | null | undefined) {
+function money(
+  value: number | string | null | undefined,
+  moneda: string = 'USD'
+) {
+  const amount = Number(value || 0)
+
+  if ((moneda || '').toUpperCase() === 'BS') {
+    return `Bs ${amount.toLocaleString('es-VE', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`
+  }
+
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: 2,
-  }).format(Number(value || 0))
+  }).format(amount)
 }
 
 function formatDate(value: string | null | undefined) {
@@ -110,6 +127,12 @@ const inputClassName = `
   focus:border-white/20 focus:bg-white/[0.05]
 `
 
+function getPagoTimestamp(pago: Pago) {
+  const primary = pago.created_at || pago.fecha
+  const time = new Date(primary).getTime()
+  return Number.isNaN(time) ? 0 : time
+}
+
 export default function ClientesPage() {
   const [loading, setLoading] = useState(true)
   const [clientes, setClientes] = useState<Cliente[]>([])
@@ -154,9 +177,11 @@ export default function ClientesPage() {
 
         supabase
           .from('pagos')
-          .select('id, cliente_id, fecha, monto, estado')
+          .select(
+            'id, cliente_id, cliente_plan_id, fecha, monto, moneda_pago, estado, created_at, monto_equivalente_usd, monto_equivalente_bs'
+          )
           .eq('estado', 'pagado')
-          .order('fecha', { ascending: false }),
+          .order('created_at', { ascending: false }),
       ])
 
       if (clientesRes.error) {
@@ -209,18 +234,44 @@ export default function ClientesPage() {
     return map
   }, [planesActivos])
 
+  const planIdToClienteIdMap = useMemo(() => {
+    const map = new Map<string, string>()
+
+    for (const plan of planesActivos) {
+      if (!plan?.id || !plan?.cliente_id) continue
+      map.set(plan.id, plan.cliente_id)
+    }
+
+    return map
+  }, [planesActivos])
+
   const pagoMap = useMemo(() => {
     const map = new Map<string, Pago>()
 
     for (const pago of pagos) {
-      if (!pago?.cliente_id) continue
-      if (!map.has(pago.cliente_id)) {
-        map.set(pago.cliente_id, pago)
+      const resolvedClienteId =
+        pago.cliente_id ||
+        (pago.cliente_plan_id ? planIdToClienteIdMap.get(pago.cliente_plan_id) || null : null)
+
+      if (!resolvedClienteId) continue
+
+      const current = map.get(resolvedClienteId)
+
+      if (!current) {
+        map.set(resolvedClienteId, pago)
+        continue
+      }
+
+      const currentTime = getPagoTimestamp(current)
+      const nextTime = getPagoTimestamp(pago)
+
+      if (nextTime >= currentTime) {
+        map.set(resolvedClienteId, pago)
       }
     }
 
     return map
-  }, [pagos])
+  }, [pagos, planIdToClienteIdMap])
 
   const rows = useMemo<ClienteRow[]>(() => {
     return clientes.map((cliente) => {
@@ -303,10 +354,7 @@ export default function ClientesPage() {
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard
-          title="Total clientes"
-          value={stats.total}
-        />
+        <StatCard title="Total clientes" value={stats.total} />
 
         <StatCard
           title="Clientes activos"
@@ -314,10 +362,7 @@ export default function ClientesPage() {
           color="text-emerald-400"
         />
 
-        <StatCard
-          title="Con plan activo"
-          value={stats.conPlan}
-        />
+        <StatCard title="Con plan activo" value={stats.conPlan} />
 
         <StatCard
           title="Sin plan activo"
@@ -470,7 +515,14 @@ export default function ClientesPage() {
                     <td className="px-4 py-4">
                       {ultimoPago ? (
                         <div>
-                          <div className="font-medium text-white">{money(ultimoPago.monto)}</div>
+                          <div className="font-medium text-white">
+                            {money(
+                              ultimoPago.moneda_pago === 'BS'
+                                ? Number(ultimoPago.monto_equivalente_bs || 0)
+                                : Number(ultimoPago.monto_equivalente_usd || 0),
+                              ultimoPago.moneda_pago || 'USD'
+                            )}
+                          </div>
                           <div className="mt-1 text-xs text-white/45">
                             {formatDate(ultimoPago.fecha)}
                           </div>

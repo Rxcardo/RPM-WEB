@@ -2,38 +2,12 @@
 
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import ActionCard from '@/components/ui/ActionCard'
-
-type Terapeuta = {
-  id: string
-  nombre: string
-}
-
-type ServicioRaw = {
-  id: string
-  nombre: string
-  estado?: string | null
-  duracion_minutos?: number | null // ✅ nombre correcto en BD
-  [key: string]: any
-}
-
-type Servicio = {
-  id: string
-  nombre: string
-  duracion_min: number | null
-  estado?: string | null
-}
-
-type Recurso = {
-  id: string
-  nombre: string
-  estado: string | null
-}
 
 type CitaDetalle = {
   id: string
@@ -47,35 +21,8 @@ type CitaDetalle = {
   notas: string | null
   clientes: { nombre: string } | null
   empleados: { nombre: string } | null
-  servicios: ServicioRaw | null
+  servicios: { nombre: string } | null
   recursos: { id: string; nombre: string } | null
-}
-
-function getServicioDuracion(servicio: ServicioRaw | null): number | null {
-  if (!servicio) return null
-  const posibles = [
-    servicio.duracion_minutos, // ✅ primero el nombre real
-    servicio.duracion_min,
-    servicio.duracion,
-    servicio.tiempo,
-    servicio.tiempo_min,
-    servicio.tiempo_minutos,
-    servicio.minutos,
-  ]
-  for (const valor of posibles) {
-    const n = Number(valor)
-    if (!Number.isNaN(n) && n > 0) return n
-  }
-  return null
-}
-
-function sumarMinutos(hora: string, minutos: number) {
-  if (!hora) return ''
-  const [h, m] = hora.split(':').map(Number)
-  const total = h * 60 + m + minutos
-  const hh = Math.floor(total / 60).toString().padStart(2, '0')
-  const mm = (total % 60).toString().padStart(2, '0')
-  return `${hh}:${mm}:00`
 }
 
 function Field({
@@ -120,12 +67,7 @@ export default function ReprogramarCitaPage() {
 
   const [loadingData, setLoadingData] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [autoHoraFin, setAutoHoraFin] = useState(false) // ✅ false por defecto
   const [errorMsg, setErrorMsg] = useState('')
-
-  const [terapeutas, setTerapeutas] = useState<Terapeuta[]>([])
-  const [servicios, setServicios] = useState<Servicio[]>([])
-  const [recursos, setRecursos] = useState<Recurso[]>([])
 
   const [resumen, setResumen] = useState({
     cliente: '',
@@ -133,24 +75,23 @@ export default function ReprogramarCitaPage() {
     servicio: '',
     recurso: '',
     fechaOriginal: '',
-    horaOriginal: '',
-  })
-
-  const [form, setForm] = useState({
-    terapeuta_id: '',
-    servicio_id: '',
-    recurso_id: '',
-    fecha: '',
-    hora_inicio: '',
-    hora_fin: '',
-    estado: 'reprogramada',
+    horaInicioOriginal: '',
+    horaFinOriginal: '',
+    estadoOriginal: '',
     notas: '',
   })
 
-  const servicioSeleccionado = useMemo(
-    () => servicios.find((s) => s.id === form.servicio_id) || null,
-    [servicios, form.servicio_id]
-  )
+  const [bloqueados, setBloqueados] = useState({
+    terapeuta_id: '',
+    servicio_id: '',
+    recurso_id: '',
+  })
+
+  const [form, setForm] = useState({
+    fecha: '',
+    hora_inicio: '',
+    hora_fin: '',
+  })
 
   useEffect(() => {
     if (!id) return
@@ -158,85 +99,36 @@ export default function ReprogramarCitaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
-  useEffect(() => {
-    if (!autoHoraFin || !form.hora_inicio || !servicioSeleccionado?.duracion_min) return
-    setForm((prev) => ({
-      ...prev,
-      hora_fin: sumarMinutos(prev.hora_inicio, servicioSeleccionado.duracion_min || 0),
-    }))
-  }, [form.hora_inicio, servicioSeleccionado, autoHoraFin])
-
   async function loadData() {
     setLoadingData(true)
     setErrorMsg('')
 
     try {
-      const [terapeutasRes, serviciosRes, recursosRes, citaRes] = await Promise.all([
-        supabase
-          .from('empleados')
-          .select('id, nombre')
-          .eq('rol', 'terapeuta')
-          .eq('estado', 'activo')
-          .order('nombre', { ascending: true }),
+      const { data, error } = await supabase
+        .from('citas')
+        .select(`
+          id,
+          terapeuta_id,
+          servicio_id,
+          recurso_id,
+          fecha,
+          hora_inicio,
+          hora_fin,
+          estado,
+          notas,
+          clientes:cliente_id ( nombre ),
+          empleados:terapeuta_id ( nombre ),
+          servicios:servicio_id ( nombre ),
+          recursos:recurso_id ( id, nombre )
+        `)
+        .eq('id', id)
+        .limit(1)
+        .maybeSingle()
 
-        // ✅ Sin filtro .eq para evitar que NULL o mayúsculas rompan la carga
-        supabase
-          .from('servicios')
-          .select('id, nombre, estado, duracion_minutos')
-          .order('nombre', { ascending: true }),
+      if (error) throw new Error(error.message)
+      if (!data) throw new Error('No se encontró la cita.')
 
-        supabase
-          .from('recursos')
-          .select('id, nombre, estado')
-          .order('nombre', { ascending: true }),
-
-        supabase
-          .from('citas')
-          .select(`
-            id,
-            terapeuta_id,
-            servicio_id,
-            recurso_id,
-            fecha,
-            hora_inicio,
-            hora_fin,
-            estado,
-            notas,
-            clientes:cliente_id ( nombre ),
-            empleados:terapeuta_id ( nombre ),
-            servicios:servicio_id ( * ),
-            recursos:recurso_id ( id, nombre )
-          `)
-          .eq('id', id)
-          .limit(1)
-          .maybeSingle(),
-      ])
-
-      if (terapeutasRes.error) throw new Error(terapeutasRes.error.message)
-      if (serviciosRes.error) throw new Error(serviciosRes.error.message)
-      if (recursosRes.error) throw new Error(recursosRes.error.message)
-      if (citaRes.error) throw new Error(citaRes.error.message)
-      if (!citaRes.data) throw new Error('No se encontró la cita.')
-
-      const serviciosRaw = (serviciosRes.data || []) as ServicioRaw[]
-      const serviciosData: Servicio[] = serviciosRaw
-        .filter((s) => (s.estado || '').toLowerCase() !== 'inactivo')
-        .map((s) => ({
-          id: s.id,
-          nombre: s.nombre,
-          estado: s.estado ?? null,
-          duracion_min: getServicioDuracion(s),
-        }))
-
-      const recursosData = ((recursosRes.data || []) as Recurso[]).filter(
-        (r) => (r.estado || '').toLowerCase() !== 'inactivo'
-      )
-
-      const cita = citaRes.data as unknown as CitaDetalle
-
-      setTerapeutas((terapeutasRes.data || []) as Terapeuta[])
-      setServicios(serviciosData)
-      setRecursos(recursosData)
+      const cita = data as unknown as CitaDetalle
 
       setResumen({
         cliente: cita.clientes?.nombre || 'Sin cliente',
@@ -244,18 +136,22 @@ export default function ReprogramarCitaPage() {
         servicio: cita.servicios?.nombre || 'Sin servicio',
         recurso: cita.recursos?.nombre || 'Sin recurso',
         fechaOriginal: cita.fecha || '—',
-        horaOriginal: cita.hora_inicio ? cita.hora_inicio.slice(0, 5) : '—',
+        horaInicioOriginal: cita.hora_inicio ? cita.hora_inicio.slice(0, 5) : '—',
+        horaFinOriginal: cita.hora_fin ? cita.hora_fin.slice(0, 5) : '—',
+        estadoOriginal: cita.estado || '—',
+        notas: cita.notas || 'Sin notas',
       })
 
-      setForm({
+      setBloqueados({
         terapeuta_id: cita.terapeuta_id || '',
         servicio_id: cita.servicio_id || '',
         recurso_id: cita.recurso_id || '',
+      })
+
+      setForm({
         fecha: cita.fecha || '',
         hora_inicio: cita.hora_inicio ? cita.hora_inicio.slice(0, 5) : '',
-        hora_fin: cita.hora_fin ? cita.hora_fin.slice(0, 8) : '',
-        estado: 'reprogramada',
-        notas: cita.notas || '',
+        hora_fin: cita.hora_fin ? cita.hora_fin.slice(0, 5) : '',
       })
     } catch (err: any) {
       console.error('Error al cargar reprogramación:', err)
@@ -268,13 +164,13 @@ export default function ReprogramarCitaPage() {
   async function guardarReprogramacion() {
     setErrorMsg('')
 
-    if (!form.terapeuta_id || !form.servicio_id || !form.fecha || !form.hora_inicio) {
-      setErrorMsg('Completa terapeuta, servicio, fecha y hora.')
+    if (!form.fecha || !form.hora_inicio || !form.hora_fin) {
+      setErrorMsg('Completa fecha, hora inicio y hora fin.')
       return
     }
 
-    if (!form.hora_fin) {
-      setErrorMsg('La hora final es obligatoria.')
+    if (form.hora_fin <= form.hora_inicio) {
+      setErrorMsg('La hora final debe ser mayor que la hora inicial.')
       return
     }
 
@@ -284,19 +180,24 @@ export default function ReprogramarCitaPage() {
       const horaInicioNormalizada =
         form.hora_inicio.length === 5 ? `${form.hora_inicio}:00` : form.hora_inicio
 
-      if (form.recurso_id) {
+      const horaFinNormalizada =
+        form.hora_fin.length === 5 ? `${form.hora_fin}:00` : form.hora_fin
+
+      if (bloqueados.recurso_id) {
         const { data: conflictoRecurso, error: errorRecurso } = await supabase
           .from('citas')
           .select('id')
-          .eq('recurso_id', form.recurso_id)
+          .eq('recurso_id', bloqueados.recurso_id)
           .eq('fecha', form.fecha)
           .neq('estado', 'cancelada')
           .neq('id', id)
-          .lt('hora_inicio', form.hora_fin)
+          .lt('hora_inicio', horaFinNormalizada)
           .gt('hora_fin', horaInicioNormalizada)
           .limit(1)
 
-        if (errorRecurso) throw new Error(`Error validando recurso: ${errorRecurso.message}`)
+        if (errorRecurso) {
+          throw new Error(`Error validando recurso: ${errorRecurso.message}`)
+        }
 
         if (conflictoRecurso && conflictoRecurso.length > 0) {
           setErrorMsg('Ese recurso ya está ocupado en ese horario.')
@@ -305,34 +206,34 @@ export default function ReprogramarCitaPage() {
         }
       }
 
-      const { data: conflictoTerapeuta, error: errorTerapeuta } = await supabase
-        .from('citas')
-        .select('id')
-        .eq('terapeuta_id', form.terapeuta_id)
-        .eq('fecha', form.fecha)
-        .neq('estado', 'cancelada')
-        .neq('id', id)
-        .lt('hora_inicio', form.hora_fin)
-        .gt('hora_fin', horaInicioNormalizada)
-        .limit(1)
+      if (bloqueados.terapeuta_id) {
+        const { data: conflictoTerapeuta, error: errorTerapeuta } = await supabase
+          .from('citas')
+          .select('id')
+          .eq('terapeuta_id', bloqueados.terapeuta_id)
+          .eq('fecha', form.fecha)
+          .neq('estado', 'cancelada')
+          .neq('id', id)
+          .lt('hora_inicio', horaFinNormalizada)
+          .gt('hora_fin', horaInicioNormalizada)
+          .limit(1)
 
-      if (errorTerapeuta) throw new Error(`Error validando terapeuta: ${errorTerapeuta.message}`)
+        if (errorTerapeuta) {
+          throw new Error(`Error validando terapeuta: ${errorTerapeuta.message}`)
+        }
 
-      if (conflictoTerapeuta && conflictoTerapeuta.length > 0) {
-        setErrorMsg('Ese terapeuta ya tiene una cita en ese horario.')
-        setSaving(false)
-        return
+        if (conflictoTerapeuta && conflictoTerapeuta.length > 0) {
+          setErrorMsg('Ese terapeuta ya tiene una cita en ese horario.')
+          setSaving(false)
+          return
+        }
       }
 
       const payload = {
-        terapeuta_id: form.terapeuta_id,
-        servicio_id: form.servicio_id,
-        recurso_id: form.recurso_id || null,
         fecha: form.fecha,
         hora_inicio: horaInicioNormalizada,
-        hora_fin: form.hora_fin.length === 5 ? `${form.hora_fin}:00` : form.hora_fin,
-        estado: form.estado,
-        notas: form.notas || null,
+        hora_fin: horaFinNormalizada,
+        estado: 'reprogramada',
       }
 
       const { error } = await supabase.from('citas').update(payload).eq('id', id)
@@ -357,7 +258,7 @@ export default function ReprogramarCitaPage() {
             Reprogramar cita
           </h1>
           <p className="mt-2 text-sm text-white/55">
-            Cambia fecha, hora, terapeuta o recurso con validación de disponibilidad.
+            Aquí solo puedes cambiar fecha y horario. El resto queda bloqueado.
           </p>
         </div>
 
@@ -376,22 +277,25 @@ export default function ReprogramarCitaPage() {
       </div>
 
       <Section
-        title="Resumen actual"
-        description="Datos originales antes de reprogramar."
+        title="Datos bloqueados"
+        description="Estos datos se muestran solo como referencia."
       >
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <SummaryItem label="Cliente" value={resumen.cliente} />
-          <SummaryItem label="Terapeuta actual" value={resumen.terapeuta} />
-          <SummaryItem label="Servicio actual" value={resumen.servicio} />
-          <SummaryItem label="Recurso actual" value={resumen.recurso} />
+          <SummaryItem label="Terapeuta" value={resumen.terapeuta} />
+          <SummaryItem label="Servicio" value={resumen.servicio} />
+          <SummaryItem label="Recurso" value={resumen.recurso} />
           <SummaryItem label="Fecha original" value={resumen.fechaOriginal} />
-          <SummaryItem label="Hora original" value={resumen.horaOriginal} />
+          <SummaryItem label="Hora inicio original" value={resumen.horaInicioOriginal} />
+          <SummaryItem label="Hora fin original" value={resumen.horaFinOriginal} />
+          <SummaryItem label="Estado original" value={resumen.estadoOriginal} />
+          <SummaryItem label="Notas" value={resumen.notas} />
         </div>
       </Section>
 
       <Section
         title="Nueva programación"
-        description="Actualiza terapeuta, servicio, recurso, fecha y horario."
+        description="Actualiza solo fecha y horario."
       >
         {loadingData ? (
           <Card className="p-6">
@@ -405,67 +309,12 @@ export default function ReprogramarCitaPage() {
               </Card>
             ) : null}
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Terapeuta">
-                <select
-                  value={form.terapeuta_id}
-                  onChange={(e) => setForm({ ...form, terapeuta_id: e.target.value })}
-                  className={inputClassName}
-                >
-                  <option value="" className="bg-[#11131a] text-white">Seleccionar terapeuta</option>
-                  {terapeutas.map((t) => (
-                    <option key={t.id} value={t.id} className="bg-[#11131a] text-white">
-                      {t.nombre}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
-              <Field
-                label="Servicio"
-                helper={
-                  servicios.length === 0
-                    ? 'No se encontraron servicios.'
-                    : `${servicios.length} servicio(s) disponible(s).`
-                }
-              >
-                <select
-                  value={form.servicio_id}
-                  onChange={(e) => {
-                    setAutoHoraFin(true) // ✅ activa auto solo cuando el usuario cambia servicio
-                    setForm({ ...form, servicio_id: e.target.value })
-                  }}
-                  className={inputClassName}
-                >
-                  <option value="" className="bg-[#11131a] text-white">Seleccionar servicio</option>
-                  {servicios.map((s) => (
-                    <option key={s.id} value={s.id} className="bg-[#11131a] text-white">
-                      {s.nombre} {s.duracion_min ? `· ${s.duracion_min} min` : ''}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
-              <Field label="Recurso">
-                <select
-                  value={form.recurso_id}
-                  onChange={(e) => setForm({ ...form, recurso_id: e.target.value })}
-                  className={inputClassName}
-                >
-                  <option value="" className="bg-[#11131a] text-white">Sin recurso</option>
-                  {recursos.map((r) => (
-                    <option key={r.id} value={r.id} className="bg-[#11131a] text-white">
-                      {r.nombre}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
+            <div className="grid gap-4 md:grid-cols-3">
               <Field label="Fecha">
                 <input
                   type="date"
                   value={form.fecha}
-                  onChange={(e) => setForm({ ...form, fecha: e.target.value })}
+                  onChange={(e) => setForm((prev) => ({ ...prev, fecha: e.target.value }))}
                   className={inputClassName}
                 />
               </Field>
@@ -474,77 +323,46 @@ export default function ReprogramarCitaPage() {
                 <input
                   type="time"
                   value={form.hora_inicio}
-                  onChange={(e) => setForm({ ...form, hora_inicio: e.target.value })}
+                  onChange={(e) => setForm((prev) => ({ ...prev, hora_inicio: e.target.value }))}
                   className={inputClassName}
                 />
               </Field>
 
-              <Field
-                label="Hora fin"
-                helper={
-                  autoHoraFin && servicioSeleccionado?.duracion_min
-                    ? `Calculado automáticamente: ${servicioSeleccionado.duracion_min} min.`
-                    : 'Puedes editarla manualmente o cambiar el servicio para recalcular.'
-                }
-              >
-                <div className="mb-2 flex items-center justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setAutoHoraFin((prev) => !prev)}
-                    className="text-xs font-medium text-white/45 transition hover:text-white/75"
-                  >
-                    {autoHoraFin ? '🔄 Auto (click para manual)' : '✏️ Manual (click para auto)'}
-                  </button>
-                </div>
+              <Field label="Hora fin">
                 <input
                   type="time"
-                  value={form.hora_fin ? form.hora_fin.slice(0, 5) : ''}
-                  onChange={(e) => {
-                    setAutoHoraFin(false)
-                    setForm({ ...form, hora_fin: `${e.target.value}:00` })
-                  }}
+                  value={form.hora_fin}
+                  onChange={(e) => setForm((prev) => ({ ...prev, hora_fin: e.target.value }))}
                   className={inputClassName}
                 />
               </Field>
+            </div>
 
-              <div className="md:col-span-2">
-                <Field label="Notas / Motivo de reprogramación">
-                  <textarea
-                    value={form.notas}
-                    onChange={(e) => setForm({ ...form, notas: e.target.value })}
-                    rows={4}
-                    className={`${inputClassName} resize-none`}
-                    placeholder="Motivo o nota de reprogramación..."
-                  />
-                </Field>
-              </div>
+            <div className="flex flex-wrap gap-3 pt-2">
+              <button
+                type="button"
+                onClick={guardarReprogramacion}
+                disabled={saving}
+                className="
+                  rounded-2xl border border-white/10 bg-white/[0.08]
+                  px-5 py-3 text-sm font-semibold text-white transition
+                  hover:bg-white/[0.12] disabled:opacity-60
+                "
+              >
+                {saving ? 'Guardando...' : 'Guardar reprogramación'}
+              </button>
 
-              <div className="md:col-span-2 flex flex-wrap gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={guardarReprogramacion}
-                  disabled={saving}
-                  className="
-                    rounded-2xl border border-white/10 bg-white/[0.08]
-                    px-5 py-3 text-sm font-semibold text-white transition
-                    hover:bg-white/[0.12] disabled:opacity-60
-                  "
-                >
-                  {saving ? 'Guardando...' : 'Guardar reprogramación'}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => router.push('/admin/operaciones/agenda')}
-                  className="
-                    rounded-2xl border border-white/10 bg-white/[0.03]
-                    px-5 py-3 text-sm font-semibold text-white/80 transition
-                    hover:bg-white/[0.06]
-                  "
-                >
-                  Cancelar
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => router.push('/admin/operaciones/agenda')}
+                className="
+                  rounded-2xl border border-white/10 bg-white/[0.03]
+                  px-5 py-3 text-sm font-semibold text-white/80 transition
+                  hover:bg-white/[0.06]
+                "
+              >
+                Cancelar
+              </button>
             </div>
           </div>
         )}
