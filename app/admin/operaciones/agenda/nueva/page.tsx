@@ -8,7 +8,7 @@ import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import ActionCard from '@/components/ui/ActionCard'
-import { SelectorTasaBCV } from '@/components/finanzas/SelectorTasaBCV'
+import SelectorTasaBCV from '@/components/finanzas/SelectorTasaBCV'
 import DisponibilidadTerapeuta from '@/components/agenda/DisponibilidadTerapeuta'
 
 type Cliente = {
@@ -53,6 +53,27 @@ type MetodoPago = {
   id: string
   nombre: string
   tipo?: string | null
+  moneda?: string | null
+  color?: string | null
+  icono?: string | null
+  cartera?: {
+    nombre: string
+    codigo: string
+  } | null
+}
+
+type ClientePlan = {
+  id: string
+  cliente_id: string
+  plan_id: string
+  sesiones_totales: number
+  sesiones_usadas: number
+  estado: string
+  fecha_inicio: string | null
+  fecha_fin: string | null
+  planes?: {
+    nombre: string
+  } | null
 }
 
 function sumarMinutos(hora: string, minutos: number) {
@@ -100,7 +121,8 @@ const inputClassName = `
   focus:border-white/20 focus:bg-white/[0.05]
 `
 
-const r2 = (v: number | null | undefined) => Math.round(Number(v || 0) * 100) / 100
+const r2 = (v: number | null | undefined) =>
+  Math.round(Number(v || 0) * 100) / 100
 
 function formatMoney(v: number | null | undefined) {
   return new Intl.NumberFormat('en-US', {
@@ -117,6 +139,43 @@ function formatBs(v: number | null | undefined) {
   }).format(Number(v || 0))
 }
 
+function monedaMetodoEsBs(metodo: MetodoPago | null) {
+  if (!metodo) return false
+
+  const moneda = (metodo.moneda || '').toUpperCase()
+  const nombre = (metodo.nombre || '').toLowerCase()
+  const tipo = (metodo.tipo || '').toLowerCase()
+  const carteraCodigo = (metodo.cartera?.codigo || '').toLowerCase()
+
+  return (
+    moneda === 'BS' ||
+    moneda === 'VES' ||
+    nombre.includes('bs') ||
+    nombre.includes('bolívar') ||
+    nombre.includes('bolivar') ||
+    nombre.includes('pago movil') ||
+    nombre.includes('pago móvil') ||
+    nombre.includes('movil') ||
+    nombre.includes('móvil') ||
+    tipo.includes('pago_movil') ||
+    (tipo.includes('transferencia') && moneda === 'VES') ||
+    carteraCodigo.includes('bs') ||
+    carteraCodigo.includes('ves')
+  )
+}
+
+function getPlanDisponible(plan: ClientePlan) {
+  const total = Number(plan.sesiones_totales || 0)
+  const usadas = Number(plan.sesiones_usadas || 0)
+  return Math.max(total - usadas, 0)
+}
+
+function getPlanLabel(plan: ClientePlan) {
+  const nombre = plan.planes?.nombre || 'Plan'
+  const disponibles = getPlanDisponible(plan)
+  return `${nombre} · ${disponibles}/${plan.sesiones_totales} disponibles`
+}
+
 export default function NuevaCitaPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -124,6 +183,7 @@ export default function NuevaCitaPage() {
 
   const [loading, setLoading] = useState(false)
   const [loadingData, setLoadingData] = useState(true)
+  const [loadingPlanes, setLoadingPlanes] = useState(false)
   const [error, setError] = useState('')
 
   const [clientes, setClientes] = useState<Cliente[]>([])
@@ -131,6 +191,7 @@ export default function NuevaCitaPage() {
   const [servicios, setServicios] = useState<Servicio[]>([])
   const [recursos, setRecursos] = useState<Recurso[]>([])
   const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([])
+  const [planesCliente, setPlanesCliente] = useState<ClientePlan[]>([])
 
   const [form, setForm] = useState({
     cliente_id: clienteInicial,
@@ -142,6 +203,8 @@ export default function NuevaCitaPage() {
     hora_fin: '',
     estado: 'programada',
     notas: '',
+    tipo_cita: 'recovery',
+    cliente_plan_id: '',
   })
 
   const [cobrarAhora, setCobrarAhora] = useState(false)
@@ -163,6 +226,19 @@ export default function NuevaCitaPage() {
     void loadData()
   }, [])
 
+  useEffect(() => {
+    if (form.cliente_id) {
+      void loadPlanesCliente(form.cliente_id)
+    } else {
+      setPlanesCliente([])
+      setForm((prev) => ({
+        ...prev,
+        cliente_plan_id: '',
+        tipo_cita: prev.tipo_cita === 'plan' ? 'independiente' : prev.tipo_cita,
+      }))
+    }
+  }, [form.cliente_id])
+
   const servicioSeleccionado = useMemo(
     () => servicios.find((s) => s.id === form.servicio_id) || null,
     [servicios, form.servicio_id]
@@ -171,6 +247,16 @@ export default function NuevaCitaPage() {
   const terapeutaSeleccionado = useMemo(
     () => terapeutas.find((t) => t.id === form.terapeuta_id) || null,
     [terapeutas, form.terapeuta_id]
+  )
+
+  const metodoSeleccionado = useMemo(
+    () => metodosPago.find((m) => m.id === metodoPagoId) || null,
+    [metodosPago, metodoPagoId]
+  )
+
+  const planSeleccionado = useMemo(
+    () => planesCliente.find((p) => p.id === form.cliente_plan_id) || null,
+    [planesCliente, form.cliente_plan_id]
   )
 
   useEffect(() => {
@@ -183,21 +269,15 @@ export default function NuevaCitaPage() {
   }, [form.hora_inicio, servicioSeleccionado])
 
   useEffect(() => {
-    const metodo = metodosPago.find((x) => x.id === metodoPagoId)
-    const nombre = (metodo?.nombre || '').toLowerCase()
-    const tipo = (metodo?.tipo || '').toLowerCase()
+    setEsBs(monedaMetodoEsBs(metodoSeleccionado))
+  }, [metodoSeleccionado])
 
-    const detectadoBs =
-      nombre.includes('bs') ||
-      nombre.includes('bolívar') ||
-      nombre.includes('bolivar') ||
-      nombre.includes('pago móvil') ||
-      tipo.includes('bs') ||
-      tipo.includes('bolívar') ||
-      tipo.includes('bolivar')
-
-    setEsBs(detectadoBs)
-  }, [metodoPagoId, metodosPago])
+  useEffect(() => {
+    if (!esBs) {
+      setTasaCongelada(null)
+      setMontoBsPersonalizado(null)
+    }
+  }, [esBs])
 
   useEffect(() => {
     if (terapeutaSeleccionado?.comision_cita_porcentaje && !montoBaseComision) {
@@ -205,12 +285,27 @@ export default function NuevaCitaPage() {
     }
   }, [terapeutaSeleccionado, montoBaseComision])
 
+  useEffect(() => {
+    if (form.tipo_cita !== 'plan' && form.cliente_plan_id) {
+      setForm((prev) => ({
+        ...prev,
+        cliente_plan_id: '',
+      }))
+    }
+  }, [form.tipo_cita, form.cliente_plan_id])
+
   async function loadData() {
     setLoadingData(true)
     setError('')
 
     try {
-      const [clientesRes, terapeutasRes, serviciosRes, recursosRes, metodosPagoRes] = await Promise.all([
+      const [
+        clientesRes,
+        terapeutasRes,
+        serviciosRes,
+        recursosRes,
+        metodosPagoRes,
+      ] = await Promise.all([
         supabase.from('clientes').select('id, nombre').order('nombre', { ascending: true }),
 
         supabase
@@ -220,14 +315,31 @@ export default function NuevaCitaPage() {
           .eq('estado', 'activo')
           .order('nombre', { ascending: true }),
 
-        supabase.from('servicios').select('*').eq('estado', 'activo').order('nombre', { ascending: true }),
-
-        supabase.from('recursos').select('id, nombre, estado').order('nombre', { ascending: true }),
+        supabase
+          .from('servicios')
+          .select('*')
+          .eq('estado', 'activo')
+          .order('nombre', { ascending: true }),
 
         supabase
-          .from('metodos_pago')
-          .select('id, nombre, tipo')
-          .eq('estado', 'activo')
+          .from('recursos')
+          .select('id, nombre, estado')
+          .order('nombre', { ascending: true }),
+
+        supabase
+          .from('metodos_pago_v2')
+          .select(`
+            id,
+            nombre,
+            tipo,
+            moneda,
+            color,
+            icono,
+            cartera:carteras(nombre, codigo)
+          `)
+          .eq('activo', true)
+          .eq('permite_recibir', true)
+          .order('orden', { ascending: true })
           .order('nombre', { ascending: true }),
       ])
 
@@ -240,7 +352,9 @@ export default function NuevaCitaPage() {
       const clientesData = (clientesRes.data || []) as Cliente[]
       const terapeutasData = (terapeutasRes.data || []) as Terapeuta[]
       const serviciosRaw = (serviciosRes.data || []) as ServicioRaw[]
-      const recursosData = ((recursosRes.data || []) as Recurso[]).filter((r) => r.estado !== 'inactivo')
+      const recursosData = ((recursosRes.data || []) as Recurso[]).filter(
+        (r) => r.estado !== 'inactivo'
+      )
       const metodosPagoData = (metodosPagoRes.data || []) as MetodoPago[]
 
       const serviciosData: Servicio[] = serviciosRaw
@@ -250,6 +364,7 @@ export default function NuevaCitaPage() {
           nombre: s.nombre,
           precio: s.precio ?? null,
           estado: s.estado ?? null,
+          color: s.color ?? null,
           duracion_min: getServicioDuracion(s),
         }))
 
@@ -271,18 +386,81 @@ export default function NuevaCitaPage() {
     }
   }
 
+  async function loadPlanesCliente(clienteId: string) {
+    setLoadingPlanes(true)
+
+    try {
+      const { data, error } = await supabase
+        .from('clientes_planes')
+        .select(`
+          id,
+          cliente_id,
+          plan_id,
+          sesiones_totales,
+          sesiones_usadas,
+          estado,
+          fecha_inicio,
+          fecha_fin,
+          planes(nombre)
+        `)
+        .eq('cliente_id', clienteId)
+        .in('estado', ['activo', 'agotado'])
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+
+      const planes = (data || []) as ClientePlan[]
+      const conDisponibles = planes.filter((p) => getPlanDisponible(p) > 0)
+
+      setPlanesCliente(conDisponibles)
+
+      setForm((prev) => {
+        const planExiste = conDisponibles.some((p) => p.id === prev.cliente_plan_id)
+
+        return {
+          ...prev,
+          cliente_plan_id: planExiste ? prev.cliente_plan_id : '',
+          tipo_cita:
+            prev.tipo_cita === 'plan' && conDisponibles.length === 0
+              ? 'independiente'
+              : prev.tipo_cita,
+        }
+      })
+    } catch (err) {
+      console.error('Error cargando planes del cliente:', err)
+      setPlanesCliente([])
+      setForm((prev) => ({
+        ...prev,
+        cliente_plan_id: '',
+        tipo_cita: prev.tipo_cita === 'plan' ? 'independiente' : prev.tipo_cita,
+      }))
+    } finally {
+      setLoadingPlanes(false)
+    }
+  }
+
   const montoCobroUSD = useMemo(() => {
     if (esBs) {
       if (montoBsPersonalizado && tasaCongelada && tasaCongelada > 0) {
         return r2(montoBsPersonalizado / tasaCongelada)
       }
-      return r2(Number(montoPersonalizado || 0))
+
+      return usarPrecioServicio
+        ? r2(servicioSeleccionado?.precio || 0)
+        : r2(Number(montoPersonalizado || 0))
     }
 
     return usarPrecioServicio
       ? r2(servicioSeleccionado?.precio || 0)
       : r2(Number(montoPersonalizado || 0))
-  }, [esBs, montoBsPersonalizado, tasaCongelada, montoPersonalizado, usarPrecioServicio, servicioSeleccionado])
+  }, [
+    esBs,
+    montoBsPersonalizado,
+    tasaCongelada,
+    montoPersonalizado,
+    usarPrecioServicio,
+    servicioSeleccionado,
+  ])
 
   const montoCobroBs = useMemo(() => {
     if (esBs) {
@@ -306,8 +484,15 @@ export default function NuevaCitaPage() {
     return r2(servicioSeleccionado?.precio || montoCobroUSD || 0)
   }, [montoBaseComision, servicioSeleccionado, montoCobroUSD])
 
-  const rpmMonto = useMemo(() => r2((baseComision * porcentajeRpm) / 100), [baseComision, porcentajeRpm])
-  const terapeutaMonto = useMemo(() => r2(baseComision - rpmMonto), [baseComision, rpmMonto])
+  const rpmMonto = useMemo(
+    () => r2((baseComision * porcentajeRpm) / 100),
+    [baseComision, porcentajeRpm]
+  )
+
+  const terapeutaMonto = useMemo(
+    () => r2(baseComision - rpmMonto),
+    [baseComision, rpmMonto]
+  )
 
   const comisionBalanceOk = useMemo(() => {
     return Math.abs(r2(rpmMonto + terapeutaMonto) - baseComision) < 0.01
@@ -319,12 +504,16 @@ export default function NuevaCitaPage() {
     if (monedaPago === 'USD') {
       return {
         monto_equivalente_usd: montoPagoFinal,
-        monto_equivalente_bs: tasaCongelada ? r2(montoPagoFinal * tasaCongelada) : null,
+        monto_equivalente_bs: tasaCongelada
+          ? r2(montoPagoFinal * tasaCongelada)
+          : null,
       }
     }
 
     return {
-      monto_equivalente_usd: tasaCongelada ? r2(montoPagoFinal / tasaCongelada) : null,
+      monto_equivalente_usd: tasaCongelada
+        ? r2(montoPagoFinal / tasaCongelada)
+        : null,
       monto_equivalente_bs: montoPagoFinal,
     }
   }, [montoPagoFinal, monedaPago, tasaCongelada])
@@ -352,13 +541,31 @@ export default function NuevaCitaPage() {
   }, [baseComision, rpmMonto, terapeutaMonto, tasaCongelada])
 
   async function guardar() {
-    if (!form.cliente_id || !form.terapeuta_id || !form.servicio_id || !form.fecha || !form.hora_inicio) {
-      alert('Completa cliente, terapeuta, servicio, fecha y selecciona una hora en el calendario.')
+    if (
+      !form.cliente_id ||
+      !form.terapeuta_id ||
+      !form.servicio_id ||
+      !form.fecha ||
+      !form.hora_inicio
+    ) {
+      alert(
+        'Completa cliente, terapeuta, servicio, fecha y selecciona una hora en el calendario.'
+      )
       return
     }
 
     if (!form.hora_fin) {
       alert('No se pudo calcular la hora final.')
+      return
+    }
+
+    if (form.tipo_cita === 'plan' && !form.cliente_plan_id) {
+      alert('Debes seleccionar el plan del cliente.')
+      return
+    }
+
+    if (form.tipo_cita === 'plan' && planSeleccionado && getPlanDisponible(planSeleccionado) <= 0) {
+      alert('Ese plan ya no tiene sesiones disponibles.')
       return
     }
 
@@ -413,7 +620,10 @@ export default function NuevaCitaPage() {
           .gt('hora_fin', form.hora_inicio)
           .limit(1)
 
-        if (errorRecurso) throw new Error(`Error validando recurso: ${errorRecurso.message}`)
+        if (errorRecurso) {
+          throw new Error(`Error validando recurso: ${errorRecurso.message}`)
+        }
+
         if (conflictoRecurso && conflictoRecurso.length > 0) {
           alert('Ese recurso ya está ocupado en ese horario.')
           setLoading(false)
@@ -431,7 +641,10 @@ export default function NuevaCitaPage() {
         .gt('hora_fin', form.hora_inicio)
         .limit(1)
 
-      if (errorTerapeuta) throw new Error(`Error validando terapeuta: ${errorTerapeuta.message}`)
+      if (errorTerapeuta) {
+        throw new Error(`Error validando terapeuta: ${errorTerapeuta.message}`)
+      }
+
       if (conflictoTerapeuta && conflictoTerapeuta.length > 0) {
         alert('Ese terapeuta ya tiene una cita en ese horario.')
         setLoading(false)
@@ -444,10 +657,14 @@ export default function NuevaCitaPage() {
         servicio_id: form.servicio_id,
         recurso_id: form.recurso_id || null,
         fecha: form.fecha,
-        hora_inicio: form.hora_inicio.length === 5 ? `${form.hora_inicio}:00` : form.hora_inicio,
+        hora_inicio:
+          form.hora_inicio.length === 5
+            ? `${form.hora_inicio}:00`
+            : form.hora_inicio,
         hora_fin: form.hora_fin,
         estado: form.estado,
         notas: form.notas || null,
+        cliente_plan_id: form.tipo_cita === 'plan' ? form.cliente_plan_id : null,
       }
 
       const { data: citaData, error: citaError } = await supabase
@@ -468,16 +685,26 @@ export default function NuevaCitaPage() {
       if (cobrarAhora && servicioSeleccionado) {
         const cliente = clientes.find((c) => c.id === form.cliente_id)
 
+        const conceptoBase = `${servicioSeleccionado.nombre} - ${cliente?.nombre || 'Cliente'}`
+        const conceptoTipo =
+          form.tipo_cita === 'plan'
+            ? `${conceptoBase} [Plan]`
+            : form.tipo_cita === 'recovery'
+            ? `${conceptoBase} [Recovery]`
+            : `${conceptoBase} [Independiente]`
+
+        const conceptoPago = esBs
+          ? `${conceptoTipo} (${formatMoney(
+              equivalentesPago?.monto_equivalente_usd || 0
+            )} × ${tasaCongelada} = ${formatBs(montoPagoFinal)})`
+          : conceptoTipo
+
         const pagoPayload = {
           fecha: form.fecha,
           tipo_origen: 'cita',
           cliente_id: form.cliente_id,
           cita_id: citaId,
-          concepto: esBs
-            ? `${servicioSeleccionado.nombre} - ${cliente?.nombre || 'Cliente'} (${formatMoney(
-                equivalentesPago?.monto_equivalente_usd || 0
-              )} × ${tasaCongelada} = ${formatBs(montoPagoFinal)})`
-            : `${servicioSeleccionado.nombre} - ${cliente?.nombre || 'Cliente'}`,
+          concepto: conceptoPago,
           categoria: 'cita',
           monto: montoPagoFinal,
           monto_pago: montoPagoFinal,
@@ -485,13 +712,17 @@ export default function NuevaCitaPage() {
           tasa_bcv: tasaCongelada,
           monto_equivalente_usd: equivalentesPago?.monto_equivalente_usd || null,
           monto_equivalente_bs: equivalentesPago?.monto_equivalente_bs || null,
-          metodo_pago_id: metodoPagoId,
+          metodo_pago_id: null,
+          metodo_pago_v2_id: metodoPagoId,
           estado: 'pagado',
           referencia: referenciaPago || null,
           notas: notasPago || null,
         }
 
-        const { error: pagoError } = await supabase.from('pagos').insert(pagoPayload)
+        const { error: pagoError } = await supabase
+          .from('pagos')
+          .insert(pagoPayload)
+
         if (pagoError) {
           if (pagoError.code === '23505') {
             throw new Error('Ya existe un pago registrado para esta cita.')
@@ -522,7 +753,10 @@ export default function NuevaCitaPage() {
           monto_profesional_bs: comisionEquivalentes.monto_profesional_bs,
         }
 
-        const { error: comisionError } = await supabase.from('comisiones_detalle').insert(comisionPayload)
+        const { error: comisionError } = await supabase
+          .from('comisiones_detalle')
+          .insert(comisionPayload)
+
         if (comisionError) {
           if (comisionError.code === '23505') {
             throw new Error('Ya existe una comisión registrada para esta cita.')
@@ -576,7 +810,7 @@ export default function NuevaCitaPage() {
 
       <Section
         title="Formulario de cita"
-        description="Selecciona cliente, terapeuta, servicio, horario, estado y notas."
+        description="Selecciona cliente, terapeuta, servicio, horario, tipo y notas."
       >
         {loadingData ? (
           <Card className="p-6">
@@ -587,7 +821,15 @@ export default function NuevaCitaPage() {
             <Field label="Cliente">
               <select
                 value={form.cliente_id}
-                onChange={(e) => setForm({ ...form, cliente_id: e.target.value })}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    cliente_id: e.target.value,
+                    cliente_plan_id: '',
+                    hora_inicio: '',
+                    hora_fin: '',
+                  }))
+                }
                 className={inputClassName}
               >
                 <option value="" className="bg-[#11131a] text-white">
@@ -600,6 +842,40 @@ export default function NuevaCitaPage() {
                 ))}
               </select>
             </Field>
+
+
+            {form.tipo_cita === 'plan' && (
+              <Field
+                label="Plan del cliente"
+                helper={
+                  loadingPlanes
+                    ? 'Cargando planes...'
+                    : planesCliente.length === 0
+                    ? 'Este cliente no tiene planes activos con sesiones disponibles.'
+                    : 'Selecciona el plan exacto que debe consumir la sesión.'
+                }
+              >
+                <select
+                  value={form.cliente_plan_id}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      cliente_plan_id: e.target.value,
+                    }))
+                  }
+                  className={inputClassName}
+                >
+                  <option value="" className="bg-[#11131a] text-white">
+                    Seleccionar plan
+                  </option>
+                  {planesCliente.map((plan) => (
+                    <option key={plan.id} value={plan.id} className="bg-[#11131a] text-white">
+                      {getPlanLabel(plan)}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
 
             <Field label="Terapeuta">
               <select
@@ -619,7 +895,10 @@ export default function NuevaCitaPage() {
                 </option>
                 {terapeutas.map((t) => (
                   <option key={t.id} value={t.id} className="bg-[#11131a] text-white">
-                    {t.nombre} {t.comision_cita_porcentaje ? `(${t.comision_cita_porcentaje}% terapeuta)` : ''}
+                    {t.nombre}{' '}
+                    {t.comision_cita_porcentaje
+                      ? `(${t.comision_cita_porcentaje}% terapeuta)`
+                      : ''}
                   </option>
                 ))}
               </select>
@@ -637,7 +916,8 @@ export default function NuevaCitaPage() {
                 value={form.servicio_id}
                 onChange={(e) => {
                   const servicioId = e.target.value
-                  const servicio = servicios.find((s) => s.id === servicioId) || null
+                  const servicio =
+                    servicios.find((s) => s.id === servicioId) || null
 
                   setForm((prev) => ({
                     ...prev,
@@ -661,7 +941,9 @@ export default function NuevaCitaPage() {
                 </option>
                 {servicios.map((s) => (
                   <option key={s.id} value={s.id} className="bg-[#11131a] text-white">
-                    {s.nombre} {s.duracion_min ? `· ${s.duracion_min} min` : ''} {s.precio ? `· $${s.precio}` : ''}
+                    {s.nombre}
+                    {s.duracion_min ? ` · ${s.duracion_min} min` : ''}
+                    {s.precio ? ` · $${s.precio}` : ''}
                   </option>
                 ))}
               </select>
@@ -702,7 +984,7 @@ export default function NuevaCitaPage() {
 
             <Field
               label="Estado"
-              helper="Programada, confirmada, reprogramada y completada reservan sesión. Cancelada no."
+              helper="Solo la cita completada debe consumir sesión si está ligada a un plan."
             >
               <select
                 value={form.estado}
@@ -827,22 +1109,39 @@ export default function NuevaCitaPage() {
                     </option>
                     {metodosPago.map((mp) => (
                       <option key={mp.id} value={mp.id} className="bg-[#11131a] text-white">
-                        {mp.nombre}{mp.tipo ? ` · ${mp.tipo}` : ''}
+                        {mp.nombre}
+                        {mp.moneda ? ` · ${mp.moneda}` : ''}
+                        {mp.tipo ? ` · ${mp.tipo}` : ''}
                       </option>
                     ))}
                   </select>
                 </Field>
 
-                <Field label="Monto" helper={usarPrecioServicio ? 'Precio del servicio' : 'Monto personalizado'}>
+                <Field
+                  label={`Monto ${esBs ? '(USD base)' : ''}`}
+                  helper={
+                    esBs
+                      ? 'Para pagos en Bs, este monto base se convierte con la tasa BCV.'
+                      : usarPrecioServicio
+                      ? 'Precio del servicio'
+                      : 'Monto personalizado'
+                  }
+                >
                   <div className="flex gap-2">
                     <input
                       type="number"
                       min={0}
                       step="0.01"
-                      value={usarPrecioServicio ? (servicioSeleccionado?.precio ?? '') : montoPersonalizado}
+                      value={
+                        usarPrecioServicio
+                          ? (servicioSeleccionado?.precio ?? '')
+                          : montoPersonalizado
+                      }
                       readOnly={usarPrecioServicio}
                       onChange={(e) => setMontoPersonalizado(e.target.value)}
-                      className={`${inputClassName} ${usarPrecioServicio ? 'cursor-not-allowed opacity-60' : ''}`}
+                      className={`${inputClassName} ${
+                        usarPrecioServicio ? 'cursor-not-allowed opacity-60' : ''
+                      }`}
                       placeholder="0.00"
                     />
                     <button
@@ -860,11 +1159,16 @@ export default function NuevaCitaPage() {
                     <SelectorTasaBCV
                       fecha={form.fecha}
                       monedaPago="BS"
-                      montoUSD={usarPrecioServicio ? Number(servicioSeleccionado?.precio || 0) : Number(montoPersonalizado || 0)}
+                      montoUSD={
+                        usarPrecioServicio
+                          ? Number(servicioSeleccionado?.precio || 0)
+                          : Number(montoPersonalizado || 0)
+                      }
                       montoBs={montoBsPersonalizado || undefined}
                       onTasaChange={setTasaCongelada}
                       onMontoBsChange={(monto) => {
                         setMontoBsPersonalizado(monto)
+
                         if (monto > 0 && tasaCongelada) {
                           setUsarPrecioServicio(false)
                           setMontoPersonalizado(String(r2(monto / tasaCongelada)))
@@ -898,20 +1202,42 @@ export default function NuevaCitaPage() {
 
                 <div className="md:col-span-2 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
                   <p className="text-sm font-medium text-white/75">Resumen de cobro</p>
+
                   <div className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+                    <div>
+                      <p className="text-xs text-white/45">Método</p>
+                      <p className="text-white">{metodoSeleccionado?.nombre || '—'}</p>
+                    </div>
+
                     <div>
                       <p className="text-xs text-white/45">Moneda</p>
                       <p className="text-white">{monedaPago}</p>
                     </div>
+
                     <div>
                       <p className="text-xs text-white/45">Monto cobrado</p>
                       <p className="text-white">
                         {esBs ? formatBs(montoPagoFinal) : formatMoney(montoPagoFinal)}
                       </p>
                     </div>
+
                     <div>
                       <p className="text-xs text-white/45">Equivalente USD</p>
-                      <p className="text-white">{formatMoney(equivalentesPago?.monto_equivalente_usd || 0)}</p>
+                      <p className="text-white">
+                        {formatMoney(equivalentesPago?.monto_equivalente_usd || 0)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs text-white/45">Equivalente Bs</p>
+                      <p className="text-white">
+                        {formatBs(equivalentesPago?.monto_equivalente_bs || 0)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-xs text-white/45">Cartera</p>
+                      <p className="text-white">{metodoSeleccionado?.cartera?.nombre || '—'}</p>
                     </div>
                   </div>
                 </div>
@@ -931,7 +1257,9 @@ export default function NuevaCitaPage() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field
                   label="Precio oficial / base comisión"
-                  helper={`Servicio: ${servicioSeleccionado?.precio ? `$${servicioSeleccionado.precio}` : '$0.00'}`}
+                  helper={`Servicio: ${
+                    servicioSeleccionado?.precio ? `$${servicioSeleccionado.precio}` : '$0.00'
+                  }`}
                 >
                   <input
                     type="number"
@@ -977,14 +1305,23 @@ export default function NuevaCitaPage() {
                       <div>
                         <p className="text-xs text-white/35">RPM recibe</p>
                         <p className="font-semibold text-violet-400">${rpmMonto.toFixed(2)}</p>
-                        <p className="text-xs text-white/25">{porcentajeRpm}% de ${baseComision.toFixed(2)}</p>
+                        <p className="text-xs text-white/25">
+                          {porcentajeRpm}% de ${baseComision.toFixed(2)}
+                        </p>
                       </div>
+
                       <div>
                         <p className="text-xs text-white/35">Terapeuta recibe</p>
-                        <p className={`font-semibold ${terapeutaMonto < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        <p
+                          className={`font-semibold ${
+                            terapeutaMonto < 0 ? 'text-rose-400' : 'text-emerald-400'
+                          }`}
+                        >
                           ${terapeutaMonto.toFixed(2)}
                         </p>
-                        <p className="text-xs text-white/25">{(100 - porcentajeRpm).toFixed(0)}% de ${baseComision.toFixed(2)}</p>
+                        <p className="text-xs text-white/25">
+                          {(100 - porcentajeRpm).toFixed(0)}% de ${baseComision.toFixed(2)}
+                        </p>
                       </div>
                     </div>
 
@@ -1014,12 +1351,14 @@ export default function NuevaCitaPage() {
                             {formatBs(comisionEquivalentes.monto_base_bs || 0)}
                           </span>
                         </div>
+
                         <div>
                           <span className="text-white/55">RPM en Bs: </span>
                           <span className="text-white/75">
                             {formatBs(comisionEquivalentes.monto_rpm_bs || 0)}
                           </span>
                         </div>
+
                         <div>
                           <span className="text-white/55">Terapeuta en Bs: </span>
                           <span className="text-white/75">
@@ -1044,32 +1383,66 @@ export default function NuevaCitaPage() {
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-white/55">Cliente:</span>
-              <span className="text-white/75">{clientes.find((c) => c.id === form.cliente_id)?.nombre || 'No seleccionado'}</span>
+              <span className="text-white/75">
+                {clientes.find((c) => c.id === form.cliente_id)?.nombre || 'No seleccionado'}
+              </span>
             </div>
+
+            <div className="flex justify-between">
+              <span className="text-white/55">Tipo:</span>
+              <span className="text-white/75">
+                {form.tipo_cita === 'plan'
+                  ? 'Plan de entrenamiento'
+                  : form.tipo_cita === 'recovery'
+                  ? 'Recovery'
+                  : 'Independiente'}
+              </span>
+            </div>
+
+            {form.tipo_cita === 'plan' && (
+              <div className="flex justify-between">
+                <span className="text-white/55">Plan:</span>
+                <span className="text-white/75">
+                  {planSeleccionado ? getPlanLabel(planSeleccionado) : 'No seleccionado'}
+                </span>
+              </div>
+            )}
+
             <div className="flex justify-between">
               <span className="text-white/55">Terapeuta:</span>
-              <span className="text-white/75">{terapeutas.find((t) => t.id === form.terapeuta_id)?.nombre || 'No seleccionado'}</span>
+              <span className="text-white/75">
+                {terapeutas.find((t) => t.id === form.terapeuta_id)?.nombre || 'No seleccionado'}
+              </span>
             </div>
+
             <div className="flex justify-between">
               <span className="text-white/55">Servicio:</span>
-              <span className="text-white/75">{servicioSeleccionado?.nombre || 'No seleccionado'}</span>
+              <span className="text-white/75">
+                {servicioSeleccionado?.nombre || 'No seleccionado'}
+              </span>
             </div>
+
             {servicioSeleccionado?.precio ? (
               <div className="flex justify-between">
                 <span className="text-white/55">Precio base:</span>
                 <span className="text-white/75">${servicioSeleccionado.precio}</span>
               </div>
             ) : null}
+
             <div className="flex justify-between">
               <span className="text-white/55">Fecha:</span>
               <span className="text-white/75">{form.fecha || 'No seleccionada'}</span>
             </div>
+
             <div className="flex justify-between">
               <span className="text-white/55">Hora:</span>
               <span className="text-white/75">
-                {form.hora_inicio ? `${form.hora_inicio.slice(0, 5)} - ${form.hora_fin?.slice(0, 5)}` : 'No seleccionada'}
+                {form.hora_inicio
+                  ? `${form.hora_inicio.slice(0, 5)} - ${form.hora_fin?.slice(0, 5)}`
+                  : 'No seleccionada'}
               </span>
             </div>
+
             <div className="flex justify-between">
               <span className="text-white/55">Estado:</span>
               <span className="text-white/75">{form.estado || 'No seleccionado'}</span>
@@ -1077,42 +1450,59 @@ export default function NuevaCitaPage() {
 
             {cobrarAhora && (
               <>
-                <div className="my-2 border-t border-white/10"></div>
+                <div className="my-2 border-t border-white/10" />
+
                 <div className="flex justify-between">
                   <span className="text-white/55">Cobro:</span>
                   <span className="text-white/75">Sí</span>
                 </div>
+
+                <div className="flex justify-between">
+                  <span className="text-white/55">Método:</span>
+                  <span className="text-white/75">
+                    {metodoSeleccionado?.nombre || 'No seleccionado'}
+                  </span>
+                </div>
+
                 <div className="flex justify-between">
                   <span className="text-white/55">Moneda:</span>
                   <span className="text-white/75">{monedaPago}</span>
                 </div>
+
                 <div className="flex justify-between">
                   <span className="text-white/55">Monto cobrado:</span>
                   <span className="text-white/75">
                     {esBs ? formatBs(montoPagoFinal) : formatMoney(montoPagoFinal)}
                   </span>
                 </div>
+
                 <div className="flex justify-between">
                   <span className="text-white/55">Base comisión (USD):</span>
                   <span className="text-white/75">${baseComision.toFixed(2)}</span>
                 </div>
+
                 <div className="flex justify-between">
                   <span className="text-white/55">RPM recibe (USD):</span>
                   <span className="text-white/75">${rpmMonto.toFixed(2)}</span>
                 </div>
+
                 <div className="flex justify-between">
                   <span className="text-white/55">Terapeuta recibe (USD):</span>
                   <span className="text-white/75">${terapeutaMonto.toFixed(2)}</span>
                 </div>
+
                 {tasaCongelada ? (
                   <>
                     <div className="flex justify-between text-xs text-white/45">
                       <span className="text-white/55">Tasa BCV:</span>
                       <span className="text-white/55">Bs. {tasaCongelada.toFixed(2)}</span>
                     </div>
+
                     <div className="flex justify-between text-xs text-white/45">
                       <span className="text-white/55">Equivalente Bs base comisión:</span>
-                      <span className="text-white/55">{formatBs(comisionEquivalentes.monto_base_bs || 0)}</span>
+                      <span className="text-white/55">
+                        {formatBs(comisionEquivalentes.monto_base_bs || 0)}
+                      </span>
                     </div>
                   </>
                 ) : null}
@@ -1130,7 +1520,12 @@ export default function NuevaCitaPage() {
             loading ||
             servicios.length === 0 ||
             !form.hora_inicio ||
-            (cobrarAhora && (!comisionBalanceOk || baseComision <= 0 || porcentajeRpm < 0 || porcentajeRpm > 100))
+            (form.tipo_cita === 'plan' && !form.cliente_plan_id) ||
+            (cobrarAhora &&
+              (!comisionBalanceOk ||
+                baseComision <= 0 ||
+                porcentajeRpm < 0 ||
+                porcentajeRpm > 100))
           }
           className="
             rounded-2xl border border-white/10 bg-white/[0.08]

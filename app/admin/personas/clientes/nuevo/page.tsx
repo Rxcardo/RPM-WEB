@@ -9,8 +9,6 @@ import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import ActionCard from '@/components/ui/ActionCard'
 import SelectorTasaBCV from '@/components/finanzas/SelectorTasaBCV'
-import { registrarPago } from '@/lib/finanzas/pagos'
-import type { Moneda } from '@/lib/finanzas/tasas'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -41,8 +39,13 @@ type MetodoPago = {
   id: string
   nombre: string
   tipo: string | null
-  moneda: 'USD' | 'BS' | string | null
-  estado?: string | null
+  moneda: 'USD' | 'VES' | 'BS' | string | null
+  color?: string | null
+  icono?: string | null
+  cartera?: {
+    nombre: string
+    codigo: string
+  } | null
 }
 
 type EntrenamientoExistente = {
@@ -141,6 +144,37 @@ function generarFechasSesiones(fechaInicio: string, diasSemana: number[], totalS
   return fechas
 }
 
+function r2(v: number) {
+  return Math.round(v * 100) / 100
+}
+
+function detectarMetodoBs(metodo: MetodoPago | null) {
+  if (!metodo) return false
+
+  const moneda = (metodo.moneda || '').toUpperCase()
+  const nombre = (metodo.nombre || '').toLowerCase()
+  const tipo = (metodo.tipo || '').toLowerCase()
+  const carteraCodigo = (metodo.cartera?.codigo || '').toLowerCase()
+
+  return (
+    moneda === 'BS' ||
+    moneda === 'VES' ||
+    nombre.includes('bs') ||
+    nombre.includes('bolívar') ||
+    nombre.includes('bolivar') ||
+    nombre.includes('pago movil') ||
+    nombre.includes('pago móvil') ||
+    nombre.includes('movil') ||
+    nombre.includes('móvil') ||
+    tipo.includes('bs') ||
+    tipo.includes('bolívar') ||
+    tipo.includes('bolivar') ||
+    tipo.includes('pago_movil') ||
+    carteraCodigo.includes('bs') ||
+    carteraCodigo.includes('ves')
+  )
+}
+
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 
 function Field({ label, children, helper }: { label: string; children: ReactNode; helper?: string }) {
@@ -161,7 +195,7 @@ const inputCls = `
 
 // ─── Paso indicator ───────────────────────────────────────────────────────────
 
-function PasoIndicator({ paso, actual }: { paso: number; actual: number }) {
+function PasoIndicator({ actual }: { paso?: number; actual: number }) {
   const pasos = [
     { n: 1, label: 'Datos del cliente' },
     { n: 2, label: 'Plan y entrenamientos' },
@@ -338,7 +372,6 @@ export default function NuevoClientePage() {
   const [saving, setSaving] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
 
-  // Data
   const [terapeutas, setTerapeutas] = useState<Terapeuta[]>([])
   const [planes, setPlanes] = useState<Plan[]>([])
   const [recursos, setRecursos] = useState<Recurso[]>([])
@@ -346,12 +379,9 @@ export default function NuevoClientePage() {
   const [loadingData, setLoadingData] = useState(true)
   const [entrenamientosEmpleado, setEntrenamientosEmpleado] = useState<EntrenamientoExistente[]>([])
 
-  // ID del cliente creado (entre pasos)
   const [clienteId, setClienteId] = useState<string | null>(null)
-  // ID del plan del cliente recién creado
   const [clientePlanId, setClientePlanId] = useState<string | null>(null)
 
-  // ── Paso 1: Datos cliente ──────────────────────────────────────────────────
   const [formCliente, setFormCliente] = useState({
     nombre: '',
     telefono: '',
@@ -364,7 +394,6 @@ export default function NuevoClientePage() {
     notas: '',
   })
 
-  // ── Paso 2: Plan y entrenamientos ─────────────────────────────────────────
   const [saltarPlan, setSaltarPlan] = useState(false)
   const [planId, setPlanId] = useState('')
   const [fechaInicio, setFechaInicio] = useState(getTodayLocal())
@@ -375,15 +404,13 @@ export default function NuevoClientePage() {
   const [duracionMin, setDuracionMin] = useState(60)
   const [fechaVistaCal, setFechaVistaCal] = useState(getTodayLocal())
 
-  // ── Paso 3: Pago ───────────────────────────────────────────────────────────
   const [saltarPago, setSaltarPago] = useState(false)
   const [metodoPagoId, setMetodoPagoId] = useState('')
   const [usarPrecioPlan, setUsarPrecioPlan] = useState(true)
   const [montoPersonalizado, setMontoPersonalizado] = useState('')
   const [notasPago, setNotasPago] = useState('')
-  const [origenCliente, setOrigenCliente] = useState<'rpm' | 'entrenador'>('rpm')
+  const [referenciaPago, setReferenciaPago] = useState('')
   const [porcentajeRpm, setPorcentajeRpm] = useState(35)
-  const [montoBaseComision, setMontoBaseComision] = useState('')
   const [mostrarCrearPlan, setMostrarCrearPlan] = useState(false)
   const [nuevoPlanNombre, setNuevoPlanNombre] = useState('')
   const [nuevoPlanSesiones, setNuevoPlanSesiones] = useState(12)
@@ -391,18 +418,9 @@ export default function NuevoClientePage() {
   const [nuevoPlanPrecio, setNuevoPlanPrecio] = useState('')
   const [creandoPlan, setCreandoPlan] = useState(false)
 
-  // ── Crear método de pago inline ────────────────────────────────────────────
-  const [mostrarCrearMetodoPago, setMostrarCrearMetodoPago] = useState(false)
-  const [creandoMetodoPago, setCreandoMetodoPago] = useState(false)
-  const [nuevoMetodoPagoNombre, setNuevoMetodoPagoNombre] = useState('')
-  const [nuevoMetodoPagoMoneda, setNuevoMetodoPagoMoneda] = useState<'USD' | 'BS'>('USD')
-
-  // ── Estados para pago en Bs con tasas ──────────────────────────────────────
   const [esBs, setEsBs] = useState(false)
   const [tasaCongelada, setTasaCongelada] = useState<number | null>(null)
   const [montoBsPersonalizado, setMontoBsPersonalizado] = useState<number | null>(null)
-
-  // ── Carga inicial ──────────────────────────────────────────────────────────
 
   useEffect(() => {
     void loadData()
@@ -428,10 +446,20 @@ export default function NuevoClientePage() {
       supabase.from('recursos').select('id, nombre, tipo').order('nombre'),
 
       supabase
-        .from('metodos_pago')
-        .select('id, nombre, tipo, moneda, estado')
-        .eq('estado', 'activo')
-        .order('nombre'),
+        .from('metodos_pago_v2')
+        .select(`
+          id,
+          nombre,
+          tipo,
+          moneda,
+          color,
+          icono,
+          cartera:carteras(nombre, codigo)
+        `)
+        .eq('activo', true)
+        .eq('permite_recibir', true)
+        .order('orden', { ascending: true })
+        .order('nombre', { ascending: true }),
     ])
 
     setTerapeutas((tRes.data || []) as Terapeuta[])
@@ -441,7 +469,6 @@ export default function NuevoClientePage() {
     setLoadingData(false)
   }
 
-  // Cargar entrenamientos cuando cambia entrenador o fecha vista
   useEffect(() => {
     if (!empleadoId || !fechaVistaCal) {
       setEntrenamientosEmpleado([])
@@ -458,22 +485,14 @@ export default function NuevoClientePage() {
       .then(({ data }) => setEntrenamientosEmpleado((data || []) as unknown as EntrenamientoExistente[]))
   }, [empleadoId, fechaVistaCal])
 
-  // Detectar método Bs
+  const metodoSeleccionado = useMemo(
+    () => metodosPago.find((x) => x.id === metodoPagoId) || null,
+    [metodosPago, metodoPagoId]
+  )
+
   useEffect(() => {
-    const m = metodosPago.find((x) => x.id === metodoPagoId)
-    const moneda = (m?.moneda || '').toUpperCase()
-    const nombre = (m?.nombre || '').toLowerCase()
-
-    setEsBs(
-      moneda === 'BS' ||
-        nombre.includes('bs') ||
-        nombre.includes('bolívar') ||
-        nombre.includes('bolivar') ||
-        nombre.includes('pago móvil')
-    )
-  }, [metodoPagoId, metodosPago])
-
-  // ── Cálculos ──────────────────────────────────────────────────────────────
+    setEsBs(detectarMetodoBs(metodoSeleccionado))
+  }, [metodoSeleccionado])
 
   const planSeleccionado = useMemo(() => planes.find((p) => p.id === planId) || null, [planes, planId])
 
@@ -528,7 +547,6 @@ export default function NuevoClientePage() {
 
       setPlanes((prev) => [...prev, plan as Plan].sort((a, b) => a.nombre.localeCompare(b.nombre)))
       setPlanId(plan.id)
-      setMontoBaseComision(String(plan.precio))
       setMostrarCrearPlan(false)
       setNuevoPlanNombre('')
       setNuevoPlanSesiones(12)
@@ -541,79 +559,36 @@ export default function NuevoClientePage() {
     }
   }
 
-  async function crearMetodoPagoInline() {
-    if (!nuevoMetodoPagoNombre.trim()) {
-      alert('Ingresa el nombre del método de pago.')
-      return
-    }
-
-    setCreandoMetodoPago(true)
-
-    try {
-      const nombreNormalizado = nuevoMetodoPagoNombre.trim()
-
-      const { data: metodo, error } = await supabase
-        .from('metodos_pago')
-        .insert({
-          nombre: nombreNormalizado,
-          moneda: nuevoMetodoPagoMoneda,
-          estado: 'activo',
-        })
-        .select('id, nombre, tipo, moneda, estado')
-        .single()
-
-      if (error) throw new Error(error.message)
-      if (!metodo) throw new Error('No se pudo crear el método de pago.')
-
-      setMetodosPago((prev) =>
-        [...prev, metodo as MetodoPago].sort((a, b) => a.nombre.localeCompare(b.nombre))
-      )
-      setMetodoPagoId(metodo.id)
-      setMostrarCrearMetodoPago(false)
-      setNuevoMetodoPagoNombre('')
-      setNuevoMetodoPagoMoneda('USD')
-    } catch (err: any) {
-      alert(err?.message || 'Error al crear el método de pago.')
-    } finally {
-      setCreandoMetodoPago(false)
-    }
-  }
-
   async function registrarComision(
-    clientePlanId: string,
+    clientePlanIdValue: string,
     empId: string,
-    clienteId: string,
-    montoFinal: number,
-    montoBase: number,
+    clienteIdValue: string,
+    montoBaseComision: number,
     fecha: string,
-    porcRpm: number,
-    origen: 'rpm' | 'entrenador'
+    porcRpm: number
   ) {
     try {
-      const rpm = Math.round(((montoBase * porcRpm) / 100) * 100) / 100
-      const profesional = origen === 'rpm' ? Math.round((montoBase - rpm) * 100) / 100 : 0
-      const base = origen === 'rpm' ? montoBase : rpm
+      const rpm = r2((montoBaseComision * porcRpm) / 100)
+      const profesional = r2(montoBaseComision - rpm)
 
       const { error } = await supabase.from('comisiones_detalle').insert({
         empleado_id: empId,
-        cliente_id: clienteId,
-        cliente_plan_id: clientePlanId,
+        cliente_id: clienteIdValue,
+        cliente_plan_id: clientePlanIdValue,
         fecha,
-        base,
+        base: montoBaseComision,
         profesional,
         rpm,
         tipo: 'plan',
         estado: 'pendiente',
+        porcentaje_rpm: porcRpm,
       })
 
       if (error) console.error('❌ Error comisión:', error.message)
-      else console.log('✅ Comisión registrada:', { origen, montoFinal, montoBase, rpm, profesional })
     } catch (err) {
       console.error('❌ Error registrando comisión:', err)
     }
   }
-
-  // ── PASO 1: Guardar cliente ───────────────────────────────────────────────
 
   async function handleGuardarCliente(e: React.FormEvent) {
     e.preventDefault()
@@ -664,8 +639,6 @@ export default function NuevoClientePage() {
     setPaso(2)
     setErrorMsg('')
   }
-
-  // ── PASO 2: Guardar plan + entrenamientos ─────────────────────────────────
 
   async function handleGuardarPlan(e: React.FormEvent) {
     e.preventDefault()
@@ -755,8 +728,6 @@ export default function NuevoClientePage() {
     }
   }
 
-  // ── PASO 3: Registrar pago y finalizar ────────────────────────────────────
-
   async function handleGuardarPago(e: React.FormEvent) {
     e.preventDefault()
     setErrorMsg('')
@@ -781,48 +752,58 @@ export default function NuevoClientePage() {
         setSaving(true)
 
         try {
-          const monedaPago: Moneda = esBs ? 'BS' : 'USD'
-          const montoPago = esBs && montoBsPersonalizado ? montoBsPersonalizado : montoBase
+          const monedaPago = esBs ? 'BS' : 'USD'
+          const montoPagoFinal = esBs && montoBsPersonalizado ? montoBsPersonalizado : montoBase
+          const montoEquivalenteUSD = esBs && tasaCongelada
+            ? r2(montoPagoFinal / tasaCongelada)
+            : montoBase
+          const montoEquivalenteBS = esBs
+            ? montoPagoFinal
+            : (tasaCongelada ? r2(montoBase * tasaCongelada) : null)
 
-          const { monto_equivalente_usd } = await registrarPago({
+          const concepto = esBs
+            ? `Plan: ${planSeleccionado.nombre} — ${formCliente.nombre} (${formatMoney(
+                montoEquivalenteUSD
+              )} × ${tasaCongelada} = ${formatBs(montoPagoFinal)})`
+            : `Plan: ${planSeleccionado.nombre} — ${formCliente.nombre}`
+
+          const { error: pagoError } = await supabase.from('pagos').insert({
             fecha: fechaInicio,
             tipo_origen: 'plan',
             cliente_id: clienteId,
             cliente_plan_id: clientePlanId,
-            concepto: esBs
-              ? `Plan: ${planSeleccionado.nombre} — ${formCliente.nombre} (${formatMoney(
-                  montoBase
-                )} × ${tasaCongelada} = ${formatBs(montoBsPersonalizado || 0)})`
-              : `Plan: ${planSeleccionado.nombre} — ${formCliente.nombre}`,
+            concepto,
             categoria: 'plan',
+            monto: montoPagoFinal,
+            monto_pago: montoPagoFinal,
             moneda_pago: monedaPago,
-            monto_pago: montoPago,
             tasa_bcv: tasaCongelada,
-            metodo_pago_id: metodoPagoId,
+            monto_equivalente_usd: montoEquivalenteUSD,
+            monto_equivalente_bs: montoEquivalenteBS,
+            metodo_pago_id: null,
+            metodo_pago_v2_id: metodoPagoId,
+            estado: 'pagado',
+            referencia: referenciaPago || null,
             notas: notasPago || null,
           })
 
-          if (empleadoId && clientePlanId) {
-            const baseComision =
-              Number(montoBaseComision) > 0 ? Number(montoBaseComision) : planSeleccionado?.precio || montoBase
+          if (pagoError) throw new Error(pagoError.message)
 
+          if (empleadoId && clientePlanId) {
             await registrarComision(
               clientePlanId,
               empleadoId,
               clienteId,
-              monto_equivalente_usd,
-              baseComision,
+              montoBase,
               fechaInicio,
-              porcentajeRpm,
-              origenCliente
+              porcentajeRpm
             )
 
             await supabase
               .from('clientes_planes')
               .update({
-                origen: origenCliente,
                 porcentaje_rpm: porcentajeRpm,
-                monto_base_comision: baseComision,
+                monto_base_comision: montoBase,
               })
               .eq('id', clientePlanId)
           }
@@ -838,8 +819,6 @@ export default function NuevoClientePage() {
 
     router.push(`/admin/personas/clientes/${clienteId}`)
   }
-
-  // ── Render ────────────────────────────────────────────────────────────────
 
   if (loadingData) {
     return (
@@ -866,7 +845,7 @@ export default function NuevoClientePage() {
       </div>
 
       <Card className="p-4">
-        <PasoIndicator paso={paso} actual={paso} />
+        <PasoIndicator actual={paso} />
       </Card>
 
       {paso === 1 && (
@@ -924,21 +903,11 @@ export default function NuevoClientePage() {
                   onChange={handleClienteChange}
                   className={inputCls}
                 >
-                  <option value="" className="bg-[#11131a]">
-                    Seleccionar
-                  </option>
-                  <option value="masculino" className="bg-[#11131a]">
-                    Masculino
-                  </option>
-                  <option value="femenino" className="bg-[#11131a]">
-                    Femenino
-                  </option>
-                  <option value="otro" className="bg-[#11131a]">
-                    Otro
-                  </option>
-                  <option value="prefiero_no_decir" className="bg-[#11131a]">
-                    Prefiero no decir
-                  </option>
+                  <option value="" className="bg-[#11131a]">Seleccionar</option>
+                  <option value="masculino" className="bg-[#11131a]">Masculino</option>
+                  <option value="femenino" className="bg-[#11131a]">Femenino</option>
+                  <option value="otro" className="bg-[#11131a]">Otro</option>
+                  <option value="prefiero_no_decir" className="bg-[#11131a]">Prefiero no decir</option>
                 </select>
               </Field>
 
@@ -961,9 +930,7 @@ export default function NuevoClientePage() {
                   onChange={handleClienteChange}
                   className={inputCls}
                 >
-                  <option value="" className="bg-[#11131a]">
-                    Sin asignar
-                  </option>
+                  <option value="" className="bg-[#11131a]">Sin asignar</option>
                   {terapeutas.map((t) => (
                     <option key={t.id} value={t.id} className="bg-[#11131a]">
                       {t.nombre}
@@ -980,15 +947,9 @@ export default function NuevoClientePage() {
                   onChange={handleClienteChange}
                   className={inputCls}
                 >
-                  <option value="activo" className="bg-[#11131a]">
-                    Activo
-                  </option>
-                  <option value="pausado" className="bg-[#11131a]">
-                    Pausado
-                  </option>
-                  <option value="inactivo" className="bg-[#11131a]">
-                    Inactivo
-                  </option>
+                  <option value="activo" className="bg-[#11131a]">Activo</option>
+                  <option value="pausado" className="bg-[#11131a]">Pausado</option>
+                  <option value="inactivo" className="bg-[#11131a]">Inactivo</option>
                 </select>
               </Field>
 
@@ -1054,16 +1015,10 @@ export default function NuevoClientePage() {
                     <div className="flex gap-2">
                       <select
                         value={planId}
-                        onChange={(e) => {
-                          setPlanId(e.target.value)
-                          const p = planes.find((x) => x.id === e.target.value)
-                          if (p && !montoBaseComision) setMontoBaseComision(String(p.precio))
-                        }}
+                        onChange={(e) => setPlanId(e.target.value)}
                         className={inputCls}
                       >
-                        <option value="" className="bg-[#11131a]">
-                          Seleccionar plan
-                        </option>
+                        <option value="" className="bg-[#11131a]">Seleccionar plan</option>
                         {planes.map((p) => (
                           <option key={p.id} value={p.id} className="bg-[#11131a]">
                             {p.nombre} · {p.sesiones_totales} ses. · {formatMoney(p.precio)}
@@ -1198,9 +1153,7 @@ export default function NuevoClientePage() {
                       }}
                       className={inputCls}
                     >
-                      <option value="" className="bg-[#11131a]">
-                        Seleccionar entrenador
-                      </option>
+                      <option value="" className="bg-[#11131a]">Seleccionar entrenador</option>
                       {terapeutas.map((t) => (
                         <option key={t.id} value={t.id} className="bg-[#11131a]">
                           {t.nombre}
@@ -1212,9 +1165,7 @@ export default function NuevoClientePage() {
 
                   <Field label="Recurso / Espacio">
                     <select value={recursoId} onChange={(e) => setRecursoId(e.target.value)} className={inputCls}>
-                      <option value="" className="bg-[#11131a]">
-                        Sin recurso
-                      </option>
+                      <option value="" className="bg-[#11131a]">Sin recurso</option>
                       {recursos.map((r) => (
                         <option key={r.id} value={r.id} className="bg-[#11131a]">
                           {r.nombre}
@@ -1419,10 +1370,9 @@ export default function NuevoClientePage() {
                         type="number"
                         min={0}
                         step="0.01"
-                        value={montoBaseComision || planSeleccionado.precio}
-                        onChange={(e) => setMontoBaseComision(e.target.value)}
-                        className={inputCls}
-                        placeholder="0.00"
+                        value={montoBase || planSeleccionado.precio}
+                        readOnly
+                        className={`${inputCls} cursor-not-allowed opacity-80`}
                       />
                     </Field>
 
@@ -1438,147 +1388,24 @@ export default function NuevoClientePage() {
                       />
                     </Field>
                   </div>
-
-                  {(() => {
-                    const base = Number(montoBaseComision) || planSeleccionado.precio || 0
-                    const porcNum = Number(porcentajeRpm) || 0
-                    const rpm = Math.round((base * porcNum) / 100 * 100) / 100
-                    const prof = Math.round((base - rpm) * 100) / 100
-
-                    const advertencia =
-                      porcNum > 70
-                        ? `⚠️ El % RPM es muy alto (${porcNum}%). ¿Seguro?`
-                        : prof < 0
-                          ? '⚠️ El entrenador quedaría en negativo. Revisa los valores.'
-                          : base <= 0
-                            ? '⚠️ Ingresa el precio oficial del plan.'
-                            : null
-
-                    return (
-                      <div className="space-y-2">
-                        {advertencia && <p className="text-xs font-medium text-amber-400">{advertencia}</p>}
-
-                        <div className="grid grid-cols-2 gap-3 rounded-xl bg-white/[0.03] p-3 text-sm">
-                          <div>
-                            <p className="text-xs text-white/35">RPM recibe</p>
-                            <p className="font-semibold text-violet-400">${rpm.toFixed(2)}</p>
-                            <p className="text-xs text-white/25">
-                              {porcNum}% de ${base.toFixed(2)}
-                            </p>
-                          </div>
-
-                          <div>
-                            <p className="text-xs text-white/35">Entrenador recibe</p>
-                            <p className={`font-semibold ${prof < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                              ${prof.toFixed(2)}
-                            </p>
-                            <p className="text-xs text-white/25">
-                              {100 - porcNum}% de ${base.toFixed(2)}
-                            </p>
-                          </div>
-                        </div>
-
-                        {base > 0 && (
-                          <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/10">
-                            <div
-                              className="bg-violet-500/70 transition-all"
-                              style={{ width: `${Math.min(porcNum, 100)}%` }}
-                            />
-                            <div className="flex-1 bg-emerald-500/70" />
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })()}
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Método de pago">
-                    <div className="space-y-2">
-                      <div className="flex gap-2">
-                        <select
-                          value={metodoPagoId}
-                          onChange={(e) => setMetodoPagoId(e.target.value)}
-                          className={inputCls}
-                        >
-                          <option value="" className="bg-[#11131a]">
-                            Seleccionar
-                          </option>
-                          {metodosPago.map((m) => (
-                            <option key={m.id} value={m.id} className="bg-[#11131a]">
-                              {m.nombre}
-                              {m.moneda ? ` · ${m.moneda}` : ''}
-                              {m.tipo ? ` · ${m.tipo}` : ''}
-                            </option>
-                          ))}
-                        </select>
-
-                        <button
-                          type="button"
-                          onClick={() => setMostrarCrearMetodoPago((v) => !v)}
-                          className="shrink-0 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-3 text-xs font-medium text-emerald-300 transition hover:bg-emerald-400/20"
-                        >
-                          + Método
-                        </button>
-                      </div>
-
-                      {mostrarCrearMetodoPago && (
-                        <div className="space-y-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4">
-                          <p className="text-xs font-medium text-emerald-300">Crear método de pago</p>
-
-                          <div className="grid gap-3 sm:grid-cols-2">
-                            <div>
-                              <label className="mb-1 block text-xs text-white/55">Nombre</label>
-                              <input
-                                value={nuevoMetodoPagoNombre}
-                                onChange={(e) => setNuevoMetodoPagoNombre(e.target.value)}
-                                placeholder="Ej: Zelle, Pago móvil, Binance..."
-                                className={inputCls}
-                              />
-                            </div>
-
-                            <div>
-                              <label className="mb-1 block text-xs text-white/55">Moneda</label>
-                              <select
-                                value={nuevoMetodoPagoMoneda}
-                                onChange={(e) => setNuevoMetodoPagoMoneda(e.target.value as 'USD' | 'BS')}
-                                className={inputCls}
-                              >
-                                <option value="USD" className="bg-[#11131a]">
-                                  USD
-                                </option>
-                                <option value="BS" className="bg-[#11131a]">
-                                  BS
-                                </option>
-                              </select>
-                            </div>
-                          </div>
-
-                          <div className="flex gap-2">
-                            <button
-                              type="button"
-                              onClick={crearMetodoPagoInline}
-                              disabled={creandoMetodoPago}
-                              className="rounded-2xl border border-emerald-400/20 bg-emerald-400/15 px-4 py-2 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-400/25 disabled:opacity-60"
-                            >
-                              {creandoMetodoPago ? 'Creando...' : 'Crear y seleccionar'}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setMostrarCrearMetodoPago(false)
-                                setNuevoMetodoPagoNombre('')
-                                setNuevoMetodoPagoMoneda('USD')
-                              }}
-                              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-medium text-white/60 hover:bg-white/[0.06]"
-                            >
-                              Cancelar
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <select
+                      value={metodoPagoId}
+                      onChange={(e) => setMetodoPagoId(e.target.value)}
+                      className={inputCls}
+                    >
+                      <option value="" className="bg-[#11131a]">Seleccionar</option>
+                      {metodosPago.map((m) => (
+                        <option key={m.id} value={m.id} className="bg-[#11131a]">
+                          {m.nombre}
+                          {m.moneda ? ` · ${m.moneda}` : ''}
+                          {m.tipo ? ` · ${m.tipo}` : ''}
+                        </option>
+                      ))}
+                    </select>
                   </Field>
 
                   <Field label="Monto" helper={usarPrecioPlan ? 'Precio del plan' : 'Monto personalizado'}>
@@ -1621,6 +1448,15 @@ export default function NuevoClientePage() {
                     }}
                   />
                 )}
+
+                <Field label="Referencia">
+                  <input
+                    value={referenciaPago}
+                    onChange={(e) => setReferenciaPago(e.target.value)}
+                    className={inputCls}
+                    placeholder="Referencia o comprobante"
+                  />
+                </Field>
 
                 <Field label="Notas del pago">
                   <textarea

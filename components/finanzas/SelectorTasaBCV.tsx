@@ -1,223 +1,180 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { obtenerTasaDia, guardarTasaManual, formatBs, formatUSD } from '@/lib/finanzas/tasas'
+import { obtenerTasaBCV } from '@/lib/finanzas/tasas'
 
-interface Props {
+type Moneda = 'USD' | 'BS'
+
+type Props = {
   fecha: string
-  monedaPago: 'USD' | 'BS'
-  montoUSD: number
+  monedaPago: Moneda
+  montoUSD?: number
   montoBs?: number
   onTasaChange: (tasa: number | null) => void
   onMontoBsChange?: (monto: number) => void
-  className?: string
 }
 
-const inputCls = `
-  w-full rounded-2xl border border-white/10 bg-white/[0.03]
-  px-4 py-3 text-sm text-white outline-none transition
-  placeholder:text-white/35 focus:border-white/20 focus:bg-white/[0.05]
-`
+const r2 = (v: number) => Math.round(v * 100) / 100
+
+function formatBs(v: number) {
+  return new Intl.NumberFormat('es-VE', {
+    style: 'currency',
+    currency: 'VES',
+    maximumFractionDigits: 2,
+  }).format(v)
+}
 
 export default function SelectorTasaBCV({
   fecha,
   monedaPago,
-  montoUSD,
+  montoUSD = 0,
   montoBs,
   onTasaChange,
   onMontoBsChange,
-  className = '',
 }: Props) {
-  const [tasa, setTasa] = useState<string>('')
   const [cargando, setCargando] = useState(false)
-  const [fuente, setFuente] = useState<string>('')
-  const [error, setError] = useState<string>('')
+  const [tasaActual, setTasaActual] = useState<number | null>(null)
+  const [errorMsg, setErrorMsg] = useState('')
+  const [montoBsLocal, setMontoBsLocal] = useState(montoBs || 0)
 
+  // Cargar tasa automáticamente cuando cambia la fecha
   useEffect(() => {
-    if (monedaPago !== 'BS') {
-      setTasa('')
-      setFuente('')
-      setError('')
-      onTasaChange(null)
-      return
+    if (monedaPago !== 'BS') return
+
+    async function cargar() {
+      setCargando(true)
+      setErrorMsg('')
+
+      try {
+        const tasa = await obtenerTasaBCV(fecha, 'USD')
+        setTasaActual(tasa)
+        onTasaChange(tasa)
+
+        // Si hay monto USD y no hay monto Bs personalizado, calcular automáticamente
+        if (tasa && montoUSD > 0 && !montoBs) {
+          const calculado = r2(montoUSD * tasa)
+          setMontoBsLocal(calculado)
+          onMontoBsChange?.(calculado)
+        }
+      } catch (err: any) {
+        console.error('Error cargando tasa:', err)
+        setErrorMsg(err?.message || 'No se pudo obtener la tasa BCV')
+        setTasaActual(null)
+        onTasaChange(null)
+      } finally {
+        setCargando(false)
+      }
     }
 
-    void cargarTasa()
+    void cargar()
   }, [fecha, monedaPago])
 
-  async function cargarTasa() {
-    setCargando(true)
-    setError('')
-    setTasa('')
-
-    try {
-      const t = await obtenerTasaDia(fecha, 'USD')
-
-      if (t && t > 0) {
-        setTasa(String(t))
-        setFuente('auto')
-        onTasaChange(t)
-      } else {
-        setFuente('manual')
-        setError('No se pudo obtener la tasa automáticamente. Ingresa la tasa BCV manualmente.')
-      }
-    } catch (err) {
-      console.error('Error cargando tasa:', err)
-      setError('Error al cargar la tasa')
-      setFuente('manual')
-    } finally {
-      setCargando(false)
-    }
-  }
-
-  async function handleTasaChange(value: string) {
-    setTasa(value)
-    const num = Number(value)
-
-    if (num > 0) {
-      onTasaChange(num)
-
-      if (fuente === 'manual') {
-        await guardarTasaManual(fecha, num, 'USD')
-      }
-    } else {
-      onTasaChange(null)
-    }
-  }
+  // Actualizar monto Bs cuando cambia el monto USD o la tasa
+  useEffect(() => {
+    if (!tasaActual || montoUSD <= 0 || montoBs) return
+    const calculado = r2(montoUSD * tasaActual)
+    setMontoBsLocal(calculado)
+    onMontoBsChange?.(calculado)
+  }, [montoUSD, tasaActual, montoBs, onMontoBsChange])
 
   if (monedaPago !== 'BS') return null
 
-  const tasaNum = Number(tasa) || 0
-  const esTasaValida = tasaNum > 0
-
-  const equivalenteBs =
-    esTasaValida && montoUSD > 0
-      ? Math.round(montoUSD * tasaNum * 100) / 100
-      : null
-
-  const equivalenteUsd =
-    esTasaValida && (montoBs || 0) > 0
-      ? Math.round(((montoBs || 0) / tasaNum) * 100) / 100
-      : null
+  const montoBsCalculado = tasaActual && montoUSD > 0 ? r2(montoUSD * tasaActual) : 0
 
   return (
-    <div className={`space-y-4 rounded-2xl border border-amber-400/20 bg-amber-400/5 p-4 ${className}`}>
+    <div className="space-y-4 rounded-2xl border border-amber-400/20 bg-amber-400/5 p-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-amber-300">Pago en bolívares</p>
-
-        <button
-          type="button"
-          onClick={cargarTasa}
-          disabled={cargando}
-          className="rounded-xl border border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-xs font-medium text-amber-300 transition hover:bg-amber-400/15 disabled:opacity-60"
-        >
-          {cargando ? 'Cargando...' : '↻ Actualizar tasa'}
-        </button>
-      </div>
-
-      {cargando && <p className="text-xs text-white/60">🔄 Obteniendo tasa del BCV...</p>}
-      {error && <p className="text-xs text-rose-400">{error}</p>}
-
-      {fuente === 'auto' && tasa && !cargando && (
-        <p className="text-xs text-emerald-400/70">✓ Tasa obtenida automáticamente (BCV)</p>
-      )}
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div>
-          <label className="mb-2 block text-xs font-medium text-white/60">
-            Tasa BCV (Bs por USD)
-          </label>
-
-          <input
-            type="number"
-            step="0.0001"
-            min="0"
-            value={tasa}
-            onChange={(e) => handleTasaChange(e.target.value)}
-            placeholder="Ej: 459.45"
-            className={inputCls}
-          />
-
-          {tasa && Number(tasa) > 0 && (
-            <p className="mt-1 text-xs text-white/40">
-              {Number(tasa).toLocaleString('es-VE')} Bs por USD
-            </p>
-          )}
-        </div>
-
-        {onMontoBsChange && (
-          <div>
-            <label className="mb-2 block text-xs font-medium text-white/60">
-              Monto cobrado en Bs
-            </label>
-
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              value={montoBs ?? ''}
-              onChange={(e) => onMontoBsChange(Number(e.target.value))}
-              placeholder="0.00"
-              className={inputCls}
-            />
+        <p className="text-sm font-medium text-amber-300">Pago en Bolívares</p>
+        {cargando && (
+          <div className="flex items-center gap-2">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-amber-400 border-t-transparent" />
+            <span className="text-xs text-amber-400/70">Obteniendo tasa...</span>
           </div>
         )}
       </div>
 
-      {esTasaValida && (
-        <div className="rounded-xl bg-white/[0.03] p-3">
-          <p className="mb-2 text-xs text-white/45">Se guardará congelado así:</p>
+      {errorMsg && (
+        <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-3">
+          <p className="text-sm text-rose-400">{errorMsg}</p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-2 text-xs text-rose-300 underline"
+          >
+            Reintentar
+          </button>
+        </div>
+      )}
 
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            {montoBs && montoBs > 0 ? (
-              <>
-                <div>
-                  <p className="text-xs text-white/35">Cobrado en Bs</p>
-                  <p className="font-semibold text-amber-300">{formatBs(montoBs)}</p>
-                </div>
-
-                <div>
-                  <p className="text-xs text-white/35">Equivalente USD</p>
-                  <p className="font-semibold text-emerald-400">
-                    {equivalenteUsd ? formatUSD(equivalenteUsd) : '—'}
-                  </p>
-                </div>
-              </>
-            ) : (
-              <>
-                <div>
-                  <p className="text-xs text-white/35">Precio USD</p>
-                  <p className="font-semibold text-white">{formatUSD(montoUSD)}</p>
-                </div>
-
-                <div>
-                  <p className="text-xs text-white/35">Equivalente Bs</p>
-                  <p className="font-semibold text-amber-300">
-                    {equivalenteBs ? formatBs(equivalenteBs) : '—'}
-                  </p>
-                </div>
-              </>
-            )}
-
+      {!cargando && !errorMsg && tasaActual && (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <p className="text-xs text-white/35">Tasa BCV</p>
-              <p className="font-medium text-white/70">
-                Bs{' '}
-                {tasaNum.toLocaleString('es-VE', {
-                  minimumFractionDigits: 4,
-                  maximumFractionDigits: 4,
-                })}
-              </p>
+              <label className="mb-2 block text-xs text-white/55">Tasa BCV (USD)</label>
+              <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                <span className="text-sm font-medium text-emerald-400">
+                  Bs. {tasaActual.toFixed(4)}
+                </span>
+                <span className="ml-auto text-xs text-white/35">
+                  {new Date(fecha).toLocaleDateString('es-VE', {
+                    day: 'numeric',
+                    month: 'short',
+                  })}
+                </span>
+              </div>
             </div>
 
             <div>
-              <p className="text-xs text-white/35">Fecha</p>
-              <p className="font-medium text-white/70">{fecha}</p>
+              <label className="mb-2 block text-xs text-white/55">
+                Total en Bolívares
+                {onMontoBsChange && (
+                  <span className="ml-1 text-white/35">(editable)</span>
+                )}
+              </label>
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={montoBsLocal || montoBsCalculado || ''}
+                onChange={(e) => {
+                  const valor = Number(e.target.value)
+                  setMontoBsLocal(valor)
+                  onMontoBsChange?.(valor)
+                }}
+                readOnly={!onMontoBsChange}
+                placeholder="0.00"
+                className={`w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/35 focus:border-white/20 focus:bg-white/[0.05] ${
+                  !onMontoBsChange ? 'cursor-not-allowed opacity-60' : ''
+                }`}
+              />
             </div>
           </div>
 
-          <p className="mt-2 text-xs text-white/30">
-            ⚠️ Esta tasa quedará fija en el registro. No se recalculará.
+          {montoUSD > 0 && tasaActual && (
+            <div className="rounded-xl bg-white/[0.03] p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-white/55">Base USD:</span>
+                <span className="text-white">${montoUSD.toFixed(2)}</span>
+              </div>
+              <div className="mt-1 flex justify-between">
+                <span className="text-white/55">× Tasa BCV:</span>
+                <span className="text-white">Bs. {tasaActual.toFixed(4)}</span>
+              </div>
+              <div className="mt-2 flex justify-between border-t border-white/10 pt-2">
+                <span className="font-medium text-amber-300">Total calculado:</span>
+                <span className="font-semibold text-amber-400">
+                  {formatBs(montoBsCalculado)}
+                </span>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {!cargando && !errorMsg && !tasaActual && (
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+          <p className="text-sm text-white/55">
+            No se pudo obtener la tasa BCV para esta fecha.
           </p>
         </div>
       )}

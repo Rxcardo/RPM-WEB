@@ -1,6 +1,6 @@
 // app/api/bcv/tasa/route.ts
 import { NextRequest, NextResponse } from 'next/server'
-import { obtenerTasaBCV, obtenerTasaDia, guardarTasaDia } from '@/lib/finanzas/tasas'
+import { obtenerTasaBCV, obtenerTasaBCVDelDia } from '@/lib/finanzas/tasas'
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const tasa = await obtenerTasaDia(fecha, 'USD')
+    const tasa = await obtenerTasaBCVDelDia(fecha, 'USD')
     
     if (tasa) {
       return NextResponse.json({
@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    await guardarTasaDia(fecha, Number(tasa), moneda, 'manual')
+    await obtenerTasaBCVDelDia(fecha, Number(tasa), moneda, 'manual')
 
     return NextResponse.json({
       success: true,

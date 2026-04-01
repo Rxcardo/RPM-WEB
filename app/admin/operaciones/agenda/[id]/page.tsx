@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic'
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
@@ -25,6 +25,19 @@ type ServicioDetalle = {
   [key: string]: any
 }
 
+type ClientePlanDetalle = {
+  id: string
+  sesiones_totales: number | null
+  sesiones_usadas: number | null
+  estado: string | null
+  fecha_inicio: string | null
+  fecha_fin: string | null
+  planes: {
+    id: string
+    nombre: string | null
+  } | null
+}
+
 type CitaDetalle = {
   id: string
   fecha: string
@@ -33,10 +46,12 @@ type CitaDetalle = {
   estado: string
   notas: string | null
   created_at: string | null
+  cliente_plan_id: string | null
   clientes: { id: string; nombre: string } | null
   empleados: { id: string; nombre: string } | null
   servicios: ServicioDetalle | null
   recursos: { id: string; nombre: string } | null
+  clientes_planes: ClientePlanDetalle | null
 }
 
 type PagoDetalle = {
@@ -55,6 +70,7 @@ type PagoDetalle = {
   estado: string | null
   notas: string | null
   metodos_pago: { id: string; nombre: string } | null
+  metodos_pago_v2: { id: string; nombre: string } | null
 }
 
 type ComisionDetalle = {
@@ -120,6 +136,12 @@ function estadoClasses(estado: string) {
   }
 }
 
+function tipoCitaClasses(esPlan: boolean, esRecovery: boolean) {
+  if (esPlan) return 'border-violet-400/20 bg-violet-400/10 text-violet-300'
+  if (esRecovery) return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+  return 'border-white/10 bg-white/[0.05] text-white/70'
+}
+
 function formatFecha(fecha: string | null | undefined) {
   if (!fecha) return '—'
   try {
@@ -171,8 +193,27 @@ function DetailItem({
   )
 }
 
+function getTipoCita(cita: CitaDetalle | null) {
+  if (!cita) return '—'
+  if (cita.cliente_plan_id) return 'Plan'
+
+  const notas = (cita.notas || '').toLowerCase()
+  const servicio = (cita.servicios?.nombre || '').toLowerCase()
+
+  if (notas.includes('recovery') || servicio.includes('recovery')) {
+    return 'Recovery'
+  }
+
+  return 'Independiente'
+}
+
+function getPlanDisponible(plan: ClientePlanDetalle | null) {
+  const total = Number(plan?.sesiones_totales || 0)
+  const usadas = Number(plan?.sesiones_usadas || 0)
+  return Math.max(total - usadas, 0)
+}
+
 export default function VerCitaPage() {
-  const router = useRouter()
   const params = useParams()
   const rawId = params?.id
   const id = Array.isArray(rawId) ? rawId[0] : (rawId as string)
@@ -185,6 +226,13 @@ export default function VerCitaPage() {
   const [errorMsg, setErrorMsg] = useState('')
 
   const duracionServicio = useMemo(() => getServicioDuracion(cita?.servicios || null), [cita])
+
+  const esPlan = Boolean(cita?.cliente_plan_id)
+  const esRecovery = useMemo(() => {
+    const notas = (cita?.notas || '').toLowerCase()
+    const servicio = (cita?.servicios?.nombre || '').toLowerCase()
+    return !esPlan && (notas.includes('recovery') || servicio.includes('recovery'))
+  }, [cita, esPlan])
 
   const puedeConfirmar = useMemo(() => {
     const estado = (cita?.estado || '').toLowerCase()
@@ -227,10 +275,20 @@ export default function VerCitaPage() {
             estado,
             notas,
             created_at,
+            cliente_plan_id,
             clientes:cliente_id ( id, nombre ),
             empleados:terapeuta_id ( id, nombre ),
             servicios:servicio_id ( * ),
-            recursos:recurso_id ( id, nombre )
+            recursos:recurso_id ( id, nombre ),
+            clientes_planes:cliente_plan_id (
+              id,
+              sesiones_totales,
+              sesiones_usadas,
+              estado,
+              fecha_inicio,
+              fecha_fin,
+              planes:plan_id ( id, nombre )
+            )
           `)
           .eq('id', id)
           .limit(1)
@@ -253,7 +311,8 @@ export default function VerCitaPage() {
             referencia,
             estado,
             notas,
-            metodos_pago:metodo_pago_id ( id, nombre )
+            metodos_pago:metodo_pago_id ( id, nombre ),
+            metodos_pago_v2:metodo_pago_v2_id ( id, nombre )
           `)
           .eq('cita_id', id)
           .order('created_at', { ascending: false })
@@ -310,13 +369,19 @@ export default function VerCitaPage() {
     setErrorMsg('')
 
     if (nuevoEstado === 'cancelada') {
-      const ok = window.confirm('¿Seguro que deseas cancelar esta cita?')
+      const ok = window.confirm(
+        esPlan
+          ? '¿Seguro que deseas cancelar esta cita?\n\nSi esta cita ya estaba completada y había consumido una sesión del plan, esa sesión se devolverá automáticamente.'
+          : '¿Seguro que deseas cancelar esta cita?\n\nEsta cita no está ligada a un plan, así que no tocará sesiones.'
+      )
       if (!ok) return
     }
 
     if (nuevoEstado === 'completada') {
       const ok = window.confirm(
-        '¿Seguro que deseas completar esta cita?\n\nAl completar, la cita consumirá una sesión del plan si el cliente tiene un plan activo.'
+        esPlan
+          ? '¿Seguro que deseas completar esta cita?\n\nEsta cita está ligada a un plan específico y al completarla consumirá 1 sesión de ese plan.'
+          : '¿Seguro que deseas completar esta cita?\n\nEsta cita no está ligada a un plan, así que no consumirá sesiones.'
       )
       if (!ok) return
     }
@@ -332,6 +397,7 @@ export default function VerCitaPage() {
       if (error) throw new Error(error.message)
 
       setCita((prev) => (prev ? { ...prev, estado: nuevoEstado } : prev))
+      await loadCita()
     } catch (err: any) {
       console.error(err)
       setErrorMsg(err?.message || 'No se pudo actualizar el estado.')
@@ -450,6 +516,20 @@ export default function VerCitaPage() {
               />
 
               <DetailItem
+                label="Tipo de cita"
+                value={
+                  <span
+                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${tipoCitaClasses(
+                      esPlan,
+                      esRecovery
+                    )}`}
+                  >
+                    {getTipoCita(cita)}
+                  </span>
+                }
+              />
+
+              <DetailItem
                 label="Fecha"
                 value={formatFecha(cita.fecha)}
               />
@@ -476,8 +556,58 @@ export default function VerCitaPage() {
                 label="Duración"
                 value={duracionServicio ? `${duracionServicio} min` : '—'}
               />
+
+              <DetailItem
+                label="Consumo de sesión"
+                value={
+                  esPlan
+                    ? 'Sí, al completar'
+                    : 'No consume sesiones'
+                }
+              />
             </div>
           </Section>
+
+          {esPlan && (
+            <Section
+              title="Plan asociado"
+              description="Este es el plan exacto ligado a la cita."
+            >
+              <div className="grid gap-4 md:grid-cols-2">
+                <DetailItem
+                  label="Plan"
+                  value={cita.clientes_planes?.planes?.nombre || '—'}
+                />
+
+                <DetailItem
+                  label="Estado del plan"
+                  value={cita.clientes_planes?.estado || '—'}
+                />
+
+                <DetailItem
+                  label="Sesiones totales"
+                  value={Number(cita.clientes_planes?.sesiones_totales || 0)}
+                />
+
+                <DetailItem
+                  label="Sesiones usadas"
+                  value={Number(cita.clientes_planes?.sesiones_usadas || 0)}
+                />
+
+                <DetailItem
+                  label="Sesiones disponibles"
+                  value={getPlanDisponible(cita.clientes_planes)}
+                />
+
+                <DetailItem
+                  label="Vigencia"
+                  value={`${formatFecha(cita.clientes_planes?.fecha_inicio)} - ${formatFecha(
+                    cita.clientes_planes?.fecha_fin
+                  )}`}
+                />
+              </div>
+            </Section>
+          )}
 
           <Section
             title="Pago relacionado"
@@ -490,7 +620,10 @@ export default function VerCitaPage() {
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
                 <DetailItem label="Concepto" value={pago.concepto || '—'} />
-                <DetailItem label="Método de pago" value={pago.metodos_pago?.nombre || '—'} />
+                <DetailItem
+                  label="Método de pago"
+                  value={pago.metodos_pago_v2?.nombre || pago.metodos_pago?.nombre || '—'}
+                />
                 <DetailItem label="Fecha de pago" value={formatFecha(pago.fecha)} />
                 <DetailItem
                   label="Estado del pago"
@@ -587,7 +720,11 @@ export default function VerCitaPage() {
         <div className="space-y-6">
           <Section
             title="Acciones de estado"
-            description="Solo completar consume sesión. Cancelar no consume."
+            description={
+              esPlan
+                ? 'Esta cita sí está ligada a un plan. Solo completar consume sesión.'
+                : 'Esta cita no está ligada a un plan. No consume sesiones.'
+            }
           >
             <div className="space-y-3">
               <button
@@ -639,7 +776,22 @@ export default function VerCitaPage() {
             <Card className="mt-4 p-4">
               <p className="text-xs text-white/45">Regla de consumo</p>
               <p className="mt-1 text-sm text-white/75">
-                La cita solo consume una sesión del plan cuando cambia a <span className="font-semibold text-emerald-300">completada</span>.
+                {esPlan ? (
+                  <>
+                    Esta cita está ligada al plan{' '}
+                    <span className="font-semibold text-violet-300">
+                      {cita.clientes_planes?.planes?.nombre || 'asociado'}
+                    </span>{' '}
+                    y solo consume una sesión cuando cambia a{' '}
+                    <span className="font-semibold text-emerald-300">completada</span>.
+                  </>
+                ) : (
+                  <>
+                    Esta cita no está ligada a un plan, así que aunque cambie a{' '}
+                    <span className="font-semibold text-emerald-300">completada</span>{' '}
+                    no consumirá sesiones.
+                  </>
+                )}
               </p>
             </Card>
           </Section>

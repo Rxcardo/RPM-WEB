@@ -9,29 +9,27 @@ export default function AdminLayout({
 }) {
   return (
     <div className="min-h-screen bg-[#0b0b12] text-white">
+      <AdminSidebar />
 
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen flex-col">
+        <AdminHeader />
 
-        <AdminSidebar />
-
-        <div className="flex-1 flex flex-col">
-
-          <AdminHeader />
-
-          <main className="
-            flex-1 
-            p-8 
-            bg-gradient-to-b 
-            from-[#0b0b12] 
+        <main
+          className="
+            flex-1
+            p-4
+            md:p-6
+            lg:p-8
+            bg-gradient-to-b
+            from-[#0b0b12]
             to-[#11111a]
-          ">
+          "
+        >
+          <div className="mx-auto w-full max-w-[1400px]">
             {children}
-          </main>
-
-        </div>
-
+          </div>
+        </main>
       </div>
-
     </div>
   )
 }

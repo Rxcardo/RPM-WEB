@@ -18,6 +18,7 @@ type CitaRow = {
   estado: string
   notas: string | null
   created_at: string | null
+  cliente_plan_id: string | null
   clientes: {
     id: string
     nombre: string | null
@@ -33,6 +34,16 @@ type CitaRow = {
     id: string
     nombre: string | null
     duracion_minutos: number | null
+  } | null
+  clientes_planes: {
+    id: string
+    sesiones_totales: number | null
+    sesiones_usadas: number | null
+    estado: string | null
+    planes: {
+      id: string
+      nombre: string | null
+    } | null
   } | null
 }
 
@@ -69,6 +80,40 @@ function estadoBadge(estado: string) {
     default:
       return 'border-white/10 bg-white/[0.05] text-white/70'
   }
+}
+
+function tipoCitaBadge(cita: CitaRow) {
+  if (cita.cliente_plan_id) {
+    return 'border-violet-400/20 bg-violet-400/10 text-violet-300'
+  }
+
+  const notas = (cita.notas || '').toLowerCase()
+  const servicio = (cita.servicios?.nombre || '').toLowerCase()
+
+  if (notas.includes('recovery') || servicio.includes('recovery')) {
+    return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+  }
+
+  return 'border-white/10 bg-white/[0.05] text-white/70'
+}
+
+function getTipoCita(cita: CitaRow) {
+  if (cita.cliente_plan_id) return 'Plan'
+
+  const notas = (cita.notas || '').toLowerCase()
+  const servicio = (cita.servicios?.nombre || '').toLowerCase()
+
+  if (notas.includes('recovery') || servicio.includes('recovery')) {
+    return 'Recovery'
+  }
+
+  return 'Independiente'
+}
+
+function getPlanDisponible(cita: CitaRow) {
+  const total = Number(cita.clientes_planes?.sesiones_totales || 0)
+  const usadas = Number(cita.clientes_planes?.sesiones_usadas || 0)
+  return Math.max(total - usadas, 0)
 }
 
 function ActionButton({
@@ -136,9 +181,17 @@ export default function AgendaPage() {
           estado,
           notas,
           created_at,
+          cliente_plan_id,
           clientes:cliente_id ( id, nombre, telefono, email ),
           empleados:terapeuta_id ( id, nombre, rol ),
-          servicios:servicio_id ( id, nombre, duracion_minutos )
+          servicios:servicio_id ( id, nombre, duracion_minutos ),
+          clientes_planes:cliente_plan_id (
+            id,
+            sesiones_totales,
+            sesiones_usadas,
+            estado,
+            planes:plan_id ( id, nombre )
+          )
         `)
         .order('fecha', { ascending: true })
         .order('hora_inicio', { ascending: true })
@@ -155,7 +208,10 @@ export default function AgendaPage() {
     }
   }
 
-  async function cambiarEstado(cita: CitaRow, nuevoEstado: 'confirmada' | 'completada' | 'cancelada') {
+  async function cambiarEstado(
+    cita: CitaRow,
+    nuevoEstado: 'confirmada' | 'completada' | 'cancelada'
+  ) {
     setActionError('')
 
     const estadoActual = (cita.estado || '').toLowerCase()
@@ -165,7 +221,9 @@ export default function AgendaPage() {
     if (
       nuevoEstado === 'cancelada' &&
       !window.confirm(
-        `¿Seguro que deseas cancelar la cita de ${cita.clientes?.nombre || 'este cliente'}?\n\nSi esta cita tenía una sesión reservada, se liberará automáticamente.`
+        cita.cliente_plan_id
+          ? `¿Seguro que deseas cancelar la cita de ${cita.clientes?.nombre || 'este cliente'}?\n\nSi la cita ya estaba completada y consumió una sesión del plan, esa sesión se devolverá automáticamente.`
+          : `¿Seguro que deseas cancelar la cita de ${cita.clientes?.nombre || 'este cliente'}?\n\nEsta cita no está ligada a un plan, así que no tocará sesiones.`
       )
     ) {
       return
@@ -174,7 +232,9 @@ export default function AgendaPage() {
     if (
       nuevoEstado === 'completada' &&
       !window.confirm(
-        `¿Seguro que deseas completar esta cita?\n\nLa sesión ya debió quedar reservada desde que la cita fue creada o puesta en un estado válido.`
+        cita.cliente_plan_id
+          ? `¿Seguro que deseas completar esta cita?\n\nEsta cita está ligada a un plan y al completarla consumirá 1 sesión de ese plan.`
+          : `¿Seguro que deseas completar esta cita?\n\nEsta cita no está ligada a un plan, así que no consumirá sesiones.`
       )
     ) {
       return
@@ -205,6 +265,9 @@ export default function AgendaPage() {
     const q = search.trim().toLowerCase()
 
     return citas.filter((cita) => {
+      const tipoCita = getTipoCita(cita).toLowerCase()
+      const nombrePlan = (cita.clientes_planes?.planes?.nombre || '').toLowerCase()
+
       const matchSearch =
         !q ||
         cita.clientes?.nombre?.toLowerCase().includes(q) ||
@@ -214,7 +277,9 @@ export default function AgendaPage() {
         cita.empleados?.rol?.toLowerCase().includes(q) ||
         cita.servicios?.nombre?.toLowerCase().includes(q) ||
         cita.estado?.toLowerCase().includes(q) ||
-        cita.notas?.toLowerCase().includes(q)
+        cita.notas?.toLowerCase().includes(q) ||
+        tipoCita.includes(q) ||
+        nombrePlan.includes(q)
 
       const matchEstado =
         estadoFiltro === 'todos' ||
@@ -281,7 +346,7 @@ export default function AgendaPage() {
 
       <Section
         title="Filtros"
-        description="Busca por cliente, personal, servicio, estado o filtra por fecha."
+        description="Busca por cliente, personal, servicio, plan, tipo o filtra por fecha."
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
           <div className="md:col-span-2">
@@ -289,7 +354,7 @@ export default function AgendaPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Cliente, personal, servicio, estado..."
+              placeholder="Cliente, personal, servicio, plan, tipo..."
               className="
                 w-full rounded-2xl border border-white/10 bg-white/[0.03]
                 px-4 py-3 text-sm text-white outline-none transition
@@ -349,7 +414,7 @@ export default function AgendaPage() {
                 <th className="px-4 py-4 font-medium">Cliente</th>
                 <th className="px-4 py-4 font-medium">Personal</th>
                 <th className="px-4 py-4 font-medium">Servicio</th>
-                <th className="px-4 py-4 font-medium">Duración</th>
+                <th className="px-4 py-4 font-medium">Tipo</th>
                 <th className="px-4 py-4 font-medium">Estado</th>
                 <th className="px-4 py-4 font-medium">Notas</th>
                 <th className="px-4 py-4 font-medium">Acciones</th>
@@ -395,6 +460,11 @@ export default function AgendaPage() {
                         <div className="mt-1 text-xs text-white/35">
                           Registro: {cita.created_at ? new Date(cita.created_at).toLocaleDateString() : '—'}
                         </div>
+                        {duracion > 0 ? (
+                          <div className="mt-1 text-xs text-white/35">
+                            {duracion} min
+                          </div>
+                        ) : null}
                       </td>
 
                       <td className="px-4 py-4">
@@ -422,8 +492,22 @@ export default function AgendaPage() {
                       </td>
 
                       <td className="px-4 py-4">
-                        <div className="font-medium text-white">
-                          {duracion > 0 ? `${duracion} min` : '—'}
+                        <div className="space-y-2">
+                          <span
+                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${tipoCitaBadge(cita)}`}
+                          >
+                            {getTipoCita(cita)}
+                          </span>
+
+                          {cita.cliente_plan_id ? (
+                            <div className="text-xs text-white/45">
+                              <div>{cita.clientes_planes?.planes?.nombre || 'Plan asociado'}</div>
+                              <div>
+                                Disponibles: {getPlanDisponible(cita)}/
+                                {Number(cita.clientes_planes?.sesiones_totales || 0)}
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       </td>
 

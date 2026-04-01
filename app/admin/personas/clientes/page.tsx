@@ -10,6 +10,11 @@ import Section from '@/components/ui/Section'
 import StatCard from '@/components/ui/StatCard'
 import ActionCard from '@/components/ui/ActionCard'
 
+type EmpleadoRef = {
+  id: string
+  nombre: string
+} | null
+
 type Cliente = {
   id: string
   nombre: string
@@ -17,6 +22,10 @@ type Cliente = {
   email: string | null
   estado: string
   created_at: string
+  terapeuta_id: string | null
+  empleado_id: string | null
+  terapeuta: EmpleadoRef
+  empleado: EmpleadoRef
 }
 
 type ClientePlan = {
@@ -52,7 +61,19 @@ type ClienteRow = {
   planActivo: ClientePlan | null
   ultimoPago: Pago | null
   sesionesRestantes: number
+  empleadoNombre: string
 }
+
+type OrdenKey =
+  | 'nombre_asc'
+  | 'nombre_desc'
+  | 'empleado_asc'
+  | 'empleado_desc'
+  | 'fecha_reciente'
+  | 'fecha_antigua'
+  | 'estado'
+  | 'sesiones_mayor'
+  | 'sesiones_menor'
 
 function money(
   value: number | string | null | undefined,
@@ -105,6 +126,26 @@ function getRestantes(plan: ClientePlan | null) {
   return Math.max(0, total - usadas)
 }
 
+function getPagoTimestamp(pago: Pago) {
+  const primary = pago.created_at || pago.fecha
+  const time = new Date(primary).getTime()
+  return Number.isNaN(time) ? 0 : time
+}
+
+function getDateTimestamp(value: string | null | undefined) {
+  if (!value) return 0
+  const time = new Date(value).getTime()
+  return Number.isNaN(time) ? 0 : time
+}
+
+function resolveEmpleadoNombre(cliente: Cliente) {
+  return (
+    cliente.terapeuta?.nombre?.trim() ||
+    cliente.empleado?.nombre?.trim() ||
+    'Sin asignar'
+  )
+}
+
 function Field({
   label,
   children,
@@ -127,19 +168,16 @@ const inputClassName = `
   focus:border-white/20 focus:bg-white/[0.05]
 `
 
-function getPagoTimestamp(pago: Pago) {
-  const primary = pago.created_at || pago.fecha
-  const time = new Date(primary).getTime()
-  return Number.isNaN(time) ? 0 : time
-}
-
 export default function ClientesPage() {
   const [loading, setLoading] = useState(true)
   const [clientes, setClientes] = useState<Cliente[]>([])
   const [planesActivos, setPlanesActivos] = useState<ClientePlan[]>([])
   const [pagos, setPagos] = useState<Pago[]>([])
+
   const [search, setSearch] = useState('')
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
+  const [empleadoFiltro, setEmpleadoFiltro] = useState('todos')
+  const [ordenPor, setOrdenPor] = useState<OrdenKey>('nombre_asc')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -154,7 +192,24 @@ export default function ClientesPage() {
       const [clientesRes, planesRes, pagosRes] = await Promise.all([
         supabase
           .from('clientes')
-          .select('id, nombre, telefono, email, estado, created_at')
+          .select(`
+            id,
+            nombre,
+            telefono,
+            email,
+            estado,
+            created_at,
+            terapeuta_id,
+            empleado_id,
+            terapeuta:terapeuta_id (
+              id,
+              nombre
+            ),
+            empleado:empleado_id (
+              id,
+              nombre
+            )
+          `)
           .order('created_at', { ascending: false }),
 
         supabase
@@ -196,7 +251,7 @@ export default function ClientesPage() {
         console.error('Error cargando pagos:', pagosRes.error.message)
       }
 
-      setClientes((clientesRes.data || []) as Cliente[])
+      setClientes((clientesRes.data || []) as unknown as Cliente[])
       setPlanesActivos((planesRes.data || []) as unknown as ClientePlan[])
       setPagos((pagosRes.data || []) as Pago[])
     } catch (err: any) {
@@ -277,35 +332,81 @@ export default function ClientesPage() {
     return clientes.map((cliente) => {
       const planActivo = planMap.get(cliente.id) || null
       const ultimoPago = pagoMap.get(cliente.id) || null
+      const empleadoNombre = resolveEmpleadoNombre(cliente)
 
       return {
         cliente,
         planActivo,
         ultimoPago,
         sesionesRestantes: getRestantes(planActivo),
+        empleadoNombre,
       }
     })
   }, [clientes, planMap, pagoMap])
 
+  const empleadosOptions = useMemo(() => {
+    const set = new Set<string>()
+
+    for (const row of rows) {
+      if (row.empleadoNombre !== 'Sin asignar') {
+        set.add(row.empleadoNombre)
+      }
+    }
+
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'))
+  }, [rows])
+
   const clientesFiltrados = useMemo(() => {
     const q = search.trim().toLowerCase()
 
-    return rows.filter(({ cliente, planActivo }) => {
+    const filtered = rows.filter(({ cliente, planActivo, empleadoNombre }) => {
       const matchSearch =
         !q ||
         cliente.nombre?.toLowerCase().includes(q) ||
         cliente.email?.toLowerCase().includes(q) ||
         cliente.telefono?.toLowerCase().includes(q) ||
         cliente.estado?.toLowerCase().includes(q) ||
-        planActivo?.planes?.nombre?.toLowerCase().includes(q)
+        planActivo?.planes?.nombre?.toLowerCase().includes(q) ||
+        empleadoNombre.toLowerCase().includes(q)
 
       const matchEstado =
         estadoFiltro === 'todos' ||
         cliente.estado?.toLowerCase() === estadoFiltro.toLowerCase()
 
-      return matchSearch && matchEstado
+      const matchEmpleado =
+        empleadoFiltro === 'todos' ||
+        empleadoNombre.toLowerCase() === empleadoFiltro.toLowerCase()
+
+      return matchSearch && matchEstado && matchEmpleado
     })
-  }, [rows, search, estadoFiltro])
+
+    filtered.sort((a, b) => {
+      switch (ordenPor) {
+        case 'nombre_asc':
+          return a.cliente.nombre.localeCompare(b.cliente.nombre, 'es')
+        case 'nombre_desc':
+          return b.cliente.nombre.localeCompare(a.cliente.nombre, 'es')
+        case 'empleado_asc':
+          return a.empleadoNombre.localeCompare(b.empleadoNombre, 'es')
+        case 'empleado_desc':
+          return b.empleadoNombre.localeCompare(a.empleadoNombre, 'es')
+        case 'fecha_reciente':
+          return getDateTimestamp(b.cliente.created_at) - getDateTimestamp(a.cliente.created_at)
+        case 'fecha_antigua':
+          return getDateTimestamp(a.cliente.created_at) - getDateTimestamp(b.cliente.created_at)
+        case 'estado':
+          return (a.cliente.estado || '').localeCompare(b.cliente.estado || '', 'es')
+        case 'sesiones_mayor':
+          return b.sesionesRestantes - a.sesionesRestantes
+        case 'sesiones_menor':
+          return a.sesionesRestantes - b.sesionesRestantes
+        default:
+          return 0
+      }
+    })
+
+    return filtered
+  }, [rows, search, estadoFiltro, empleadoFiltro, ordenPor])
 
   const stats = useMemo(() => {
     const total = rows.length
@@ -355,39 +456,23 @@ export default function ClientesPage() {
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
         <StatCard title="Total clientes" value={stats.total} />
-
-        <StatCard
-          title="Clientes activos"
-          value={stats.activos}
-          color="text-emerald-400"
-        />
-
+        <StatCard title="Clientes activos" value={stats.activos} color="text-emerald-400" />
         <StatCard title="Con plan activo" value={stats.conPlan} />
-
-        <StatCard
-          title="Sin plan activo"
-          value={stats.sinPlan}
-          color="text-amber-300"
-        />
-
-        <StatCard
-          title="Planes por vencer"
-          value={stats.porVencer}
-          color="text-rose-400"
-        />
+        <StatCard title="Sin plan activo" value={stats.sinPlan} color="text-amber-300" />
+        <StatCard title="Planes por vencer" value={stats.porVencer} color="text-rose-400" />
       </div>
 
       <Section
         title="Filtros"
-        description="Busca por nombre, correo, teléfono, estado o plan."
+        description="Busca por nombre, correo, teléfono, estado, plan o empleado."
       >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div className="md:col-span-2">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="xl:col-span-2">
             <Field label="Buscar">
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Nombre, correo, teléfono, estado o plan..."
+                placeholder="Nombre, correo, teléfono, estado, plan o empleado..."
                 className={inputClassName}
               />
             </Field>
@@ -400,18 +485,51 @@ export default function ClientesPage() {
                 onChange={(e) => setEstadoFiltro(e.target.value)}
                 className={inputClassName}
               >
-                <option value="todos" className="bg-[#11131a] text-white">
-                  Todos
-                </option>
-                <option value="activo" className="bg-[#11131a] text-white">
-                  Activos
-                </option>
-                <option value="inactivo" className="bg-[#11131a] text-white">
-                  Inactivos
-                </option>
-                <option value="pausado" className="bg-[#11131a] text-white">
-                  Pausados
-                </option>
+                <option value="todos" className="bg-[#11131a] text-white">Todos</option>
+                <option value="activo" className="bg-[#11131a] text-white">Activos</option>
+                <option value="inactivo" className="bg-[#11131a] text-white">Inactivos</option>
+                <option value="pausado" className="bg-[#11131a] text-white">Pausados</option>
+              </select>
+            </Field>
+          </div>
+
+          <div>
+            <Field label="Empleado">
+              <select
+                value={empleadoFiltro}
+                onChange={(e) => setEmpleadoFiltro(e.target.value)}
+                className={inputClassName}
+              >
+                <option value="todos" className="bg-[#11131a] text-white">Todos</option>
+                {empleadosOptions.map((empleado) => (
+                  <option
+                    key={empleado}
+                    value={empleado}
+                    className="bg-[#11131a] text-white"
+                  >
+                    {empleado}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          <div>
+            <Field label="Ordenar">
+              <select
+                value={ordenPor}
+                onChange={(e) => setOrdenPor(e.target.value as OrdenKey)}
+                className={inputClassName}
+              >
+                <option value="nombre_asc" className="bg-[#11131a] text-white">Nombre A-Z</option>
+                <option value="nombre_desc" className="bg-[#11131a] text-white">Nombre Z-A</option>
+                <option value="empleado_asc" className="bg-[#11131a] text-white">Empleado A-Z</option>
+                <option value="empleado_desc" className="bg-[#11131a] text-white">Empleado Z-A</option>
+                <option value="fecha_reciente" className="bg-[#11131a] text-white">Más recientes</option>
+                <option value="fecha_antigua" className="bg-[#11131a] text-white">Más antiguos</option>
+                <option value="estado" className="bg-[#11131a] text-white">Estado</option>
+                <option value="sesiones_mayor" className="bg-[#11131a] text-white">Más restantes</option>
+                <option value="sesiones_menor" className="bg-[#11131a] text-white">Menos restantes</option>
               </select>
             </Field>
           </div>
@@ -420,7 +538,7 @@ export default function ClientesPage() {
 
       <Section
         title="Listado de clientes"
-        description="Vista general de clientes, plan activo, sesiones y pagos."
+        description="Vista general de clientes, plan activo, sesiones, empleado y pagos."
         className="p-0"
         contentClassName="overflow-hidden"
       >
@@ -430,6 +548,7 @@ export default function ClientesPage() {
               <tr className="text-left text-white/55">
                 <th className="px-4 py-3 font-medium">Cliente</th>
                 <th className="px-4 py-3 font-medium">Contacto</th>
+                <th className="px-4 py-3 font-medium">Empleado</th>
                 <th className="px-4 py-3 font-medium">Estado</th>
                 <th className="px-4 py-3 font-medium">Plan activo</th>
                 <th className="px-4 py-3 font-medium">Sesiones</th>
@@ -441,18 +560,18 @@ export default function ClientesPage() {
             <tbody className="divide-y divide-white/10 text-sm">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-white/55">
+                  <td colSpan={8} className="px-4 py-10 text-center text-white/55">
                     Cargando clientes...
                   </td>
                 </tr>
               ) : clientesFiltrados.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-white/55">
+                  <td colSpan={8} className="px-4 py-10 text-center text-white/55">
                     No hay clientes registrados.
                   </td>
                 </tr>
               ) : (
-                clientesFiltrados.map(({ cliente, planActivo, ultimoPago, sesionesRestantes }) => (
+                clientesFiltrados.map(({ cliente, planActivo, ultimoPago, sesionesRestantes, empleadoNombre }) => (
                   <tr key={cliente.id} className="align-top transition hover:bg-white/[0.03]">
                     <td className="px-4 py-4">
                       <div className="font-medium text-white">{cliente.nombre}</div>
@@ -469,10 +588,12 @@ export default function ClientesPage() {
                     </td>
 
                     <td className="px-4 py-4">
+                      <div className="font-medium text-white">{empleadoNombre}</div>
+                    </td>
+
+                    <td className="px-4 py-4">
                       <span
-                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoBadge(
-                          cliente.estado
-                        )}`}
+                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoBadge(cliente.estado)}`}
                       >
                         {cliente.estado}
                       </span>
@@ -536,33 +657,21 @@ export default function ClientesPage() {
                       <div className="flex flex-wrap gap-2">
                         <Link
                           href={`/admin/personas/clientes/${cliente.id}`}
-                          className="
-                            rounded-xl border border-white/10 bg-white/[0.03]
-                            px-3 py-1.5 text-xs font-medium text-white/80
-                            transition hover:bg-white/[0.06]
-                          "
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/[0.06]"
                         >
                           Ver
                         </Link>
 
                         <Link
                           href={`/admin/personas/clientes/${cliente.id}/plan`}
-                          className="
-                            rounded-xl border border-white/10 bg-white/[0.03]
-                            px-3 py-1.5 text-xs font-medium text-white/80
-                            transition hover:bg-white/[0.06]
-                          "
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/[0.06]"
                         >
                           Plan
                         </Link>
 
                         <Link
                           href={`/admin/personas/clientes/${cliente.id}/editar`}
-                          className="
-                            rounded-xl border border-white/10 bg-white/[0.03]
-                            px-3 py-1.5 text-xs font-medium text-white/80
-                            transition hover:bg-white/[0.06]
-                          "
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/80 transition hover:bg-white/[0.06]"
                         >
                           Editar
                         </Link>

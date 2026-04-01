@@ -269,9 +269,20 @@ export default function PersonalPage() {
         .eq('nombre', rolCatalogo)
         .single()
 
-      if (rolError || !rolData) {
-        throw new Error('No se pudo encontrar el rol seleccionado en la tabla roles.')
-      }
+      let rolId = rolData?.id
+
+if(!rolId){
+  const { data:newRol } = await supabase
+  .from("roles")
+  .insert({
+    nombre: rolCatalogo,
+    descripcion: "Auto creado"
+  })
+  .select()
+  .single()
+
+  rolId = newRol.id
+}
 
       const payload = {
         nombre,

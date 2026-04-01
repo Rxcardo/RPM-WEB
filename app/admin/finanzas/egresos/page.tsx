@@ -1,54 +1,118 @@
 'use client'
-export const dynamic = 'force-dynamic'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase/client'
-import Card from '@/components/ui/Card'
-import Section from '@/components/ui/Section'
-import StatCard from '@/components/ui/StatCard'
+import { ArrowLeft, Plus, Search, Edit2, Trash2, X } from 'lucide-react'
+import Link from 'next/link'
+import SelectorMetodoPago from '@/components/finanzas/SelectorMetodoPago'
+import { formatearMoneda } from '@/lib/finanzas/tasas'
 
-type MetodoPago = {
-  id: string
+interface Cartera {
   nombre: string
+  codigo: string
+  color?: string | null
+  icono?: string | null
 }
 
-type Egreso = {
+interface MetodoPago {
+  id: string
+  nombre: string
+  tipo?: string | null
+  moneda?: string | null
+  color?: string | null
+  icono?: string | null
+  activo?: boolean | null
+  cartera?: Cartera | null
+}
+
+interface Egreso {
   id: string
   fecha: string
   concepto: string
   categoria: string
   proveedor: string | null
-  monto: number
-  estado: 'pagado' | 'pendiente' | 'anulado'
-  metodo_pago_id: string | null
-  comprobante_url: string | null
-  notas: string | null
-  created_at?: string
-  metodos_pago?: { nombre: string } | null
+  monto: number | null
+  monto_equivalente_usd: number | null
+  monto_equivalente_bs: number | null
+  moneda: string
+  estado: 'pagado' | 'pendiente' | 'anulado' | 'liquidado'
+  metodo_pago_v2_id?: string | null
+  metodo_pago_v2?: {
+    nombre: string
+    moneda?: string | null
+    tipo?: string | null
+    cartera?: {
+      nombre: string
+      codigo: string
+    } | null
+  } | null
 }
 
-type FormState = {
-  fecha: string
-  concepto: string
-  categoria: string
-  proveedor: string
-  monto: string
-  estado: 'pagado' | 'pendiente' | 'anulado'
-  metodo_pago_id: string
-  comprobante_url: string
-  notas: string
+interface TipoCambioRow {
+  fecha?: string | null
+  tasa?: number | string | null
+  valor?: number | string | null
+  monto?: number | string | null
+  bcv?: number | string | null
+  precio?: number | string | null
 }
 
-const INITIAL_FORM: FormState = {
-  fecha: new Date().toISOString().slice(0, 10),
-  concepto: '',
-  categoria: 'operativo',
-  proveedor: '',
-  monto: '',
-  estado: 'pagado',
-  metodo_pago_id: '',
-  comprobante_url: '',
-  notas: '',
+type RawCartera =
+  | {
+      nombre?: unknown
+      codigo?: unknown
+      color?: unknown
+      icono?: unknown
+    }
+  | Array<{
+      nombre?: unknown
+      codigo?: unknown
+      color?: unknown
+      icono?: unknown
+    }>
+  | null
+  | undefined
+
+type RawMetodoPagoRelacionado =
+  | {
+      nombre?: unknown
+      moneda?: unknown
+      tipo?: unknown
+      cartera?: RawCartera
+    }
+  | Array<{
+      nombre?: unknown
+      moneda?: unknown
+      tipo?: unknown
+      cartera?: RawCartera
+    }>
+  | null
+  | undefined
+
+type RawEgreso = {
+  id?: unknown
+  fecha?: unknown
+  concepto?: unknown
+  categoria?: unknown
+  proveedor?: unknown
+  monto?: unknown
+  estado?: unknown
+  moneda?: unknown
+  metodo_pago_v2_id?: unknown
+  monto_equivalente_usd?: unknown
+  monto_equivalente_bs?: unknown
+  metodo_pago_v2?: RawMetodoPagoRelacionado
+}
+
+type RawMetodoPago = {
+  id?: unknown
+  nombre?: unknown
+  tipo?: unknown
+  moneda?: unknown
+  color?: unknown
+  icono?: unknown
+  activo?: unknown
+  cartera?: RawCartera
 }
 
 const CATEGORIAS = [
@@ -64,177 +128,370 @@ const CATEGORIAS = [
   'otros',
 ]
 
-const inputClassName = `
-  w-full rounded-2xl border border-white/10 bg-white/[0.03]
-  px-4 py-3 text-sm text-white outline-none transition
-  placeholder:text-white/35
-  focus:border-white/20 focus:bg-white/[0.05]
-`
+const inputCls =
+  'w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-white/20 focus:bg-white/[0.05]'
 
-const textareaClassName = `
-  min-h-[110px] w-full rounded-2xl border border-white/10 bg-white/[0.03]
-  px-4 py-3 text-sm text-white outline-none transition resize-none
-  placeholder:text-white/35
-  focus:border-white/20 focus:bg-white/[0.05]
-`
+const labelCls = 'mb-2 block text-sm font-medium text-white/75'
 
-function money(value: number) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 2,
-  }).format(Number(value || 0))
+const panelCls =
+  'rounded-3xl border border-white/10 bg-white/[0.03] backdrop-blur-xl'
+
+const softButtonCls =
+  'rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]'
+
+function toNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
 }
 
-function estadoBadge(estado: string) {
-  if (estado === 'pagado') {
-    return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+function toStringOrNull(value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  return String(value)
+}
+
+function firstItem<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function normalizeCartera(raw: RawCartera): Cartera | null {
+  const item = firstItem(raw)
+  if (!item) return null
+
+  const nombre = toStringOrNull(item.nombre)
+  const codigo = toStringOrNull(item.codigo)
+
+  if (!nombre || !codigo) return null
+
+  return {
+    nombre,
+    codigo,
+    color: toStringOrNull(item.color),
+    icono: toStringOrNull(item.icono),
   }
-  if (estado === 'anulado') {
-    return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+}
+
+function normalizeMetodoPago(raw: RawMetodoPago): MetodoPago {
+  return {
+    id: String(raw.id ?? ''),
+    nombre: String(raw.nombre ?? ''),
+    tipo: toStringOrNull(raw.tipo),
+    moneda: toStringOrNull(raw.moneda),
+    color: toStringOrNull(raw.color),
+    icono: toStringOrNull(raw.icono),
+    activo: typeof raw.activo === 'boolean' ? raw.activo : null,
+    cartera: normalizeCartera(raw.cartera),
   }
-  if (estado === 'pendiente') {
-    return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+}
+
+function normalizeMetodoPagoRelacionado(raw: RawMetodoPagoRelacionado): Egreso['metodo_pago_v2'] {
+  const item = firstItem(raw)
+  if (!item) return null
+
+  const nombre = toStringOrNull(item.nombre)
+  if (!nombre) return null
+
+  const cartera = normalizeCartera(item.cartera)
+
+  return {
+    nombre,
+    moneda: toStringOrNull(item.moneda),
+    tipo: toStringOrNull(item.tipo),
+    cartera: cartera
+      ? {
+          nombre: cartera.nombre,
+          codigo: cartera.codigo,
+        }
+      : null,
   }
-  return 'border-white/10 bg-white/[0.03] text-white/75'
+}
+
+function normalizeEgreso(raw: RawEgreso): Egreso {
+  const estadoRaw = String(raw.estado ?? 'pendiente')
+  const estado: Egreso['estado'] =
+    estadoRaw === 'pagado' ||
+    estadoRaw === 'pendiente' ||
+    estadoRaw === 'anulado' ||
+    estadoRaw === 'liquidado'
+      ? estadoRaw
+      : 'pendiente'
+
+  return {
+    id: String(raw.id ?? ''),
+    fecha: String(raw.fecha ?? ''),
+    concepto: String(raw.concepto ?? ''),
+    categoria: String(raw.categoria ?? ''),
+    proveedor: toStringOrNull(raw.proveedor),
+    monto: toNumber(raw.monto),
+    monto_equivalente_usd: toNumber(raw.monto_equivalente_usd),
+    monto_equivalente_bs: toNumber(raw.monto_equivalente_bs),
+    moneda: String(raw.moneda ?? 'USD'),
+    estado,
+    metodo_pago_v2_id: toStringOrNull(raw.metodo_pago_v2_id),
+    metodo_pago_v2: normalizeMetodoPagoRelacionado(raw.metodo_pago_v2),
+  }
+}
+
+function monedaMetodoEsBs(metodo: MetodoPago | null) {
+  if (!metodo) return false
+
+  const moneda = (metodo.moneda || '').toUpperCase()
+  const nombre = (metodo.nombre || '').toLowerCase()
+  const tipo = (metodo.tipo || '').toLowerCase()
+  const carteraCodigo = (metodo.cartera?.codigo || '').toLowerCase()
+
+  return (
+    moneda === 'BS' ||
+    moneda === 'VES' ||
+    nombre.includes('bs') ||
+    nombre.includes('bolívar') ||
+    nombre.includes('bolivar') ||
+    nombre.includes('pago movil') ||
+    nombre.includes('pago móvil') ||
+    nombre.includes('movil') ||
+    nombre.includes('móvil') ||
+    tipo.includes('pago_movil') ||
+    carteraCodigo.includes('bs') ||
+    carteraCodigo.includes('ves')
+  )
+}
+
+function calcularDesdeMontoUsd(montoUsd: number, esBs: boolean, tasaBCV: number) {
+  const usd = Number((montoUsd || 0).toFixed(2))
+
+  if (!esBs) {
+    return {
+      moneda: 'USD' as const,
+      monto: usd,
+      usd,
+      bs: null as number | null,
+      tasa: null as number | null,
+    }
+  }
+
+  const bs = Number((usd * tasaBCV).toFixed(2))
+
+  return {
+    moneda: 'BS' as const,
+    monto: bs,
+    usd,
+    bs,
+    tasa: tasaBCV,
+  }
 }
 
 export default function EgresosPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [updatingId, setUpdatingId] = useState<string | null>(null)
-
   const [egresos, setEgresos] = useState<Egreso[]>([])
   const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([])
 
   const [search, setSearch] = useState('')
-  const [estadoFiltro, setEstadoFiltro] = useState('todos')
-  const [categoriaFiltro, setCategoriaFiltro] = useState('todos')
+  const [estadoFiltro, setEstadoFiltro] = useState<'todos' | 'pagado' | 'pendiente' | 'anulado' | 'liquidado'>('todos')
+  const [categoriaFiltro, setCategoriaFiltro] = useState<string>('todos')
 
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [form, setForm] = useState<FormState>(INITIAL_FORM)
-
-  const [errorMsg, setErrorMsg] = useState('')
-  const [successMsg, setSuccessMsg] = useState('')
+  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10))
+  const [concepto, setConcepto] = useState('')
+  const [categoria, setCategoria] = useState('operativo')
+  const [proveedor, setProveedor] = useState('')
+  const [montoUSD, setMontoUSD] = useState('')
+  const [metodoPagoId, setMetodoPagoId] = useState('')
+  const [estado, setEstado] = useState<'pagado' | 'pendiente'>('pagado')
+  const [notas, setNotas] = useState('')
+  const [tasaBCV, setTasaBCV] = useState(0)
 
   useEffect(() => {
-    void loadData()
+    void cargarDatos()
   }, [])
 
-  async function loadData() {
-    try {
-      setLoading(true)
-      setErrorMsg('')
+  async function cargarDatos() {
+    setLoading(true)
 
-      const [egresosRes, metodosRes] = await Promise.all([
-        supabase
-          .from('egresos')
-          .select(`
-            id,
-            fecha,
-            concepto,
-            categoria,
-            proveedor,
-            monto,
-            estado,
-            metodo_pago_id,
-            comprobante_url,
-            notas,
-            created_at,
-            metodos_pago:metodo_pago_id ( nombre )
-          `)
-          .order('fecha', { ascending: false })
-          .order('created_at', { ascending: false }),
+    const [egresosRes, metodosRes] = await Promise.all([
+      supabase
+        .from('egresos')
+        .select(`
+          id,
+          fecha,
+          concepto,
+          categoria,
+          proveedor,
+          monto,
+          estado,
+          moneda,
+          metodo_pago_v2_id,
+          monto_equivalente_usd,
+          monto_equivalente_bs,
+          metodo_pago_v2:metodo_pago_v2_id (
+            nombre,
+            moneda,
+            tipo,
+            cartera:cartera_id (
+              nombre,
+              codigo
+            )
+          )
+        `)
+        .order('fecha', { ascending: false })
+        .order('created_at', { ascending: false }),
 
-        supabase
-          .from('metodos_pago')
-          .select('id, nombre')
-          .order('nombre', { ascending: true }),
-      ])
+      supabase
+        .from('metodos_pago_v2')
+        .select(`
+          id,
+          nombre,
+          tipo,
+          moneda,
+          color,
+          icono,
+          activo,
+          cartera:cartera_id (
+            nombre,
+            codigo,
+            color,
+            icono
+          )
+        `)
+        .eq('activo', true)
+        .eq('permite_pagar', true)
+        .order('orden', { ascending: true })
+        .order('nombre', { ascending: true }),
+    ])
 
-      if (egresosRes.error) throw egresosRes.error
-      if (metodosRes.error) throw metodosRes.error
-
-      setEgresos((egresosRes.data || []) as unknown as Egreso[])
-      setMetodosPago((metodosRes.data || []) as MetodoPago[])
-    } catch (err: any) {
-      console.error(err)
-      setErrorMsg(err.message || 'No se pudieron cargar los egresos.')
-      setEgresos([])
-      setMetodosPago([])
-    } finally {
-      setLoading(false)
+    if (egresosRes.data) {
+      const dataNormalizada = (egresosRes.data as RawEgreso[]).map(normalizeEgreso)
+      setEgresos(dataNormalizada)
     }
+
+    if (metodosRes.data) {
+      const metodosNormalizados = (metodosRes.data as RawMetodoPago[]).map(normalizeMetodoPago)
+      setMetodosPago(metodosNormalizados)
+    }
+
+    setLoading(false)
   }
 
-  function resetForm() {
-    setForm(INITIAL_FORM)
-    setEditingId(null)
-    setShowForm(false)
+  const metodoSeleccionado = useMemo(
+    () => metodosPago.find((m) => m.id === metodoPagoId) || null,
+    [metodosPago, metodoPagoId]
+  )
+
+  const esBs = useMemo(
+    () => monedaMetodoEsBs(metodoSeleccionado),
+    [metodoSeleccionado]
+  )
+
+  async function resolverTasaBCVActual() {
+    if (tasaBCV && tasaBCV > 0) return tasaBCV
+
+    const hoy = new Date().toISOString().slice(0, 10)
+
+    const { data, error } = await supabase
+      .from('tipos_cambio')
+      .select('*')
+      .lte('fecha', hoy)
+      .order('fecha', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) throw error
+
+    const row = data as TipoCambioRow | null
+
+    const posibleTasa = Number(
+      row?.tasa ?? row?.valor ?? row?.monto ?? row?.bcv ?? row?.precio ?? 0
+    )
+
+    if (!posibleTasa || posibleTasa <= 0) {
+      throw new Error('No se pudo obtener la tasa BCV automática')
+    }
+
+    setTasaBCV(posibleTasa)
+    return posibleTasa
   }
 
-  function startCreate() {
-    setEditingId(null)
-    setForm(INITIAL_FORM)
-    setShowForm(true)
-    setErrorMsg('')
-    setSuccessMsg('')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
+  useEffect(() => {
+    if (!esBs || estado !== 'pagado') return
+    if (tasaBCV > 0) return
 
-  function startEdit(row: Egreso) {
-    setEditingId(row.id)
-    setForm({
-      fecha: row.fecha || new Date().toISOString().slice(0, 10),
-      concepto: row.concepto || '',
-      categoria: row.categoria || 'operativo',
-      proveedor: row.proveedor || '',
-      monto: String(row.monto ?? ''),
-      estado: row.estado || 'pagado',
-      metodo_pago_id: row.metodo_pago_id || '',
-      comprobante_url: row.comprobante_url || '',
-      notas: row.notas || '',
+    void resolverTasaBCVActual().catch((err) => {
+      console.error('Error cargando tasa BCV automática:', err)
     })
-    setShowForm(true)
-    setErrorMsg('')
-    setSuccessMsg('')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
+  }, [esBs, estado, tasaBCV])
 
-  function validateForm() {
-    if (!form.fecha) return 'Debes indicar la fecha.'
-    if (!form.concepto.trim()) return 'Debes indicar el concepto.'
-    if (!form.categoria.trim()) return 'Debes seleccionar la categoría.'
-    if (!form.monto || Number(form.monto) <= 0) return 'Debes indicar un monto válido.'
-    return ''
-  }
+  const resumenMonto = useMemo(() => {
+    const montoBaseUsd = Number(montoUSD || 0)
+
+    if (!montoBaseUsd || montoBaseUsd <= 0) {
+      return {
+        usd: 0,
+        bs: 0,
+      }
+    }
+
+    if (!esBs) {
+      return {
+        usd: Number(montoBaseUsd.toFixed(2)),
+        bs: 0,
+      }
+    }
+
+    if (!tasaBCV || tasaBCV <= 0) {
+      return {
+        usd: Number(montoBaseUsd.toFixed(2)),
+        bs: 0,
+      }
+    }
+
+    return {
+      usd: Number(montoBaseUsd.toFixed(2)),
+      bs: Number((montoBaseUsd * tasaBCV).toFixed(2)),
+    }
+  }, [montoUSD, esBs, tasaBCV])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setErrorMsg('')
-    setSuccessMsg('')
 
-    const validationError = validateForm()
-    if (validationError) {
-      setErrorMsg(validationError)
+    if (!concepto.trim() || !montoUSD || Number(montoUSD) <= 0 || !metodoPagoId) {
+      alert('Completa los campos obligatorios')
       return
     }
 
+    const metodo = metodosPago.find((m) => m.id === metodoPagoId) || null
+    const metodoEsBs = monedaMetodoEsBs(metodo)
+
+    if (metodoEsBs && (!tasaBCV || tasaBCV <= 0)) {
+      alert('Ingresa la tasa BCV para pagos en Bolívares')
+      return
+    }
+
+    setSaving(true)
+
     try {
-      setSaving(true)
+      const montoBaseUsd = Number(montoUSD)
+      const conversion = calcularDesdeMontoUsd(
+        montoBaseUsd,
+        metodoEsBs,
+        Number(tasaBCV || 0)
+      )
 
       const payload = {
-        fecha: form.fecha,
-        concepto: form.concepto.trim(),
-        categoria: form.categoria,
-        proveedor: form.proveedor.trim() || null,
-        monto: Number(form.monto || 0),
-        estado: form.estado,
-        metodo_pago_id: form.metodo_pago_id || null,
-        comprobante_url: form.comprobante_url.trim() || null,
-        notas: form.notas.trim() || null,
+        fecha,
+        concepto: concepto.trim(),
+        categoria,
+        proveedor: proveedor.trim() || null,
+        moneda: conversion.moneda,
+        monto: conversion.monto,
+        tasa_bcv: conversion.tasa,
+        monto_equivalente_usd: conversion.usd,
+        monto_equivalente_bs: conversion.bs,
+        metodo_pago_id: null,
+        metodo_pago_v2_id: metodoPagoId,
+        estado,
+        notas: notas.trim() || null,
       }
 
       if (editingId) {
@@ -244,65 +501,66 @@ export default function EgresosPage() {
           .eq('id', editingId)
 
         if (error) throw error
-        setSuccessMsg('Egreso actualizado correctamente.')
+        alert('✅ Egreso actualizado')
       } else {
         const { error } = await supabase
           .from('egresos')
           .insert(payload)
 
         if (error) throw error
-        setSuccessMsg('Egreso creado correctamente.')
+        alert('✅ Egreso registrado')
       }
 
       resetForm()
-      await loadData()
+      await cargarDatos()
     } catch (err: any) {
-      console.error(err)
-      setErrorMsg(err.message || 'No se pudo guardar el egreso.')
+      alert('Error: ' + (err.message || 'No se pudo guardar'))
     } finally {
       setSaving(false)
     }
   }
 
-  async function toggleEstado(row: Egreso) {
-    try {
-      setUpdatingId(row.id)
-      setErrorMsg('')
-      setSuccessMsg('')
+  function resetForm() {
+    setConcepto('')
+    setCategoria('operativo')
+    setProveedor('')
+    setMontoUSD('')
+    setMetodoPagoId('')
+    setEstado('pagado')
+    setNotas('')
+    setTasaBCV(0)
+    setFecha(new Date().toISOString().slice(0, 10))
+    setEditingId(null)
+    setShowForm(false)
+  }
 
-      const nuevoEstado =
-        row.estado === 'pagado'
-          ? 'pendiente'
-          : row.estado === 'pendiente'
-          ? 'anulado'
-          : 'pagado'
-
-      const { error } = await supabase
-        .from('egresos')
-        .update({ estado: nuevoEstado })
-        .eq('id', row.id)
-
-      if (error) throw error
-
-      setSuccessMsg(`Egreso actualizado a "${nuevoEstado}".`)
-      await loadData()
-    } catch (err: any) {
-      console.error(err)
-      setErrorMsg(err.message || 'No se pudo actualizar el estado.')
-    } finally {
-      setUpdatingId(null)
-    }
+  function startEdit(egreso: Egreso) {
+    setEditingId(egreso.id)
+    setFecha(egreso.fecha)
+    setConcepto(egreso.concepto)
+    setCategoria(egreso.categoria)
+    setProveedor(egreso.proveedor || '')
+    setMontoUSD(String(egreso.monto_equivalente_usd || 0))
+    setMetodoPagoId(egreso.metodo_pago_v2_id || '')
+    setEstado(egreso.estado === 'anulado' ? 'pendiente' : 'pagado')
+    setNotas('')
+    setTasaBCV(
+      egreso.moneda?.toUpperCase() === 'BS' || egreso.moneda?.toUpperCase() === 'VES'
+        ? Number(
+            egreso.monto_equivalente_usd && egreso.monto_equivalente_bs
+              ? Number(egreso.monto_equivalente_bs) / Number(egreso.monto_equivalente_usd)
+              : 0
+          )
+        : 0
+    )
+    setShowForm(true)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   async function eliminarEgreso(id: string) {
-    const ok = window.confirm('¿Seguro que quieres eliminar este egreso?')
-    if (!ok) return
+    if (!confirm('¿Eliminar este egreso?')) return
 
     try {
-      setDeletingId(id)
-      setErrorMsg('')
-      setSuccessMsg('')
-
       const { error } = await supabase
         .from('egresos')
         .delete()
@@ -310,142 +568,182 @@ export default function EgresosPage() {
 
       if (error) throw error
 
-      setSuccessMsg('Egreso eliminado correctamente.')
-      if (editingId === id) resetForm()
-      await loadData()
+      alert('✅ Egreso eliminado')
+      await cargarDatos()
     } catch (err: any) {
-      console.error(err)
-      setErrorMsg(err.message || 'No se pudo eliminar el egreso.')
-    } finally {
-      setDeletingId(null)
+      alert('Error: ' + (err.message || 'No se pudo eliminar'))
     }
   }
 
   const egresosFiltrados = useMemo(() => {
-    const q = search.trim().toLowerCase()
+    return egresos.filter((eg) => {
+      if (estadoFiltro !== 'todos' && eg.estado !== estadoFiltro) return false
+      if (categoriaFiltro !== 'todos' && eg.categoria !== categoriaFiltro) return false
 
-    return egresos.filter((row) => {
-      const matchSearch =
-        !q ||
-        row.concepto?.toLowerCase().includes(q) ||
-        row.categoria?.toLowerCase().includes(q) ||
-        row.proveedor?.toLowerCase().includes(q) ||
-        row.estado?.toLowerCase().includes(q) ||
-        row.metodos_pago?.nombre?.toLowerCase().includes(q)
+      if (search) {
+        const s = search.toLowerCase()
+        return (
+          eg.concepto.toLowerCase().includes(s) ||
+          eg.categoria.toLowerCase().includes(s) ||
+          eg.proveedor?.toLowerCase().includes(s) ||
+          eg.metodo_pago_v2?.nombre?.toLowerCase().includes(s) ||
+          eg.metodo_pago_v2?.cartera?.nombre?.toLowerCase().includes(s)
+        )
+      }
 
-      const matchEstado =
-        estadoFiltro === 'todos' ? true : row.estado === estadoFiltro
-
-      const matchCategoria =
-        categoriaFiltro === 'todos' ? true : row.categoria === categoriaFiltro
-
-      return matchSearch && matchEstado && matchCategoria
+      return true
     })
-  }, [egresos, search, estadoFiltro, categoriaFiltro])
+  }, [egresos, estadoFiltro, categoriaFiltro, search])
 
-  const resumen = useMemo(() => {
+  const totales = useMemo(() => {
+    const pagados = egresos.filter((e) => e.estado === 'pagado' || e.estado === 'liquidado')
+
     return {
-      total: egresos.length,
-      pagados: egresos
-        .filter((x) => x.estado === 'pagado')
-        .reduce((acc, x) => acc + Number(x.monto || 0), 0),
-      pendientes: egresos
-        .filter((x) => x.estado === 'pendiente')
-        .reduce((acc, x) => acc + Number(x.monto || 0), 0),
-      anulados: egresos
-        .filter((x) => x.estado === 'anulado')
-        .reduce((acc, x) => acc + Number(x.monto || 0), 0),
+      totalUSD: pagados.reduce((sum, e) => sum + Number(e.monto_equivalente_usd || 0), 0),
+      totalBS: pagados.reduce((sum, e) => sum + Number(e.monto_equivalente_bs || 0), 0),
+      cantidad: pagados.length,
     }
   }, [egresos])
 
+  if (loading) {
+    return (
+      <div className="min-h-screen p-4 sm:p-6 lg:p-8">
+        <div className="mx-auto max-w-7xl">
+          <div className="space-y-6">
+            <div className="h-20 animate-pulse rounded-3xl border border-white/10 bg-white/[0.03]" />
+            <div className="h-96 animate-pulse rounded-3xl border border-white/10 bg-white/[0.03]" />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="space-y-6 px-4 py-6 lg:px-6">
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <p className="text-sm text-white/55">Finanzas</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">Egresos</h1>
-          <p className="mt-2 text-sm text-white/55">
-            Registra y administra gastos, proveedores y salidas de dinero.
-          </p>
+    <div className="space-y-6 p-4 sm:p-6 lg:p-8">
+      <div className="mx-auto max-w-7xl space-y-6 sm:space-y-8">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <Link
+              href="/admin/finanzas"
+              className="inline-flex items-center gap-2 text-sm text-white/55 transition hover:text-white/90"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Volver a Finanzas
+            </Link>
+
+            <p className="mt-4 text-sm text-white/55">Finanzas</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+              Egresos
+            </h1>
+            <p className="mt-2 text-sm text-white/55">
+              Registra y gestiona todos los gastos operativos.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 xl:w-auto">
+            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl">
+              <p className="text-xs text-white/55">Total USD</p>
+              <p className="mt-1 text-lg font-semibold text-white">
+                {formatearMoneda(totales.totalUSD, 'USD')}
+              </p>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl">
+              <p className="text-xs text-white/55">Total Bs</p>
+              <p className="mt-1 text-lg font-semibold text-white">
+                {formatearMoneda(totales.totalBS, 'BS')}
+              </p>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl">
+              <p className="text-xs text-white/55">Registros</p>
+              <p className="mt-1 text-lg font-semibold text-white">
+                {totales.cantidad}
+              </p>
+            </div>
+          </div>
         </div>
 
-        <button
-          onClick={() => {
-            if (showForm && !editingId) {
-              setShowForm(false)
-            } else {
-              startCreate()
-            }
-          }}
-          className="
-            rounded-2xl border border-white/10 bg-white/[0.08]
-            px-4 py-3 text-sm font-semibold text-white transition
-            hover:bg-white/[0.12]
-          "
-        >
-          {showForm && !editingId ? 'Cerrar formulario' : 'Nuevo egreso'}
-        </button>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Total registros" value={resumen.total} color="text-white" />
-        <StatCard title="Pagados" value={money(resumen.pagados)} color="text-rose-300" />
-        <StatCard title="Pendientes" value={money(resumen.pendientes)} color="text-amber-300" />
-        <StatCard title="Anulados" value={money(resumen.anulados)} color="text-white" />
-      </div>
-
-      {errorMsg ? (
-        <Card className="p-4">
-          <p className="text-sm font-medium text-rose-400">Error</p>
-          <p className="mt-1 text-sm text-white/55">{errorMsg}</p>
-        </Card>
-      ) : null}
-
-      {successMsg ? (
-        <Card className="p-4">
-          <p className="text-sm font-medium text-emerald-400">Listo</p>
-          <p className="mt-1 text-sm text-white/55">{successMsg}</p>
-        </Card>
-      ) : null}
-
-      <div className="grid gap-6 xl:grid-cols-3">
-        {showForm ? (
-          <div className="xl:col-span-1">
-            <Section
-              title={editingId ? 'Editar egreso' : 'Nuevo egreso'}
-              description="Completa la información del gasto y su estado."
+        {!showForm && (
+          <div>
+            <button
+              onClick={() => setShowForm(true)}
+              className="
+                inline-flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10
+                bg-white/[0.03] px-5 py-3 text-sm font-medium text-white/85 transition
+                hover:bg-white/[0.06] sm:w-auto
+              "
             >
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <Plus className="h-4 w-4" />
+              Nuevo egreso
+            </button>
+          </div>
+        )}
+
+        <div className="grid gap-6 xl:grid-cols-3">
+          {showForm && (
+            <div className="xl:col-span-1">
+              <form
+                onSubmit={handleSubmit}
+                className={`${panelCls} space-y-5 p-6`}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">
+                      {editingId ? 'Editar egreso' : 'Nuevo egreso'}
+                    </h2>
+                    <p className="mt-1 text-xs text-white/45">
+                      Completa los datos del gasto.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    className="rounded-full border border-white/10 bg-white/[0.03] p-2 text-white/50 transition hover:bg-white/[0.06] hover:text-white"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">Fecha</label>
+                  <label className={labelCls}>
+                    Fecha *
+                  </label>
                   <input
                     type="date"
-                    value={form.fecha}
-                    onChange={(e) => setForm((prev) => ({ ...prev, fecha: e.target.value }))}
-                    className={inputClassName}
+                    value={fecha}
+                    onChange={(e) => setFecha(e.target.value)}
+                    className={inputCls}
+                    required
                   />
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">Concepto</label>
+                  <label className={labelCls}>
+                    Concepto *
+                  </label>
                   <input
                     type="text"
-                    value={form.concepto}
-                    onChange={(e) => setForm((prev) => ({ ...prev, concepto: e.target.value }))}
-                    placeholder="Ej: Pago de alquiler"
-                    className={inputClassName}
+                    value={concepto}
+                    onChange={(e) => setConcepto(e.target.value)}
+                    placeholder="Ej: Pago de alquiler, Compra de equipos..."
+                    className={inputCls}
+                    required
                   />
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">Categoría</label>
+                  <label className={labelCls}>
+                    Categoría
+                  </label>
                   <select
-                    value={form.categoria}
-                    onChange={(e) => setForm((prev) => ({ ...prev, categoria: e.target.value }))}
-                    className={inputClassName}
+                    value={categoria}
+                    onChange={(e) => setCategoria(e.target.value)}
+                    className={inputCls}
                   >
                     {CATEGORIAS.map((cat) => (
-                      <option key={cat} value={cat} className="bg-[#11131a] text-white">
+                      <option key={cat} value={cat} className="bg-[#11131a]">
                         {cat}
                       </option>
                     ))}
@@ -453,95 +751,83 @@ export default function EgresosPage() {
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">Proveedor</label>
+                  <label className={labelCls}>
+                    Proveedor (opcional)
+                  </label>
                   <input
                     type="text"
-                    value={form.proveedor}
-                    onChange={(e) => setForm((prev) => ({ ...prev, proveedor: e.target.value }))}
+                    value={proveedor}
+                    onChange={(e) => setProveedor(e.target.value)}
                     placeholder="Nombre del proveedor"
-                    className={inputClassName}
+                    className={inputCls}
                   />
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">Monto</label>
+                  <label className={labelCls}>
+                    Monto base (USD) *
+                  </label>
                   <input
                     type="number"
-                    min="0"
                     step="0.01"
-                    value={form.monto}
-                    onChange={(e) => setForm((prev) => ({ ...prev, monto: e.target.value }))}
+                    value={montoUSD}
+                    onChange={(e) => setMontoUSD(e.target.value)}
                     placeholder="0.00"
-                    className={inputClassName}
+                    className={inputCls}
+                    required
                   />
                 </div>
 
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-white/55">Monto base USD</span>
+                    <span className="font-semibold text-white">
+                      {resumenMonto.usd > 0 ? formatearMoneda(resumenMonto.usd, 'USD') : '—'}
+                    </span>
+                  </div>
+
+                  {esBs && estado === 'pagado' && (
+                    <div className="mt-2 flex items-center justify-between text-sm">
+                      <span className="text-white/55">Monto a pagar en Bs</span>
+                      <span className="font-semibold text-white">
+                        {resumenMonto.bs > 0 ? formatearMoneda(resumenMonto.bs, 'BS') : '—'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">Estado</label>
+                  <label className={labelCls}>
+                    Estado
+                  </label>
                   <select
-                    value={form.estado}
-                    onChange={(e) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        estado: e.target.value as 'pagado' | 'pendiente' | 'anulado',
-                      }))
-                    }
-                    className={inputClassName}
+                    value={estado}
+                    onChange={(e) => setEstado(e.target.value as 'pagado' | 'pendiente')}
+                    className={inputCls}
                   >
-                    <option value="pagado" className="bg-[#11131a] text-white">
-                      Pagado
-                    </option>
-                    <option value="pendiente" className="bg-[#11131a] text-white">
-                      Pendiente
-                    </option>
-                    <option value="anulado" className="bg-[#11131a] text-white">
-                      Anulado
-                    </option>
+                    <option value="pagado" className="bg-[#11131a]">Pagado</option>
+                    <option value="pendiente" className="bg-[#11131a]">Pendiente</option>
                   </select>
                 </div>
 
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">
-                    Método de pago
-                  </label>
-                  <select
-                    value={form.metodo_pago_id}
-                    onChange={(e) => setForm((prev) => ({ ...prev, metodo_pago_id: e.target.value }))}
-                    className={inputClassName}
-                  >
-                    <option value="" className="bg-[#11131a] text-white">
-                      Sin método
-                    </option>
-                    {metodosPago.map((metodo) => (
-                      <option key={metodo.id} value={metodo.id} className="bg-[#11131a] text-white">
-                        {metodo.nombre}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+               <SelectorMetodoPago
+  metodoPagoId={metodoPagoId}
+  onMetodoPagoChange={setMetodoPagoId}
+  onTasaChange={setTasaBCV}
+  tasaActual={tasaBCV}
+  monto={esBs ? resumenMonto.bs : resumenMonto.usd}
+/> 
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">
-                    URL comprobante
+                  <label className={labelCls}>
+                    Notas (opcional)
                   </label>
-                  <input
-                    type="text"
-                    value={form.comprobante_url}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, comprobante_url: e.target.value }))
-                    }
-                    placeholder="https://..."
-                    className={inputClassName}
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">Notas</label>
                   <textarea
-                    value={form.notas}
-                    onChange={(e) => setForm((prev) => ({ ...prev, notas: e.target.value }))}
-                    className={textareaClassName}
-                    placeholder="Notas adicionales"
+                    value={notas}
+                    onChange={(e) => setNotas(e.target.value)}
+                    placeholder="Detalles adicionales..."
+                    rows={3}
+                    className={`${inputCls} resize-none`}
                   />
                 </div>
 
@@ -550,83 +836,60 @@ export default function EgresosPage() {
                     type="submit"
                     disabled={saving}
                     className="
-                      rounded-2xl border border-white/10 bg-white/[0.08]
-                      px-5 py-3 text-sm font-semibold text-white transition
-                      hover:bg-white/[0.12] disabled:opacity-60
+                      flex-1 rounded-2xl border border-white/10 bg-white/[0.03]
+                      px-6 py-3.5 text-sm font-medium text-white transition
+                      hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50
                     "
                   >
-                    {saving
-                      ? editingId
-                        ? 'Actualizando...'
-                        : 'Guardando...'
-                      : editingId
-                      ? 'Guardar cambios'
-                      : 'Crear egreso'}
+                    {saving ? 'Guardando...' : editingId ? 'Actualizar' : 'Registrar'}
                   </button>
 
                   <button
                     type="button"
                     onClick={resetForm}
-                    className="
-                      rounded-2xl border border-white/10 bg-white/[0.03]
-                      px-5 py-3 text-sm font-semibold text-white/80 transition
-                      hover:bg-white/[0.06]
-                    "
+                    className={softButtonCls}
                   >
                     Cancelar
                   </button>
                 </div>
               </form>
-            </Section>
-          </div>
-        ) : null}
+            </div>
+          )}
 
-        <div className={showForm ? 'xl:col-span-2' : 'xl:col-span-3'}>
-          <Section
-            title="Listado de egresos"
-            description="Filtra, edita, elimina o cambia el estado de cada registro."
-            className="p-0"
-            contentClassName="overflow-hidden"
-          >
-            <div className="border-b border-white/10 bg-white/[0.03] px-5 py-4">
-              <div className="grid gap-3 md:grid-cols-3">
-                <input
-                  type="text"
-                  placeholder="Buscar por concepto, categoría, proveedor..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className={inputClassName}
-                />
+          <div className={`space-y-4 ${showForm ? 'xl:col-span-2' : 'xl:col-span-3'}`}>
+            <div className={`${panelCls} p-4`}>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/40" />
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Buscar..."
+                    className="w-full rounded-2xl border border-white/10 bg-white/[0.03] py-3 pl-10 pr-4 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/20 focus:bg-white/[0.05]"
+                  />
+                </div>
 
                 <select
                   value={estadoFiltro}
-                  onChange={(e) => setEstadoFiltro(e.target.value)}
-                  className={inputClassName}
+                  onChange={(e) => setEstadoFiltro(e.target.value as 'todos' | 'pagado' | 'pendiente' | 'anulado' | 'liquidado')}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-white/20 focus:bg-white/[0.05]"
                 >
-                  <option value="todos" className="bg-[#11131a] text-white">
-                    Todos los estados
-                  </option>
-                  <option value="pagado" className="bg-[#11131a] text-white">
-                    Pagado
-                  </option>
-                  <option value="pendiente" className="bg-[#11131a] text-white">
-                    Pendiente
-                  </option>
-                  <option value="anulado" className="bg-[#11131a] text-white">
-                    Anulado
-                  </option>
+                  <option value="todos" className="bg-[#11131a]">Todos</option>
+                  <option value="pagado" className="bg-[#11131a]">Pagado</option>
+                  <option value="pendiente" className="bg-[#11131a]">Pendiente</option>
+                  <option value="anulado" className="bg-[#11131a]">Anulado</option>
+                  <option value="liquidado" className="bg-[#11131a]">Liquidado</option>
                 </select>
 
                 <select
                   value={categoriaFiltro}
                   onChange={(e) => setCategoriaFiltro(e.target.value)}
-                  className={inputClassName}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-white/20 focus:bg-white/[0.05]"
                 >
-                  <option value="todos" className="bg-[#11131a] text-white">
-                    Todas las categorías
-                  </option>
+                  <option value="todos" className="bg-[#11131a]">Todas las categorías</option>
                   {CATEGORIAS.map((cat) => (
-                    <option key={cat} value={cat} className="bg-[#11131a] text-white">
+                    <option key={cat} value={cat} className="bg-[#11131a]">
                       {cat}
                     </option>
                   ))}
@@ -634,107 +897,99 @@ export default function EgresosPage() {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="border-b border-white/10 bg-white/[0.03]">
-                  <tr className="text-left text-white/55">
-                    <th className="px-4 py-3 font-medium">Fecha</th>
-                    <th className="px-4 py-3 font-medium">Concepto</th>
-                    <th className="px-4 py-3 font-medium">Proveedor</th>
-                    <th className="px-4 py-3 font-medium">Categoría</th>
-                    <th className="px-4 py-3 font-medium">Método</th>
-                    <th className="px-4 py-3 font-medium">Estado</th>
-                    <th className="px-4 py-3 font-medium">Monto</th>
-                    <th className="px-4 py-3 font-medium">Acciones</th>
-                  </tr>
-                </thead>
+            <div className="space-y-3">
+              {egresosFiltrados.length === 0 ? (
+                <div className={`${panelCls} p-12 text-center`}>
+                  <p className="text-white/45">No hay egresos registrados</p>
+                </div>
+              ) : (
+                egresosFiltrados.map((eg) => (
+                  <div
+                    key={eg.id}
+                    className={`${panelCls} p-5 transition hover:bg-white/[0.04]`}
+                  >
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0 flex-1">
+                        <h3 className="truncate font-medium text-white">
+                          {eg.concepto}
+                        </h3>
 
-                <tbody className="divide-y divide-white/10">
-                  {loading ? (
-                    <tr>
-                      <td colSpan={8} className="px-4 py-6 text-white/55">
-                        Cargando egresos...
-                      </td>
-                    </tr>
-                  ) : egresosFiltrados.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-4 py-6 text-white/55">
-                        No hay egresos registrados.
-                      </td>
-                    </tr>
-                  ) : (
-                    egresosFiltrados.map((row) => (
-                      <tr key={row.id} className="transition hover:bg-white/[0.03]">
-                        <td className="px-4 py-3 text-white/75">{row.fecha}</td>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-white/45">
+                          <span>{eg.fecha}</span>
+                          <span>•</span>
+                          <span>{eg.categoria}</span>
 
-                        <td className="px-4 py-3">
-                          <p className="font-medium text-white">{row.concepto}</p>
-                          {row.notas ? (
-                            <p className="line-clamp-1 text-xs text-white/45">{row.notas}</p>
-                          ) : null}
-                        </td>
+                          {eg.proveedor && (
+                            <>
+                              <span>•</span>
+                              <span>{eg.proveedor}</span>
+                            </>
+                          )}
 
-                        <td className="px-4 py-3 text-white/75">{row.proveedor || '—'}</td>
-                        <td className="px-4 py-3 text-white/75">{row.categoria}</td>
-                        <td className="px-4 py-3 text-white/75">{row.metodos_pago?.nombre || '—'}</td>
+                          {eg.metodo_pago_v2?.nombre && (
+                            <>
+                              <span>•</span>
+                              <span>{eg.metodo_pago_v2.nombre}</span>
+                            </>
+                          )}
 
-                        <td className="px-4 py-3">
+                          {eg.metodo_pago_v2?.cartera?.nombre && (
+                            <>
+                              <span>•</span>
+                              <span>{eg.metodo_pago_v2.cartera.nombre}</span>
+                            </>
+                          )}
+
                           <span
-                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${estadoBadge(row.estado)}`}
+                            className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                              eg.estado === 'pagado'
+                                ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+                                : eg.estado === 'pendiente'
+                                  ? 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+                                  : eg.estado === 'liquidado'
+                                    ? 'border-violet-400/20 bg-violet-400/10 text-violet-300'
+                                    : 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+                            }`}
                           >
-                            {row.estado}
+                            {eg.estado}
                           </span>
-                        </td>
+                        </div>
+                      </div>
 
-                        <td className="px-4 py-3 font-semibold text-rose-300">
-                          {money(row.monto)}
-                        </td>
+                      <div className="flex items-start gap-4 lg:ml-4 lg:flex-shrink-0">
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-white">
+                            {formatearMoneda(Number(eg.monto_equivalente_usd || 0), 'USD')}
+                          </p>
+                          <p className="mt-1 text-xs text-white/45">
+                            {formatearMoneda(Number(eg.monto_equivalente_bs || 0), 'BS')}
+                          </p>
+                        </div>
 
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              onClick={() => startEdit(row)}
-                              className="
-                                rounded-xl border border-white/10 bg-white/[0.03]
-                                px-3 py-1.5 text-xs font-semibold text-white/80 transition
-                                hover:bg-white/[0.06]
-                              "
-                            >
-                              Editar
-                            </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => startEdit(eg)}
+                            className="rounded-2xl border border-white/10 bg-white/[0.03] p-2 text-white/60 transition hover:bg-white/[0.06] hover:text-white"
+                            title="Editar"
+                          >
+                            <Edit2 className="h-4 w-4" />
+                          </button>
 
-                            <button
-                              onClick={() => toggleEstado(row)}
-                              disabled={updatingId === row.id}
-                              className="
-                                rounded-xl border border-white/10 bg-white/[0.03]
-                                px-3 py-1.5 text-xs font-semibold text-white/80 transition
-                                hover:bg-white/[0.06] disabled:opacity-60
-                              "
-                            >
-                              {updatingId === row.id ? 'Actualizando...' : 'Cambiar estado'}
-                            </button>
-
-                            <button
-                              onClick={() => eliminarEgreso(row.id)}
-                              disabled={deletingId === row.id}
-                              className="
-                                rounded-xl border border-rose-400/20 bg-rose-400/10
-                                px-3 py-1.5 text-xs font-semibold text-rose-300 transition
-                                hover:bg-rose-400/15 disabled:opacity-60
-                              "
-                            >
-                              {deletingId === row.id ? 'Eliminando...' : 'Eliminar'}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                          <button
+                            onClick={() => eliminarEgreso(eg.id)}
+                            className="rounded-2xl border border-rose-400/20 bg-rose-400/10 p-2 text-rose-300 transition hover:bg-rose-400/15"
+                            title="Eliminar"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
-          </Section>
+          </div>
         </div>
       </div>
     </div>
