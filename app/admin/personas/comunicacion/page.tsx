@@ -150,7 +150,7 @@ const PLANTILLA_LABELS: Record<PlantillaWhatsApp, string> = {
 
 const PLANTILLAS: Record<PlantillaWhatsApp, (datos: DatosPlantilla) => string> = {
   recordatorio_cita: (datos) =>
-    `Hola *${datos.nombre}*, te recordamos tu cita de *${datos.servicio || 'servicio'}* el ${datos.fecha || 'día indicado'} a las *${datos.hora || 'hora indicada'}* en RPM Clinic. ¡Te esperamos! 🏥`,
+    `Hola *${datos.nombre}*, te recordamos tu cita de *${datos.servicio || 'servicio'}* el ${datos.fecha || 'día indicado'} a las *${datos.hora || 'hora indicada'}* en RPM. ¡Te esperamos! 🏥`,
 
   confirmacion_cita: (datos) =>
     `Hola *${datos.nombre}*, tu cita ha sido agendada para el *${datos.fecha || 'día indicado'}* a las *${datos.hora || 'hora indicada'}*.
@@ -161,11 +161,11 @@ const PLANTILLAS: Record<PlantillaWhatsApp, (datos: DatosPlantilla) => string> =
 ¿Confirmas tu asistencia? Responde SÍ para confirmar.`,
 
   bienvenida_cliente: (datos) =>
-    `¡Bienvenido/a a RPM Clinic, *${datos.nombre}*! 🎉
+    `¡Bienvenido/a a RPM, *${datos.nombre}*! 🎉
 
 Estamos emocionados de acompañarte en tu proceso de recuperación y bienestar.
 
-👨‍⚕️ Tu terapeuta asignado es: *${datos.terapeuta || 'RPM Clinic'}*
+👨‍⚕️ Tu terapeuta asignado es: *${datos.terapeuta || 'RPM'}*
 
 Cualquier duda, estamos a tu disposición.`,
 
@@ -189,7 +189,7 @@ Puedes realizar el pago en recepción o mediante transferencia. ¡Gracias!`,
 
 ✅ Pago registrado exitosamente.
 
-¡Gracias por tu confianza en RPM Clinic! 🙏`,
+¡Gracias por tu confianza en RPM! 🙏`,
 
   recordatorio_entrenamiento: (datos) =>
     `Hola *${datos.nombre}*, te recordamos tu sesión de entrenamiento el ${datos.fecha || 'día indicado'} a las *${datos.hora || 'hora indicada'}*.
@@ -671,11 +671,11 @@ export default function ComunicacionPage() {
         return {
           datos: {
             ...base,
-            terapeuta: terapeuta?.nombre || 'RPM Clinic',
+            terapeuta: terapeuta?.nombre || 'RPM',
           },
           contexto: terapeuta?.nombre
             ? `Terapeuta cargado: ${terapeuta.nombre}`
-            : 'Cliente sin terapeuta asignado. Se dejó RPM Clinic.',
+            : 'Cliente sin terapeuta asignado. Se dejó RPM .',
         }
       }
 

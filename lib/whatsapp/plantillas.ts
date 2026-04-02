@@ -25,7 +25,7 @@ type DatosPlantilla = {
 
 const PLANTILLAS: Record<PlantillaWhatsApp, (datos: DatosPlantilla) => string> = {
   recordatorio_cita: (datos) =>
-    `Hola *${datos.nombre}*, te recordamos tu cita de *${datos.servicio}* mañana ${datos.fecha} a las *${datos.hora}* en RPM Clinic. ¡Te esperamos! 🏥`,
+    `Hola *${datos.nombre}*, te recordamos tu cita de *${datos.servicio}* mañana ${datos.fecha} a las *${datos.hora}* en RPM . ¡Te esperamos! 🏥`,
 
   confirmacion_cita: (datos) =>
     `Hola *${datos.nombre}*, tu cita ha sido agendada para el *${datos.fecha}* a las *${datos.hora}*.
@@ -36,7 +36,7 @@ const PLANTILLAS: Record<PlantillaWhatsApp, (datos: DatosPlantilla) => string> =
 ¿Confirmas tu asistencia? Responde SÍ para confirmar.`,
 
   bienvenida_cliente: (datos) =>
-    `¡Bienvenido/a a RPM Clinic, *${datos.nombre}*! 🎉
+    `¡Bienvenido/a a RPM, *${datos.nombre}*! 🎉
 
 Estamos emocionados de acompañarte en tu proceso de recuperación y bienestar.
 
@@ -64,7 +64,7 @@ Puedes realizar el pago en recepción o mediante transferencia. ¡Gracias!`,
 
 ✅ Pago registrado exitosamente.
 
-¡Gracias por tu confianza en RPM Clinic! 🙏`,
+¡Gracias por tu confianza en RPM ! 🙏`,
 
   recordatorio_entrenamiento: (datos) =>
     `Hola *${datos.nombre}*, te recordamos tu sesión de entrenamiento mañana ${datos.fecha} a las *${datos.hora}*.

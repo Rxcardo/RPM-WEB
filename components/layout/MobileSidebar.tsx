@@ -87,7 +87,7 @@ export default function MobileSidebar() {
         aria-hidden={!isOpen}
       >
         <div className="border-b border-white/10 px-5 pb-4 pt-6">
-          <h2 className="text-lg font-bold text-white">RPM Clinic</h2>
+          <h2 className="text-lg font-bold text-white">RPM </h2>
           <p className="mt-1 text-xs text-white/55">Sistema de gestión</p>
         </div>
 
