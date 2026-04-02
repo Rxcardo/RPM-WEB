@@ -2,7 +2,13 @@
 
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import {
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
@@ -74,6 +80,50 @@ type ClientePlan = {
   planes?: {
     nombre: string
   } | null
+}
+
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function normalizeMetodoPago(row: any): MetodoPago {
+  const cartera = firstOrNull(row?.cartera)
+
+  return {
+    id: String(row?.id ?? ''),
+    nombre: String(row?.nombre ?? ''),
+    tipo: row?.tipo ?? null,
+    moneda: row?.moneda ?? null,
+    color: row?.color ?? null,
+    icono: row?.icono ?? null,
+    cartera: cartera
+      ? {
+          nombre: String(cartera?.nombre ?? ''),
+          codigo: String(cartera?.codigo ?? ''),
+        }
+      : null,
+  }
+}
+
+function normalizeClientePlan(row: any): ClientePlan {
+  const plan = firstOrNull(row?.planes)
+
+  return {
+    id: String(row?.id ?? ''),
+    cliente_id: String(row?.cliente_id ?? ''),
+    plan_id: String(row?.plan_id ?? ''),
+    sesiones_totales: Number(row?.sesiones_totales || 0),
+    sesiones_usadas: Number(row?.sesiones_usadas || 0),
+    estado: String(row?.estado ?? ''),
+    fecha_inicio: row?.fecha_inicio ?? null,
+    fecha_fin: row?.fecha_fin ?? null,
+    planes: plan
+      ? {
+          nombre: String(plan?.nombre ?? ''),
+        }
+      : null,
+  }
 }
 
 function sumarMinutos(hora: string, minutos: number) {
@@ -176,7 +226,22 @@ function getPlanLabel(plan: ClientePlan) {
   return `${nombre} · ${disponibles}/${plan.sesiones_totales} disponibles`
 }
 
-export default function NuevaCitaPage() {
+function NuevaCitaPageFallback() {
+  return (
+    <div className="space-y-6">
+      <Section
+        title="Formulario de cita"
+        description="Cargando vista..."
+      >
+        <Card className="p-6">
+          <p className="text-sm text-white/55">Cargando formulario...</p>
+        </Card>
+      </Section>
+    </div>
+  )
+}
+
+function NuevaCitaPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const clienteInicial = searchParams.get('cliente') || ''
@@ -225,6 +290,16 @@ export default function NuevaCitaPage() {
   useEffect(() => {
     void loadData()
   }, [])
+
+  useEffect(() => {
+    setForm((prev) => {
+      if (prev.cliente_id || !clienteInicial) return prev
+      return {
+        ...prev,
+        cliente_id: clienteInicial,
+      }
+    })
+  }, [clienteInicial])
 
   useEffect(() => {
     if (form.cliente_id) {
@@ -355,7 +430,7 @@ export default function NuevaCitaPage() {
       const recursosData = ((recursosRes.data || []) as Recurso[]).filter(
         (r) => r.estado !== 'inactivo'
       )
-      const metodosPagoData = (metodosPagoRes.data || []) as MetodoPago[]
+      const metodosPagoData = ((metodosPagoRes.data || []) as any[]).map(normalizeMetodoPago)
 
       const serviciosData: Servicio[] = serviciosRaw
         .filter((s) => s.estado !== 'inactivo')
@@ -409,7 +484,7 @@ export default function NuevaCitaPage() {
 
       if (error) throw error
 
-      const planes = (data || []) as ClientePlan[]
+      const planes = ((data || []) as any[]).map(normalizeClientePlan)
       const conDisponibles = planes.filter((p) => getPlanDisponible(p) > 0)
 
       setPlanesCliente(conDisponibles)
@@ -842,7 +917,6 @@ export default function NuevaCitaPage() {
                 ))}
               </select>
             </Field>
-
 
             {form.tipo_cita === 'plan' && (
               <Field
@@ -1549,5 +1623,13 @@ export default function NuevaCitaPage() {
         </button>
       </div>
     </div>
+  )
+}
+
+export default function NuevaCitaPage() {
+  return (
+    <Suspense fallback={<NuevaCitaPageFallback />}>
+      <NuevaCitaPageContent />
+    </Suspense>
   )
 }

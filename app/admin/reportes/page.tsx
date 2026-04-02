@@ -144,7 +144,17 @@ type NominaRow = {
   metodos_pago_v2?: { nombre: string } | null
 }
 
-type TipoReporte = 'clientes' | 'planes' | 'citas' | 'ingresos' | 'egresos' | 'financiero' | 'cobranzas' | 'inventario' | 'nomina'
+type TipoReporte =
+  | 'clientes'
+  | 'planes'
+  | 'citas'
+  | 'ingresos'
+  | 'egresos'
+  | 'financiero'
+  | 'cobranzas'
+  | 'inventario'
+  | 'nomina'
+
 type PeriodoRapido = 'hoy' | '7d' | '30d' | 'este_mes' | 'este_ano' | 'personalizado'
 
 type ConstanciaData = {
@@ -176,6 +186,11 @@ const inputClassName = `
   placeholder:text-white/35
   focus:border-white/20 focus:bg-white/[0.05]
 `
+
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
 
 function money(value: number, currency: 'USD' | 'VES' = 'USD') {
   if (currency === 'VES') {
@@ -281,6 +296,187 @@ function normalizeCell(value: unknown) {
   return String(value)
 }
 
+function normalizeClienteRow(row: any): ClienteRow {
+  const empleado = firstOrNull(row?.empleados)
+
+  return {
+    id: String(row?.id ?? ''),
+    nombre: String(row?.nombre ?? ''),
+    telefono: row?.telefono ?? null,
+    email: row?.email ?? null,
+    estado: String(row?.estado ?? ''),
+    created_at: String(row?.created_at ?? ''),
+    terapeuta_id: row?.terapeuta_id ?? null,
+    empleados: empleado
+      ? {
+          nombre: String(empleado?.nombre ?? ''),
+        }
+      : null,
+  }
+}
+
+function normalizePlanRow(row: any): PlanRow {
+  const cliente = firstOrNull(row?.clientes)
+  const plan = firstOrNull(row?.planes)
+
+  return {
+    id: String(row?.id ?? ''),
+    fecha_inicio: row?.fecha_inicio ?? null,
+    fecha_fin: row?.fecha_fin ?? null,
+    sesiones_totales: Number(row?.sesiones_totales || 0),
+    sesiones_usadas: Number(row?.sesiones_usadas || 0),
+    estado: String(row?.estado ?? ''),
+    created_at: String(row?.created_at ?? ''),
+    clientes: cliente ? { nombre: String(cliente?.nombre ?? '') } : null,
+    planes: plan
+      ? {
+          nombre: String(plan?.nombre ?? ''),
+          precio: Number(plan?.precio || 0),
+        }
+      : null,
+    precio_final_usd: row?.precio_final_usd != null ? Number(row.precio_final_usd) : null,
+    monto_final_bs: row?.monto_final_bs != null ? Number(row.monto_final_bs) : null,
+    moneda_venta: row?.moneda_venta ?? null,
+  }
+}
+
+function normalizeCitaRow(row: any): CitaRow {
+  const cliente = firstOrNull(row?.clientes)
+  const empleado = firstOrNull(row?.empleados)
+  const servicio = firstOrNull(row?.servicios)
+  const recurso = firstOrNull(row?.recursos)
+
+  return {
+    id: String(row?.id ?? ''),
+    fecha: String(row?.fecha ?? ''),
+    hora_inicio: String(row?.hora_inicio ?? ''),
+    hora_fin: String(row?.hora_fin ?? ''),
+    estado: String(row?.estado ?? ''),
+    clientes: cliente ? { nombre: String(cliente?.nombre ?? '') } : null,
+    empleados: empleado ? { nombre: String(empleado?.nombre ?? '') } : null,
+    servicios: servicio
+      ? {
+          nombre: String(servicio?.nombre ?? ''),
+          precio: servicio?.precio != null ? Number(servicio.precio) : undefined,
+        }
+      : null,
+    recursos: recurso ? { nombre: String(recurso?.nombre ?? '') } : null,
+  }
+}
+
+function normalizeIngresoRow(row: any): IngresoRow {
+  const cliente = firstOrNull(row?.clientes)
+  const metodo = firstOrNull(row?.metodos_pago_v2)
+
+  return {
+    id: String(row?.id ?? ''),
+    fecha: String(row?.fecha ?? ''),
+    concepto: String(row?.concepto ?? ''),
+    categoria: String(row?.categoria ?? ''),
+    monto: Number(row?.monto || 0),
+    estado: String(row?.estado ?? ''),
+    tipo_origen: String(row?.tipo_origen ?? ''),
+    created_at: String(row?.created_at ?? ''),
+    moneda_pago: row?.moneda_pago ?? null,
+    monto_equivalente_usd: row?.monto_equivalente_usd != null ? Number(row.monto_equivalente_usd) : null,
+    monto_equivalente_bs: row?.monto_equivalente_bs != null ? Number(row.monto_equivalente_bs) : null,
+    referencia: row?.referencia ?? null,
+    clientes: cliente ? { nombre: String(cliente?.nombre ?? '') } : null,
+    metodos_pago_v2: metodo
+      ? {
+          nombre: String(metodo?.nombre ?? ''),
+          moneda: metodo?.moneda ?? null,
+        }
+      : null,
+  }
+}
+
+function normalizeEgresoRow(row: any): EgresoRow {
+  const empleado = firstOrNull(row?.empleados)
+  const metodo = firstOrNull(row?.metodos_pago_v2)
+
+  return {
+    id: String(row?.id ?? ''),
+    fecha: String(row?.fecha ?? ''),
+    concepto: String(row?.concepto ?? ''),
+    categoria: String(row?.categoria ?? ''),
+    proveedor: row?.proveedor ?? null,
+    monto: Number(row?.monto || 0),
+    estado: String(row?.estado ?? ''),
+    created_at: String(row?.created_at ?? ''),
+    moneda: row?.moneda ?? null,
+    monto_equivalente_usd: row?.monto_equivalente_usd != null ? Number(row.monto_equivalente_usd) : null,
+    monto_equivalente_bs: row?.monto_equivalente_bs != null ? Number(row.monto_equivalente_bs) : null,
+    referencia: row?.referencia ?? null,
+    metodos_pago_v2: metodo
+      ? {
+          nombre: String(metodo?.nombre ?? ''),
+          moneda: metodo?.moneda ?? null,
+        }
+      : null,
+    empleados: empleado ? { nombre: String(empleado?.nombre ?? '') } : null,
+  }
+}
+
+function normalizeCobranzaRow(row: any): CobranzaRow {
+  const cliente = firstOrNull(row?.clientes)
+
+  return {
+    id: String(row?.id ?? ''),
+    cliente_nombre: String(row?.cliente_nombre ?? ''),
+    concepto: String(row?.concepto ?? ''),
+    tipo_origen: String(row?.tipo_origen ?? ''),
+    monto_total_usd: Number(row?.monto_total_usd || 0),
+    monto_pagado_usd: Number(row?.monto_pagado_usd || 0),
+    saldo_usd: Number(row?.saldo_usd || 0),
+    fecha_venta: String(row?.fecha_venta ?? ''),
+    fecha_vencimiento: row?.fecha_vencimiento ?? null,
+    estado: String(row?.estado ?? ''),
+    created_at: String(row?.created_at ?? ''),
+    clientes: cliente ? { nombre: String(cliente?.nombre ?? '') } : null,
+  }
+}
+
+function normalizeInventarioRow(row: any): InventarioRow {
+  const inventario = firstOrNull(row?.inventario)
+
+  return {
+    id: String(row?.id ?? ''),
+    inventario_id: String(row?.inventario_id ?? ''),
+    tipo: String(row?.tipo ?? ''),
+    cantidad: Number(row?.cantidad || 0),
+    cantidad_anterior: row?.cantidad_anterior != null ? Number(row.cantidad_anterior) : null,
+    cantidad_nueva: row?.cantidad_nueva != null ? Number(row.cantidad_nueva) : null,
+    concepto: String(row?.concepto ?? ''),
+    precio_unitario_usd: row?.precio_unitario_usd != null ? Number(row.precio_unitario_usd) : null,
+    monto_total_usd: row?.monto_total_usd != null ? Number(row.monto_total_usd) : null,
+    created_at: String(row?.created_at ?? ''),
+    inventario: inventario ? { nombre: String(inventario?.nombre ?? '') } : null,
+  }
+}
+
+function normalizeNominaRow(row: any): NominaRow {
+  const empleado = firstOrNull(row?.empleados)
+  const metodo = firstOrNull(row?.metodos_pago_v2)
+
+  return {
+    id: String(row?.id ?? ''),
+    empleado_id: String(row?.empleado_id ?? ''),
+    fecha: String(row?.fecha ?? ''),
+    tipo: String(row?.tipo ?? ''),
+    moneda_pago: String(row?.moneda_pago ?? ''),
+    monto_pago: Number(row?.monto_pago || 0),
+    tasa_bcv: row?.tasa_bcv != null ? Number(row.tasa_bcv) : null,
+    monto_equivalente_usd: row?.monto_equivalente_usd != null ? Number(row.monto_equivalente_usd) : null,
+    monto_equivalente_bs: row?.monto_equivalente_bs != null ? Number(row.monto_equivalente_bs) : null,
+    notas: row?.notas ?? null,
+    created_at: String(row?.created_at ?? ''),
+    referencia: row?.referencia ?? null,
+    empleados: empleado ? { nombre: String(empleado?.nombre ?? '') } : null,
+    metodos_pago_v2: metodo ? { nombre: String(metodo?.nombre ?? '') } : null,
+  }
+}
+
 async function fetchImageAsBase64(src: string) {
   const res = await fetch(src)
   const blob = await res.blob()
@@ -301,7 +497,15 @@ async function exportStyledExcel(args: {
   logoSrc?: string
   accentColor?: string
 }) {
-  const { title, subtitle, sheetName = 'Reporte', filename, rows, logoSrc = '/logo-rpm.png', accentColor = '111827' } = args
+  const {
+    title,
+    subtitle,
+    sheetName = 'Reporte',
+    filename,
+    rows,
+    logoSrc = '/logo-rpm.png',
+    accentColor = '111827',
+  } = args
 
   if (!rows.length) {
     alert('No hay datos para exportar.')
@@ -592,9 +796,6 @@ async function exportConstanciaPDF(data: ConstanciaData, logoSrc = '/logo-rpm.pn
   doc.save(`RPM_Constancia_${String(data.paciente).replace(/\s+/g, '_')}.pdf`)
 }
 
-
-
-
 export default function ReportesPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -681,7 +882,14 @@ export default function ReportesPage() {
 
   async function loadTotalesGlobales() {
     try {
-      const [{ count: totalClientes }, { count: clientesActivos }, { count: totalPlanes }, { count: planesActivos }, { count: totalCitas }, { count: inventarioItems }] = await Promise.all([
+      const [
+        { count: totalClientes },
+        { count: clientesActivos },
+        { count: totalPlanes },
+        { count: planesActivos },
+        { count: totalCitas },
+        { count: inventarioItems },
+      ] = await Promise.all([
         supabase.from('clientes').select('*', { count: 'exact', head: true }),
         supabase.from('clientes').select('*', { count: 'exact', head: true }).eq('estado', 'activo'),
         supabase.from('clientes_planes').select('*', { count: 'exact', head: true }),
@@ -726,7 +934,7 @@ export default function ReportesPage() {
           .select(`id,nombre,telefono,email,estado,created_at,terapeuta_id,empleados:terapeuta_id(nombre)`)
           .order('created_at', { ascending: false })
         if (error) throw error
-        setClientes((data || []) as ClienteRow[])
+        setClientes(((data || []) as any[]).map(normalizeClienteRow))
       }
 
       if (tipo === 'planes') {
@@ -735,7 +943,7 @@ export default function ReportesPage() {
           .select(`id,fecha_inicio,fecha_fin,sesiones_totales,sesiones_usadas,estado,created_at,precio_final_usd,monto_final_bs,moneda_venta,clientes:cliente_id(nombre),planes:plan_id(nombre,precio)`)
           .order('created_at', { ascending: false })
         if (error) throw error
-        setPlanes((data || []) as unknown as PlanRow[])
+        setPlanes(((data || []) as any[]).map(normalizePlanRow))
       }
 
       if (tipo === 'citas') {
@@ -748,7 +956,7 @@ export default function ReportesPage() {
         if (fechaFin) query = query.lte('fecha', fechaFin)
         const { data, error } = await query
         if (error) throw error
-        setCitas((data || []) as unknown as CitaRow[])
+        setCitas(((data || []) as any[]).map(normalizeCitaRow))
       }
 
       if (tipo === 'ingresos' || tipo === 'financiero') {
@@ -761,7 +969,7 @@ export default function ReportesPage() {
         if (fechaFin) query = query.lte('fecha', fechaFin)
         const { data, error } = await query
         if (error) throw error
-        setIngresos((data || []) as unknown as IngresoRow[])
+        setIngresos(((data || []) as any[]).map(normalizeIngresoRow))
       }
 
       if (tipo === 'egresos' || tipo === 'financiero') {
@@ -774,7 +982,7 @@ export default function ReportesPage() {
         if (fechaFin) query = query.lte('fecha', fechaFin)
         const { data, error } = await query
         if (error) throw error
-        setEgresos((data || []) as unknown as EgresoRow[])
+        setEgresos(((data || []) as any[]).map(normalizeEgresoRow))
       }
 
       if (tipo === 'cobranzas') {
@@ -787,7 +995,7 @@ export default function ReportesPage() {
         if (fechaFin) query = query.lte('fecha_venta', fechaFin)
         const { data, error } = await query
         if (error) throw error
-        setCobranzas((data || []) as unknown as CobranzaRow[])
+        setCobranzas(((data || []) as any[]).map(normalizeCobranzaRow))
       }
 
       if (tipo === 'inventario') {
@@ -799,7 +1007,7 @@ export default function ReportesPage() {
         if (fechaFin) query = query.lte('created_at', `${fechaFin}T23:59:59`)
         const { data, error } = await query
         if (error) throw error
-        setInventario((data || []) as unknown as InventarioRow[])
+        setInventario(((data || []) as any[]).map(normalizeInventarioRow))
       }
 
       if (tipo === 'nomina') {
@@ -812,7 +1020,7 @@ export default function ReportesPage() {
         if (fechaFin) query = query.lte('fecha', fechaFin)
         const { data, error } = await query
         if (error) throw error
-        setNomina((data || []) as unknown as NominaRow[])
+        setNomina(((data || []) as any[]).map(normalizeNominaRow))
       }
     } catch (err: any) {
       console.error(err)
@@ -826,59 +1034,108 @@ export default function ReportesPage() {
   const clientesFiltrados = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return clientes
-    return clientes.filter((row) => [row.nombre, row.telefono, row.email, row.estado, row.empleados?.nombre].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
+    return clientes.filter((row) =>
+      [row.nombre, row.telefono, row.email, row.estado, row.empleados?.nombre]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    )
   }, [clientes, search])
 
   const planesFiltrados = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return planes
-    return planes.filter((row) => [row.clientes?.nombre, row.planes?.nombre, row.estado, row.moneda_venta].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
+    return planes.filter((row) =>
+      [row.clientes?.nombre, row.planes?.nombre, row.estado, row.moneda_venta]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    )
   }, [planes, search])
 
   const citasFiltradas = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return citas
-    return citas.filter((row) => [row.clientes?.nombre, row.empleados?.nombre, row.servicios?.nombre, row.recursos?.nombre, row.estado].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
+    return citas.filter((row) =>
+      [row.clientes?.nombre, row.empleados?.nombre, row.servicios?.nombre, row.recursos?.nombre, row.estado]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    )
   }, [citas, search])
 
   const ingresosFiltrados = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return ingresos
-    return ingresos.filter((row) => [row.concepto, row.categoria, row.tipo_origen, row.clientes?.nombre, row.metodos_pago_v2?.nombre, row.estado, row.referencia].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
+    return ingresos.filter((row) =>
+      [row.concepto, row.categoria, row.tipo_origen, row.clientes?.nombre, row.metodos_pago_v2?.nombre, row.estado, row.referencia]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    )
   }, [ingresos, search])
 
   const egresosFiltrados = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return egresos
-    return egresos.filter((row) => [row.concepto, row.categoria, row.proveedor, row.empleados?.nombre, row.metodos_pago_v2?.nombre, row.estado, row.referencia].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
+    return egresos.filter((row) =>
+      [row.concepto, row.categoria, row.proveedor, row.empleados?.nombre, row.metodos_pago_v2?.nombre, row.estado, row.referencia]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    )
   }, [egresos, search])
 
   const cobranzasFiltradas = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return cobranzas
-    return cobranzas.filter((row) => [row.cliente_nombre, row.clientes?.nombre, row.concepto, row.tipo_origen, row.estado].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
+    return cobranzas.filter((row) =>
+      [row.cliente_nombre, row.clientes?.nombre, row.concepto, row.tipo_origen, row.estado]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    )
   }, [cobranzas, search])
 
   const inventarioFiltrado = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return inventario
-    return inventario.filter((row) => [row.inventario?.nombre, row.tipo, row.concepto].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
+    return inventario.filter((row) =>
+      [row.inventario?.nombre, row.tipo, row.concepto]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    )
   }, [inventario, search])
 
   const nominaFiltrada = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return nomina
-    return nomina.filter((row) => [row.empleados?.nombre, row.tipo, row.moneda_pago, row.notas, row.referencia].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
+    return nomina.filter((row) =>
+      [row.empleados?.nombre, row.tipo, row.moneda_pago, row.notas, row.referencia]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    )
   }, [nomina, search])
 
   const resumen = useMemo(() => {
-    const ingresosUsd = ingresosFiltrados.filter((x) => x.estado === 'pagado').reduce((acc, x) => acc + Number(x.monto_equivalente_usd || 0), 0)
-    const ingresosBs = ingresosFiltrados.filter((x) => x.estado === 'pagado').reduce((acc, x) => acc + Number(x.monto_equivalente_bs || 0), 0)
-    const egresosUsd = egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado').reduce((acc, x) => acc + Number(x.monto_equivalente_usd || 0), 0)
-    const egresosBs = egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado').reduce((acc, x) => acc + Number(x.monto_equivalente_bs || 0), 0)
-    const carteraPendienteUsd = cobranzasFiltradas.reduce((acc, x) => acc + Number(x.saldo_usd || 0), 0)
+    const ingresosUsd = ingresosFiltrados
+      .filter((x) => x.estado === 'pagado')
+      .reduce((acc, x) => acc + Number(x.monto_equivalente_usd || 0), 0)
+
+    const ingresosBs = ingresosFiltrados
+      .filter((x) => x.estado === 'pagado')
+      .reduce((acc, x) => acc + Number(x.monto_equivalente_bs || 0), 0)
+
+    const egresosUsd = egresosFiltrados
+      .filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')
+      .reduce((acc, x) => acc + Number(x.monto_equivalente_usd || 0), 0)
+
+    const egresosBs = egresosFiltrados
+      .filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')
+      .reduce((acc, x) => acc + Number(x.monto_equivalente_bs || 0), 0)
+
+    const carteraPendienteUsd = cobranzasFiltradas.reduce(
+      (acc, x) => acc + Number(x.saldo_usd || 0),
+      0
+    )
+
     const citasCompletadas = citasFiltradas.filter((x) => x.estado === 'completada').length
     const citasCanceladas = citasFiltradas.filter((x) => x.estado === 'cancelada').length
+
     return {
       ingresosUsd,
       ingresosBs,
@@ -903,55 +1160,91 @@ export default function ReportesPage() {
 
   const categoriaChart = useMemo(() => {
     const map = new Map<string, number>()
+
     if (tipo === 'ingresos') {
       for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) {
         const key = row.categoria || 'general'
-        const valor = monedaVista === 'USD' ? Number(row.monto_equivalente_usd || 0) : Number(row.monto_equivalente_bs || 0)
+        const valor =
+          monedaVista === 'USD'
+            ? Number(row.monto_equivalente_usd || 0)
+            : Number(row.monto_equivalente_bs || 0)
         map.set(key, (map.get(key) || 0) + valor)
       }
     } else if (tipo === 'egresos') {
       for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')) {
         const key = row.categoria || 'operativo'
-        const valor = monedaVista === 'USD' ? Number(row.monto_equivalente_usd || 0) : Number(row.monto_equivalente_bs || 0)
+        const valor =
+          monedaVista === 'USD'
+            ? Number(row.monto_equivalente_usd || 0)
+            : Number(row.monto_equivalente_bs || 0)
         map.set(key, (map.get(key) || 0) + valor)
       }
     } else {
       for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) {
         const key = `Ingreso: ${row.categoria || 'general'}`
-        const valor = monedaVista === 'USD' ? Number(row.monto_equivalente_usd || 0) : Number(row.monto_equivalente_bs || 0)
+        const valor =
+          monedaVista === 'USD'
+            ? Number(row.monto_equivalente_usd || 0)
+            : Number(row.monto_equivalente_bs || 0)
         map.set(key, (map.get(key) || 0) + valor)
       }
       for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')) {
         const key = `Egreso: ${row.categoria || 'operativo'}`
-        const valor = monedaVista === 'USD' ? Number(row.monto_equivalente_usd || 0) : Number(row.monto_equivalente_bs || 0)
+        const valor =
+          monedaVista === 'USD'
+            ? Number(row.monto_equivalente_usd || 0)
+            : Number(row.monto_equivalente_bs || 0)
         map.set(key, (map.get(key) || 0) + valor)
       }
     }
-    return Array.from(map.entries()).map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 })).sort((a, b) => b.value - a.value).slice(0, 8)
+
+    return Array.from(map.entries())
+      .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8)
   }, [tipo, ingresosFiltrados, egresosFiltrados, monedaVista])
 
   const financieroAgrupadoChart = useMemo(() => {
-    const map = new Map<string, { label: string; ingresosUsd: number; ingresosBs: number; egresosUsd: number; egresosBs: number }>()
+    const map = new Map<
+      string,
+      { label: string; ingresosUsd: number; ingresosBs: number; egresosUsd: number; egresosBs: number }
+    >()
+
     const getKey = (fecha: string) => {
       if (agrupacion === 'dia') return fecha
       if (agrupacion === 'semana') return getWeekLabel(fecha)
       if (agrupacion === 'mes') return getMonthLabel(fecha)
       return getYearLabel(fecha)
     }
+
     for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) {
       const key = getKey(row.fecha)
-      const prev = map.get(key) || { label: key, ingresosUsd: 0, ingresosBs: 0, egresosUsd: 0, egresosBs: 0 }
+      const prev = map.get(key) || {
+        label: key,
+        ingresosUsd: 0,
+        ingresosBs: 0,
+        egresosUsd: 0,
+        egresosBs: 0,
+      }
       prev.ingresosUsd += Number(row.monto_equivalente_usd || 0)
       prev.ingresosBs += Number(row.monto_equivalente_bs || 0)
       map.set(key, prev)
     }
+
     for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')) {
       const key = getKey(row.fecha)
-      const prev = map.get(key) || { label: key, ingresosUsd: 0, ingresosBs: 0, egresosUsd: 0, egresosBs: 0 }
+      const prev = map.get(key) || {
+        label: key,
+        ingresosUsd: 0,
+        ingresosBs: 0,
+        egresosUsd: 0,
+        egresosBs: 0,
+      }
       prev.egresosUsd += Number(row.monto_equivalente_usd || 0)
       prev.egresosBs += Number(row.monto_equivalente_bs || 0)
       map.set(key, prev)
     }
+
     return Array.from(map.values()).map((row) => ({
       ...row,
       ingresos: monedaVista === 'USD' ? row.ingresosUsd : row.ingresosBs,
@@ -984,6 +1277,7 @@ export default function ReportesPage() {
         })),
       }
     }
+
     if (tipo === 'planes') {
       return {
         title: 'Reporte de planes',
@@ -1005,6 +1299,7 @@ export default function ReportesPage() {
         })),
       }
     }
+
     if (tipo === 'citas') {
       return {
         title: 'Reporte de citas',
@@ -1022,6 +1317,7 @@ export default function ReportesPage() {
         })),
       }
     }
+
     if (tipo === 'ingresos') {
       return {
         title: 'Reporte de ingresos',
@@ -1043,6 +1339,7 @@ export default function ReportesPage() {
         })),
       }
     }
+
     if (tipo === 'egresos') {
       return {
         title: 'Reporte de egresos',
@@ -1064,6 +1361,7 @@ export default function ReportesPage() {
         })),
       }
     }
+
     if (tipo === 'cobranzas') {
       return {
         title: 'Reporte de cobranzas',
@@ -1082,6 +1380,7 @@ export default function ReportesPage() {
         })),
       }
     }
+
     if (tipo === 'inventario') {
       return {
         title: 'Reporte de inventario',
@@ -1100,6 +1399,7 @@ export default function ReportesPage() {
         })),
       }
     }
+
     if (tipo === 'nomina') {
       return {
         title: 'Reporte de nómina',
@@ -1119,6 +1419,7 @@ export default function ReportesPage() {
         })),
       }
     }
+
     return {
       title: 'Reporte financiero',
       filenameBase: 'RPM_Financiero',
@@ -1197,7 +1498,6 @@ export default function ReportesPage() {
     })
   }
 
-  
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -1209,10 +1509,26 @@ export default function ReportesPage() {
 
         {(tipo === 'ingresos' || tipo === 'egresos' || tipo === 'financiero' || tipo === 'nomina') && (
           <div className="flex gap-1 rounded-2xl border border-white/10 bg-white/[0.02] p-1">
-            <button type="button" onClick={() => setMonedaVista('USD')} className={`rounded-xl px-6 py-2.5 text-sm font-medium transition ${monedaVista === 'USD' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30' : 'text-white/45 hover:text-white/70'}`}>
+            <button
+              type="button"
+              onClick={() => setMonedaVista('USD')}
+              className={`rounded-xl px-6 py-2.5 text-sm font-medium transition ${
+                monedaVista === 'USD'
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30'
+                  : 'text-white/45 hover:text-white/70'
+              }`}
+            >
               💵 USD
             </button>
-            <button type="button" onClick={() => setMonedaVista('BS')} className={`rounded-xl px-6 py-2.5 text-sm font-medium transition ${monedaVista === 'BS' ? 'bg-amber-500/20 text-amber-300 border border-amber-400/30' : 'text-white/45 hover:text-white/70'}`}>
+            <button
+              type="button"
+              onClick={() => setMonedaVista('BS')}
+              className={`rounded-xl px-6 py-2.5 text-sm font-medium transition ${
+                monedaVista === 'BS'
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-400/30'
+                  : 'text-white/45 hover:text-white/70'
+              }`}
+            >
               💰 BS
             </button>
           </div>
@@ -1232,7 +1548,9 @@ export default function ReportesPage() {
             <label className="mb-2 block text-sm font-medium text-white/75">Área</label>
             <select value={tipo} onChange={(e) => setTipo(e.target.value as TipoReporte)} className={inputClassName}>
               {TIPOS.map((item) => (
-                <option key={item.value} value={item.value} className="bg-[#11131a] text-white">{item.label}</option>
+                <option key={item.value} value={item.value} className="bg-[#11131a] text-white">
+                  {item.label}
+                </option>
               ))}
             </select>
           </div>
@@ -1251,17 +1569,37 @@ export default function ReportesPage() {
 
           <div>
             <label className="mb-2 block text-sm font-medium text-white/75">Desde</label>
-            <input type="date" value={fechaInicio} onChange={(e) => { setPeriodo('personalizado'); setFechaInicio(e.target.value) }} className={inputClassName} />
+            <input
+              type="date"
+              value={fechaInicio}
+              onChange={(e) => {
+                setPeriodo('personalizado')
+                setFechaInicio(e.target.value)
+              }}
+              className={inputClassName}
+            />
           </div>
 
           <div>
             <label className="mb-2 block text-sm font-medium text-white/75">Hasta</label>
-            <input type="date" value={fechaFin} onChange={(e) => { setPeriodo('personalizado'); setFechaFin(e.target.value) }} className={inputClassName} />
+            <input
+              type="date"
+              value={fechaFin}
+              onChange={(e) => {
+                setPeriodo('personalizado')
+                setFechaFin(e.target.value)
+              }}
+              className={inputClassName}
+            />
           </div>
 
           <div>
             <label className="mb-2 block text-sm font-medium text-white/75">Agrupar</label>
-            <select value={agrupacion} onChange={(e) => setAgrupacion(e.target.value as 'dia' | 'semana' | 'mes' | 'anio')} className={inputClassName}>
+            <select
+              value={agrupacion}
+              onChange={(e) => setAgrupacion(e.target.value as 'dia' | 'semana' | 'mes' | 'anio')}
+              className={inputClassName}
+            >
               <option value="dia" className="bg-[#11131a]">Día</option>
               <option value="semana" className="bg-[#11131a]">Semana</option>
               <option value="mes" className="bg-[#11131a]">Mes</option>
@@ -1271,21 +1609,51 @@ export default function ReportesPage() {
 
           <div className="md:col-span-2">
             <label className="mb-2 block text-sm font-medium text-white/75">Buscar</label>
-            <input type="text" placeholder="Buscar..." value={search} onChange={(e) => setSearch(e.target.value)} className={inputClassName} />
+            <input
+              type="text"
+              placeholder="Buscar..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className={inputClassName}
+            />
           </div>
 
           <div className="flex items-end gap-2">
-            <button onClick={() => loadReporte()} disabled={loading} className="flex-1 rounded-2xl border border-white/10 bg-white/[0.08] px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.12] disabled:opacity-60">
+            <button
+              onClick={() => loadReporte()}
+              disabled={loading}
+              className="flex-1 rounded-2xl border border-white/10 bg-white/[0.08] px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.12] disabled:opacity-60"
+            >
               {loading ? 'Cargando...' : '🔄 Generar'}
             </button>
           </div>
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          <button onClick={handleExportExcel} disabled={loading} className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-400/20 disabled:opacity-60">📗 Excel bonito</button>
-          <button onClick={handleExportPDF} disabled={loading} className="rounded-2xl border border-sky-400/30 bg-sky-400/10 px-4 py-3 text-sm font-semibold text-sky-300 transition hover:bg-sky-400/20 disabled:opacity-60">📄 PDF reporte</button>
+          <button
+            onClick={handleExportExcel}
+            disabled={loading}
+            className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-400/20 disabled:opacity-60"
+          >
+            📗 Excel bonito
+          </button>
+
+          <button
+            onClick={handleExportPDF}
+            disabled={loading}
+            className="rounded-2xl border border-sky-400/30 bg-sky-400/10 px-4 py-3 text-sm font-semibold text-sky-300 transition hover:bg-sky-400/20 disabled:opacity-60"
+          >
+            📄 PDF reporte
+          </button>
+
           {tipo === 'citas' && (
-            <button onClick={handleConstanciaPDF} disabled={loading || citasFiltradas.length === 0} className="rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm font-semibold text-amber-300 transition hover:bg-amber-400/20 disabled:opacity-60">🧾 Constancia PDF</button>
+            <button
+              onClick={handleConstanciaPDF}
+              disabled={loading || citasFiltradas.length === 0}
+              className="rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm font-semibold text-amber-300 transition hover:bg-amber-400/20 disabled:opacity-60"
+            >
+              🧾 Constancia PDF
+            </button>
           )}
         </div>
       </Section>
@@ -1330,7 +1698,9 @@ export default function ReportesPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={citasEstadoChart} dataKey="value" nameKey="name" innerRadius={60} outerRadius={100} paddingAngle={3}>
-                      {citasEstadoChart.map((entry, index) => <Cell key={`${entry.name}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}
+                      {citasEstadoChart.map((entry, index) => (
+                        <Cell key={`${entry.name}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                      ))}
                     </Pie>
                     <Tooltip />
                     <Legend />
@@ -1739,46 +2109,48 @@ export default function ReportesPage() {
                   <tr>
                     <td colSpan={9} className="px-4 py-6 text-center text-white/55">No hay movimientos financieros.</td>
                   </tr>
-                ) : [...
-                  ingresosFiltrados.map((row) => ({
-                    id: `ing-${row.id}`,
-                    fecha: row.fecha,
-                    tipo: 'Ingreso',
-                    concepto: row.concepto,
-                    categoria: row.categoria,
-                    tercero: row.clientes?.nombre || '—',
-                    metodo: row.metodos_pago_v2?.nombre || '—',
-                    montoUsd: Number(row.monto_equivalente_usd || 0),
-                    montoBs: Number(row.monto_equivalente_bs || 0),
-                    estado: row.estado,
-                  })),
-                  ...egresosFiltrados.map((row) => ({
-                    id: `egr-${row.id}`,
-                    fecha: row.fecha,
-                    tipo: 'Egreso',
-                    concepto: row.concepto,
-                    categoria: row.categoria,
-                    tercero: row.empleados?.nombre || row.proveedor || '—',
-                    metodo: row.metodos_pago_v2?.nombre || '—',
-                    montoUsd: Number(row.monto_equivalente_usd || 0),
-                    montoBs: Number(row.monto_equivalente_bs || 0),
-                    estado: row.estado,
-                  })),
-                ]
-                  .sort((a, b) => (a.fecha < b.fecha ? 1 : -1))
-                  .map((row) => (
-                    <tr key={row.id} className="transition hover:bg-white/[0.03]">
-                      <td className="px-4 py-3 text-white/75">{shortDate(row.fecha)}</td>
-                      <td className="px-4 py-3 font-medium text-white">{row.tipo}</td>
-                      <td className="px-4 py-3 text-white/75">{row.concepto}</td>
-                      <td className="px-4 py-3 text-white/75">{row.categoria}</td>
-                      <td className="px-4 py-3 text-white/75">{row.tercero}</td>
-                      <td className="px-4 py-3 text-white/75">{row.metodo}</td>
-                      <td className="px-4 py-3 text-white/75">{money(row.montoUsd, 'USD')}</td>
-                      <td className="px-4 py-3 text-white/75">{money(row.montoBs, 'VES')}</td>
-                      <td className="px-4 py-3 text-white/75">{row.estado}</td>
-                    </tr>
-                  ))}
+                ) : (
+                  [
+                    ...ingresosFiltrados.map((row) => ({
+                      id: `ing-${row.id}`,
+                      fecha: row.fecha,
+                      tipo: 'Ingreso',
+                      concepto: row.concepto,
+                      categoria: row.categoria,
+                      tercero: row.clientes?.nombre || '—',
+                      metodo: row.metodos_pago_v2?.nombre || '—',
+                      montoUsd: Number(row.monto_equivalente_usd || 0),
+                      montoBs: Number(row.monto_equivalente_bs || 0),
+                      estado: row.estado,
+                    })),
+                    ...egresosFiltrados.map((row) => ({
+                      id: `egr-${row.id}`,
+                      fecha: row.fecha,
+                      tipo: 'Egreso',
+                      concepto: row.concepto,
+                      categoria: row.categoria,
+                      tercero: row.empleados?.nombre || row.proveedor || '—',
+                      metodo: row.metodos_pago_v2?.nombre || '—',
+                      montoUsd: Number(row.monto_equivalente_usd || 0),
+                      montoBs: Number(row.monto_equivalente_bs || 0),
+                      estado: row.estado,
+                    })),
+                  ]
+                    .sort((a, b) => (a.fecha < b.fecha ? 1 : -1))
+                    .map((row) => (
+                      <tr key={row.id} className="transition hover:bg-white/[0.03]">
+                        <td className="px-4 py-3 text-white/75">{shortDate(row.fecha)}</td>
+                        <td className="px-4 py-3 font-medium text-white">{row.tipo}</td>
+                        <td className="px-4 py-3 text-white/75">{row.concepto}</td>
+                        <td className="px-4 py-3 text-white/75">{row.categoria}</td>
+                        <td className="px-4 py-3 text-white/75">{row.tercero}</td>
+                        <td className="px-4 py-3 text-white/75">{row.metodo}</td>
+                        <td className="px-4 py-3 text-white/75">{money(row.montoUsd, 'USD')}</td>
+                        <td className="px-4 py-3 text-white/75">{money(row.montoBs, 'VES')}</td>
+                        <td className="px-4 py-3 text-white/75">{row.estado}</td>
+                      </tr>
+                    ))
+                )}
               </tbody>
             </table>
           </div>

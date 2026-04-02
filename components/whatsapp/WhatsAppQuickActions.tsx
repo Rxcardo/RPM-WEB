@@ -50,7 +50,8 @@ type Props = {
 export default function WhatsAppQuickActions({ clientes = [] }: Props) {
   const [clienteSeleccionado, setClienteSeleccionado] = useState<string>('')
 
-  const cliente = clientes.find((c) => c.id === clienteSeleccionado)
+  const cliente = clientes.find((c) => c.id === clienteSeleccionado) || null
+  const telefonoCliente = cliente?.telefono ?? ''
 
   return (
     <Card className="p-6">
@@ -77,7 +78,7 @@ export default function WhatsAppQuickActions({ clientes = [] }: Props) {
         </select>
       </div>
 
-      {cliente && cliente.telefono && (
+      {cliente && telefonoCliente && (
         <div className="mt-4 space-y-2">
           {ACCIONES.map((accion) => (
             <div
@@ -90,7 +91,7 @@ export default function WhatsAppQuickActions({ clientes = [] }: Props) {
               </div>
 
               <WhatsAppButton
-                telefono={cliente.telefono}
+                telefono={telefonoCliente}
                 plantilla={accion.plantilla}
                 datos={accion.getDatos(cliente)}
                 variant="small"
@@ -100,7 +101,7 @@ export default function WhatsAppQuickActions({ clientes = [] }: Props) {
         </div>
       )}
 
-      {cliente && !cliente.telefono && (
+      {cliente && !telefonoCliente && (
         <div className="mt-4 rounded-xl border border-rose-400/30 bg-rose-400/5 p-3">
           <p className="text-sm text-rose-300">
             Este cliente no tiene teléfono registrado.

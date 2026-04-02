@@ -30,7 +30,6 @@ type Empleado = {
   rol: string | null
   estado: string
   created_at: string
-
 }
 
 type CitaRaw = {
@@ -58,7 +57,6 @@ type FormState = {
   telefono: string
   rol: RolUI
   estado: string
-
 }
 
 const INITIAL_FORM: FormState = {
@@ -67,7 +65,6 @@ const INITIAL_FORM: FormState = {
   telefono: '',
   rol: 'terapeuta',
   estado: 'activo',
-
 }
 
 const inputClassName = `
@@ -139,7 +136,6 @@ function getFirstExistingKey(obj: Record<string, any>, keys: string[]) {
   }
   return null
 }
-
 
 function mapearRolCatalogo(rolUI: RolUI): 'admin' | 'recepcionista' | 'terapeuta' {
   if (rolUI === 'entrenador') return 'terapeuta'
@@ -262,37 +258,47 @@ export default function PersonalPage() {
       const email = form.email.trim().toLowerCase() || null
       const telefono = form.telefono.trim() || null
 
-
       const { data: rolData, error: rolError } = await supabase
         .from('roles')
         .select('id, nombre')
         .eq('nombre', rolCatalogo)
         .single()
 
-      let rolId = rolData?.id
+      if (rolError && rolError.code !== 'PGRST116') {
+        throw rolError
+      }
 
-if(!rolId){
-  const { data:newRol } = await supabase
-  .from("roles")
-  .insert({
-    nombre: rolCatalogo,
-    descripcion: "Auto creado"
-  })
-  .select()
-  .single()
+      let rolId = rolData?.id ?? null
 
-  rolId = newRol.id
-}
+      if (!rolId) {
+        const { data: newRol, error: newRolError } = await supabase
+          .from('roles')
+          .insert({
+            nombre: rolCatalogo,
+            descripcion: 'Auto creado',
+          })
+          .select('id, nombre')
+          .single()
+
+        if (newRolError || !newRol) {
+          throw new Error(newRolError?.message || 'No se pudo crear el rol.')
+        }
+
+        rolId = newRol.id
+      }
+
+      if (!rolId) {
+        throw new Error('No se pudo resolver el rol del personal.')
+      }
 
       const payload = {
         nombre,
         email,
         telefono,
         rol: form.rol,
-        rol_id: rolData.id,
+        rol_id: rolId,
         estado: form.estado,
         especialidad: form.rol === 'terapeuta' || form.rol === 'entrenador' ? '' : null,
-
       }
 
       const { error } = await supabase.from('empleados').insert(payload)
@@ -651,7 +657,6 @@ if(!rolId){
                   <th className="px-4 py-3 font-medium">Estado</th>
                   <th className="px-4 py-3 font-medium">Carga hoy</th>
                   <th className="px-4 py-3 font-medium">Citas</th>
-                  
                   <th className="px-4 py-3 font-medium">Registro</th>
                   <th className="px-4 py-3 font-medium">Acciones</th>
                 </tr>
@@ -753,8 +758,6 @@ if(!rolId){
                             Comp: {completadas} · Canc: {canceladas}
                           </div>
                         </td>
-
-                        
 
                         <td className="px-4 py-4">
                           <div className="text-white/75">{formatDate(empleado.created_at)}</div>
@@ -924,8 +927,6 @@ if(!rolId){
                           </option>
                         </select>
                       </Field>
-
-                      
                     </div>
 
                     <div className="mt-6 flex flex-wrap gap-3">

@@ -233,6 +233,33 @@ function isFacturadaEstado(value: string | null | undefined) {
   return ['liquidado', 'liquidada', 'pagado', 'pagada'].includes(estado)
 }
 
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function normalizeMetodoPago(row: any): MetodoPago {
+  const cartera = firstOrNull(row?.cartera)
+
+  return {
+    id: String(row?.id ?? ''),
+    nombre: String(row?.nombre ?? ''),
+    tipo: row?.tipo ?? null,
+    moneda: row?.moneda ?? null,
+    color: row?.color ?? null,
+    icono: row?.icono ?? null,
+    cartera: cartera
+      ? {
+          id: cartera?.id ? String(cartera.id) : undefined,
+          nombre: String(cartera?.nombre ?? ''),
+          codigo: String(cartera?.codigo ?? ''),
+          saldo_actual: cartera?.saldo_actual ?? null,
+          moneda: cartera?.moneda ?? null,
+        }
+      : null,
+  }
+}
+
 function monedaMetodoEsBs(metodo: MetodoPago | null) {
   if (!metodo) return false
 
@@ -500,6 +527,10 @@ export default function VerPersonalPage() {
       notas: c.notas,
     }))
 
+    const metodosNormalizados: MetodoPago[] = ((metodosRes.data || []) as any[]).map(
+      normalizeMetodoPago
+    )
+
     setAgenda(
       [...ents, ...cts].sort((a, b) =>
         `${a.fecha} ${a.hora_inicio}`.localeCompare(`${b.fecha} ${b.hora_inicio}`)
@@ -508,7 +539,7 @@ export default function VerPersonalPage() {
 
     setComisiones((comRes.data || []) as ComisionDetalle[])
     setLiquidaciones((liqRes.data || []) as Liquidacion[])
-    setMetodosPago((metodosRes.data || []) as MetodoPago[])
+    setMetodosPago(metodosNormalizados)
     setLoading(false)
   }
 
@@ -671,7 +702,10 @@ export default function VerPersonalPage() {
       : r2(resumenSeleccionado.profesionalBs)
   }, [monedaPago, resumenSeleccionado])
 
-  const restantePorAsignar = useMemo(() => r2(montoFacturar - totalSplits), [montoFacturar, totalSplits])
+  const restantePorAsignar = useMemo(
+    () => r2(montoFacturar - totalSplits),
+    [montoFacturar, totalSplits]
+  )
 
   function toggleComision(idComision: string) {
     setSelectedComisionIds((prev) =>
@@ -699,9 +733,7 @@ export default function VerPersonalPage() {
   }
 
   function updateSplit(idSplit: string, patch: Partial<SplitPago>) {
-    setSplitsPago((prev) =>
-      prev.map((x) => (x.id === idSplit ? { ...x, ...patch } : x))
-    )
+    setSplitsPago((prev) => prev.map((x) => (x.id === idSplit ? { ...x, ...patch } : x)))
   }
 
   function fillRemainingOnSplit(idSplit: string) {
@@ -773,9 +805,7 @@ export default function VerPersonalPage() {
 
     const montoPagoNum = montoFacturar
     const montoEquivalenteUsd =
-      monedaPago === 'USD'
-        ? r2(montoPagoNum)
-        : r2(resumenSeleccionado.profesionalUsd)
+      monedaPago === 'USD' ? r2(montoPagoNum) : r2(resumenSeleccionado.profesionalUsd)
 
     const montoEquivalenteBs =
       monedaPago === 'BS'
@@ -785,9 +815,7 @@ export default function VerPersonalPage() {
           : r2(resumenSeleccionado.profesionalBs)
 
     const fechaFacturacion = getTodayLocal()
-    const fechaInicioRango = [...pendientes]
-      .map((c) => c.fecha)
-      .sort()[0]
+    const fechaInicioRango = [...pendientes].map((c) => c.fecha).sort()[0]
     const fechaFinRango = [...pendientes]
       .map((c) => c.fecha)
       .sort()
@@ -816,7 +844,8 @@ export default function VerPersonalPage() {
 
     try {
       const notasFinales = [
-        notasLiquidacion.trim() || `Liquidación manual de saldo disponible - ${empleado?.nombre || 'Profesional'}`,
+        notasLiquidacion.trim() ||
+          `Liquidación manual de saldo disponible - ${empleado?.nombre || 'Profesional'}`,
         '',
         'Desglose de pago:',
         ...splitsValidos.map((s) => {
@@ -904,9 +933,7 @@ export default function VerPersonalPage() {
         const concepto = `Liquidación comisión - ${empleado?.nombre || 'Profesional'} - ${fechaFacturacion} - Parte ${i + 1}/${splitsValidos.length}`
 
         const montoSplitUsd =
-          monedaPago === 'USD'
-            ? r2(split.montoNum)
-            : r2((split.montoNum / Number(tasaBCV || 1)))
+          monedaPago === 'USD' ? r2(split.montoNum) : r2(split.montoNum / Number(tasaBCV || 1))
 
         const montoSplitBs =
           monedaPago === 'BS'
@@ -1236,11 +1263,13 @@ export default function VerPersonalPage() {
                 <option value="todos" className="bg-[#11131a] text-white">
                   Todos los clientes
                 </option>
-                {[...new Set(agenda.map((a) => a.nombre))].sort().map((nombre) => (
-                  <option key={nombre} value={nombre} className="bg-[#11131a] text-white">
-                    {nombre}
-                  </option>
-                ))}
+                {[...new Set(agenda.map((a) => a.nombre))]
+                  .sort()
+                  .map((nombre) => (
+                    <option key={nombre} value={nombre} className="bg-[#11131a] text-white">
+                      {nombre}
+                    </option>
+                  ))}
               </select>
             </div>
           </div>
@@ -1483,24 +1512,24 @@ export default function VerPersonalPage() {
                 <Card className="p-4">
                   <p className="text-xs text-white/45">Monto seleccionado</p>
                   <p className="mt-1 text-lg font-semibold text-white">
-                    {monedaPago === 'USD'
-                      ? formatMoney(montoFacturar)
-                      : formatBs(montoFacturar)}
+                    {monedaPago === 'USD' ? formatMoney(montoFacturar) : formatBs(montoFacturar)}
                   </p>
                 </Card>
 
                 <Card className="border-violet-400/20 bg-violet-400/5 p-4">
                   <p className="text-xs text-white/45">Asignado en métodos</p>
                   <p className="mt-1 text-lg font-semibold text-violet-300">
-                    {monedaPago === 'USD'
-                      ? formatMoney(totalSplits)
-                      : formatBs(totalSplits)}
+                    {monedaPago === 'USD' ? formatMoney(totalSplits) : formatBs(totalSplits)}
                   </p>
                 </Card>
 
                 <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
                   <p className="text-xs text-white/45">Restante por asignar</p>
-                  <p className={`mt-1 text-lg font-semibold ${restantePorAsignar === 0 ? 'text-emerald-400' : 'text-amber-300'}`}>
+                  <p
+                    className={`mt-1 text-lg font-semibold ${
+                      restantePorAsignar === 0 ? 'text-emerald-400' : 'text-amber-300'
+                    }`}
+                  >
                     {monedaPago === 'USD'
                       ? formatMoney(restantePorAsignar)
                       : formatBs(restantePorAsignar)}
@@ -1510,7 +1539,8 @@ export default function VerPersonalPage() {
 
               <div className="mt-4 space-y-3">
                 {splitsPago.map((split, index) => {
-                  const metodo = metodosFiltradosPorMoneda.find((m) => m.id === split.metodoPagoId) || null
+                  const metodo =
+                    metodosFiltradosPorMoneda.find((m) => m.id === split.metodoPagoId) || null
                   const saldo = getMetodoSaldo(metodo)
 
                   return (
@@ -1537,7 +1567,11 @@ export default function VerPersonalPage() {
                                 {m.nombre}
                                 {m.cartera?.nombre ? ` · ${m.cartera.nombre}` : ''}
                                 {saldoMetodo > 0
-                                  ? ` · Saldo ${monedaPago === 'USD' ? formatMoney(saldoMetodo) : formatBs(saldoMetodo)}`
+                                  ? ` · Saldo ${
+                                      monedaPago === 'USD'
+                                        ? formatMoney(saldoMetodo)
+                                        : formatBs(saldoMetodo)
+                                    }`
                                   : ''}
                               </option>
                             )
@@ -1612,9 +1646,7 @@ export default function VerPersonalPage() {
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">
-                    Notas
-                  </label>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Notas</label>
                   <input
                     type="text"
                     value={notasLiquidacion}
@@ -1640,7 +1672,8 @@ export default function VerPersonalPage() {
 
               {comisionesLiquidadaHoyQuincena.length > 0 && (
                 <p className="mt-3 text-xs text-white/35">
-                  ✓ {comisionesLiquidadaHoyQuincena.length} registro(s) ya liquidados dentro de esta quincena calendario, pero puedes seguir liquidando nuevos ingresos.
+                  ✓ {comisionesLiquidadaHoyQuincena.length} registro(s) ya liquidados dentro de esta
+                  quincena calendario, pero puedes seguir liquidando nuevos ingresos.
                 </p>
               )}
             </Card>
@@ -1732,9 +1765,7 @@ export default function VerPersonalPage() {
                             {isFacturadaEstado(liq.estado) ? '✓ Liquidado' : liq.estado}
                           </span>
                           <p className="mt-1 text-xs text-white/35">
-                            {liq.pagado_at
-                              ? `Fecha: ${new Date(liq.pagado_at).toLocaleString()}`
-                              : '—'}
+                            {liq.pagado_at ? `Fecha: ${new Date(liq.pagado_at).toLocaleString()}` : '—'}
                           </p>
                         </div>
                       </div>

@@ -37,7 +37,6 @@ export default function SelectorTasaBCV({
   const [errorMsg, setErrorMsg] = useState('')
   const [montoBsLocal, setMontoBsLocal] = useState(montoBs || 0)
 
-  // Cargar tasa automáticamente cuando cambia la fecha
   useEffect(() => {
     if (monedaPago !== 'BS') return
 
@@ -46,11 +45,10 @@ export default function SelectorTasaBCV({
       setErrorMsg('')
 
       try {
-        const tasa = await obtenerTasaBCV(fecha, 'USD')
+        const tasa = await obtenerTasaBCV()
         setTasaActual(tasa)
         onTasaChange(tasa)
 
-        // Si hay monto USD y no hay monto Bs personalizado, calcular automáticamente
         if (tasa && montoUSD > 0 && !montoBs) {
           const calculado = r2(montoUSD * tasa)
           setMontoBsLocal(calculado)
@@ -67,9 +65,8 @@ export default function SelectorTasaBCV({
     }
 
     void cargar()
-  }, [fecha, monedaPago])
+  }, [fecha, monedaPago, montoUSD, montoBs, onTasaChange, onMontoBsChange])
 
-  // Actualizar monto Bs cuando cambia el monto USD o la tasa
   useEffect(() => {
     if (!tasaActual || montoUSD <= 0 || montoBs) return
     const calculado = r2(montoUSD * tasaActual)
@@ -116,10 +113,12 @@ export default function SelectorTasaBCV({
                   Bs. {tasaActual.toFixed(4)}
                 </span>
                 <span className="ml-auto text-xs text-white/35">
-                  {new Date(fecha).toLocaleDateString('es-VE', {
-                    day: 'numeric',
-                    month: 'short',
-                  })}
+                  {fecha
+                    ? new Date(`${fecha}T00:00:00`).toLocaleDateString('es-VE', {
+                        day: 'numeric',
+                        month: 'short',
+                      })
+                    : ''}
                 </span>
               </div>
             </div>
@@ -127,9 +126,7 @@ export default function SelectorTasaBCV({
             <div>
               <label className="mb-2 block text-xs text-white/55">
                 Total en Bolívares
-                {onMontoBsChange && (
-                  <span className="ml-1 text-white/35">(editable)</span>
-                )}
+                {onMontoBsChange && <span className="ml-1 text-white/35">(editable)</span>}
               </label>
               <input
                 type="number"

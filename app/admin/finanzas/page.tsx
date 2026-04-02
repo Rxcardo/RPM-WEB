@@ -253,6 +253,86 @@ function normalizeMoneda(moneda: string | null | undefined) {
   return m
 }
 
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function normalizePago(row: any): Pago {
+  const cliente = firstOrNull(row?.clientes)
+  const metodo = firstOrNull(row?.metodo_pago_v2)
+  const cartera = firstOrNull(metodo?.cartera)
+
+  return {
+    id: String(row?.id ?? ''),
+    fecha: String(row?.fecha ?? ''),
+    concepto: String(row?.concepto ?? ''),
+    categoria: String(row?.categoria ?? ''),
+    monto: Number(row?.monto || 0),
+    estado: String(row?.estado ?? ''),
+    tipo_origen: String(row?.tipo_origen ?? ''),
+    created_at: row?.created_at ?? undefined,
+    moneda_pago: row?.moneda_pago ?? null,
+    monto_equivalente_usd:
+      row?.monto_equivalente_usd != null ? Number(row.monto_equivalente_usd) : null,
+    monto_equivalente_bs:
+      row?.monto_equivalente_bs != null ? Number(row.monto_equivalente_bs) : null,
+    clientes: cliente ? { nombre: String(cliente?.nombre ?? '') } : null,
+    metodo_pago_v2: metodo
+      ? {
+          nombre: String(metodo?.nombre ?? ''),
+          moneda: metodo?.moneda ?? null,
+          tipo: metodo?.tipo ?? null,
+          cartera: cartera
+            ? {
+                nombre: String(cartera?.nombre ?? ''),
+                codigo: String(cartera?.codigo ?? ''),
+                moneda: cartera?.moneda ?? null,
+              }
+            : null,
+        }
+      : null,
+  }
+}
+
+function normalizeEgreso(row: any): Egreso {
+  const empleado = firstOrNull(row?.empleados)
+  const metodo = firstOrNull(row?.metodo_pago_v2)
+  const cartera = firstOrNull(metodo?.cartera)
+
+  return {
+    id: String(row?.id ?? ''),
+    fecha: String(row?.fecha ?? ''),
+    concepto: String(row?.concepto ?? ''),
+    categoria: String(row?.categoria ?? ''),
+    monto: Number(row?.monto || 0),
+    estado: String(row?.estado ?? ''),
+    proveedor: row?.proveedor ?? null,
+    created_at: row?.created_at ?? undefined,
+    moneda: row?.moneda ?? null,
+    monto_equivalente_usd:
+      row?.monto_equivalente_usd != null ? Number(row.monto_equivalente_usd) : null,
+    monto_equivalente_bs:
+      row?.monto_equivalente_bs != null ? Number(row.monto_equivalente_bs) : null,
+    empleado_id: row?.empleado_id ?? null,
+    empleados: empleado ? { nombre: String(empleado?.nombre ?? '') } : null,
+    metodo_pago_v2: metodo
+      ? {
+          nombre: String(metodo?.nombre ?? ''),
+          moneda: metodo?.moneda ?? null,
+          tipo: metodo?.tipo ?? null,
+          cartera: cartera
+            ? {
+                nombre: String(cartera?.nombre ?? ''),
+                codigo: String(cartera?.codigo ?? ''),
+                moneda: cartera?.moneda ?? null,
+              }
+            : null,
+        }
+      : null,
+  }
+}
+
 export default function FinanzasResumenPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -279,9 +359,7 @@ export default function FinanzasResumenPage() {
   useEffect(() => {
     if (carteraFiltro === 'todas') return
 
-    const carterasDisponibles = new Set(
-      movimientos.map((m) => m.cartera_codigo).filter(Boolean)
-    )
+    const carterasDisponibles = new Set(movimientos.map((m) => m.cartera_codigo).filter(Boolean))
 
     if (!carterasDisponibles.has(carteraFiltro)) {
       setCarteraFiltro('todas')
@@ -402,16 +480,22 @@ export default function FinanzasResumenPage() {
       if (comisionesRes.error) throw comisionesRes.error
       if (subcarterasRes.error) throw subcarterasRes.error
 
-      setPagos((pagosRes.data || []) as Pago[])
-      setEgresos((egresosRes.data || []) as Egreso[])
+      const pagosNormalizados = ((pagosRes.data || []) as any[]).map(normalizePago)
+      const egresosNormalizados = ((egresosRes.data || []) as any[]).map(normalizeEgreso)
+
+      setPagos(pagosNormalizados)
+      setEgresos(egresosNormalizados)
       setSubcarteras((subcarterasRes.data || []) as MetodoSubcartera[])
 
       const comisionesRaw = (comisionesRes.data || []) as any[]
       const grouped = new Map<string, ComisionResumen>()
 
       comisionesRaw.forEach((c: any) => {
-        const nombre = c.empleados?.nombre || 'Sin nombre'
-        const existing = grouped.get(c.empleado_id)
+        const empleado = firstOrNull(c?.empleados)
+        const nombre = empleado?.nombre || 'Sin nombre'
+        const key = String(c.empleado_id)
+
+        const existing = grouped.get(key)
 
         if (existing) {
           existing.total_base_usd += Number(c.monto_base_usd || 0)
@@ -422,8 +506,8 @@ export default function FinanzasResumenPage() {
           existing.total_rpm_bs += Number(c.monto_rpm_bs || 0)
           existing.cantidad += 1
         } else {
-          grouped.set(c.empleado_id, {
-            empleado_id: c.empleado_id,
+          grouped.set(key, {
+            empleado_id: key,
             nombre,
             total_base_usd: Number(c.monto_base_usd || 0),
             total_base_bs: Number(c.monto_base_bs || 0),
@@ -456,9 +540,12 @@ export default function FinanzasResumenPage() {
       metodo: p.metodo_pago_v2?.nombre || '—',
       cartera: p.metodo_pago_v2?.cartera?.nombre || 'Sin cartera',
       cartera_codigo: p.metodo_pago_v2?.cartera?.codigo || '',
-      moneda_metodo:
-        (p.metodo_pago_v2?.moneda || p.metodo_pago_v2?.cartera?.moneda || p.moneda_pago || 'USD')
-          .toUpperCase(),
+      moneda_metodo: (
+        p.metodo_pago_v2?.moneda ||
+        p.metodo_pago_v2?.cartera?.moneda ||
+        p.moneda_pago ||
+        'USD'
+      ).toUpperCase(),
       estado: p.estado,
       moneda_origen: p.moneda_pago || 'USD',
       monto_usd: Number(p.monto_equivalente_usd || 0),
@@ -476,9 +563,12 @@ export default function FinanzasResumenPage() {
       metodo: e.metodo_pago_v2?.nombre || '—',
       cartera: e.metodo_pago_v2?.cartera?.nombre || 'Sin cartera',
       cartera_codigo: e.metodo_pago_v2?.cartera?.codigo || '',
-      moneda_metodo:
-        (e.metodo_pago_v2?.moneda || e.metodo_pago_v2?.cartera?.moneda || e.moneda || 'USD')
-          .toUpperCase(),
+      moneda_metodo: (
+        e.metodo_pago_v2?.moneda ||
+        e.metodo_pago_v2?.cartera?.moneda ||
+        e.moneda ||
+        'USD'
+      ).toUpperCase(),
       estado: e.estado,
       moneda_origen: e.moneda || 'USD',
       monto_usd: Number(e.monto_equivalente_usd || 0),
@@ -657,10 +747,7 @@ export default function FinanzasResumenPage() {
       .filter((e) => e.categoria === 'nomina' && e.estado === 'pagado')
       .filter((e) => {
         const monedaMetodo = normalizeMoneda(
-          e.metodo_pago_v2?.moneda ||
-            e.metodo_pago_v2?.cartera?.moneda ||
-            e.moneda ||
-            'USD'
+          e.metodo_pago_v2?.moneda || e.metodo_pago_v2?.cartera?.moneda || e.moneda || 'USD'
         )
 
         const carteraCodigo = e.metodo_pago_v2?.cartera?.codigo || ''
@@ -721,7 +808,6 @@ export default function FinanzasResumenPage() {
 
   const subcarterasVisibles = useMemo(() => {
     const target = monedaVista === 'USD' ? 'USD' : 'VES'
-
     return subcarteras.filter((item) => normalizeMoneda(item.moneda) === target)
   }, [subcarteras, monedaVista])
 
@@ -790,9 +876,7 @@ export default function FinanzasResumenPage() {
               <p className="text-sm font-medium text-white/80">
                 Subcarteras {monedaVista === 'USD' ? 'USD' : 'BS'}
               </p>
-              <p className="text-xs text-white/45">
-                Métodos disponibles con su saldo actual.
-              </p>
+              <p className="text-xs text-white/45">Métodos disponibles con su saldo actual.</p>
             </div>
 
             <div className={`rounded-2xl border px-4 py-3 ${styles.soft}`}>
@@ -831,13 +915,13 @@ export default function FinanzasResumenPage() {
                         <p className="truncate text-sm font-semibold text-white">
                           {item.metodo_nombre}
                         </p>
-                        <p className="truncate text-xs text-white/45">
-                          {item.cartera_nombre}
-                        </p>
+                        <p className="truncate text-xs text-white/45">{item.cartera_nombre}</p>
                       </div>
                     </div>
 
-                    <span className={`shrink-0 rounded-full border px-2 py-1 text-[11px] font-medium ${styles.badge}`}>
+                    <span
+                      className={`shrink-0 rounded-full border px-2 py-1 text-[11px] font-medium ${styles.badge}`}
+                    >
                       {item.moneda === 'USD' ? 'USD' : 'BS'}
                     </span>
                   </div>
@@ -928,12 +1012,18 @@ export default function FinanzasResumenPage() {
           <Field label="Tipo">
             <select
               value={tipoFiltro}
-              onChange={(e) => setTipoFiltro(e.target.value as any)}
+              onChange={(e) => setTipoFiltro(e.target.value as 'todos' | 'ingreso' | 'egreso')}
               className={inputCls}
             >
-              <option value="todos" className="bg-[#11131a]">Todos</option>
-              <option value="ingreso" className="bg-[#11131a]">Ingresos</option>
-              <option value="egreso" className="bg-[#11131a]">Egresos</option>
+              <option value="todos" className="bg-[#11131a]">
+                Todos
+              </option>
+              <option value="ingreso" className="bg-[#11131a]">
+                Ingresos
+              </option>
+              <option value="egreso" className="bg-[#11131a]">
+                Egresos
+              </option>
             </select>
           </Field>
         </div>
@@ -945,10 +1035,18 @@ export default function FinanzasResumenPage() {
               onChange={(e) => setEstadoFiltro(e.target.value)}
               className={inputCls}
             >
-              <option value="todos" className="bg-[#11131a]">Todos</option>
-              <option value="pagado" className="bg-[#11131a]">Pagado</option>
-              <option value="pendiente" className="bg-[#11131a]">Pendiente</option>
-              <option value="anulado" className="bg-[#11131a]">Anulado</option>
+              <option value="todos" className="bg-[#11131a]">
+                Todos
+              </option>
+              <option value="pagado" className="bg-[#11131a]">
+                Pagado
+              </option>
+              <option value="pendiente" className="bg-[#11131a]">
+                Pendiente
+              </option>
+              <option value="anulado" className="bg-[#11131a]">
+                Anulado
+              </option>
             </select>
           </Field>
 
@@ -958,7 +1056,9 @@ export default function FinanzasResumenPage() {
               onChange={(e) => setCategoriaFiltro(e.target.value)}
               className={inputCls}
             >
-              <option value="todos" className="bg-[#11131a]">Todas</option>
+              <option value="todos" className="bg-[#11131a]">
+                Todas
+              </option>
               {categoriasUnicas.map((cat) => (
                 <option key={cat} value={cat} className="bg-[#11131a]">
                   {cat}
@@ -971,14 +1071,20 @@ export default function FinanzasResumenPage() {
             <select
               value={monedaFiltro}
               onChange={(e) => {
-                setMonedaFiltro(e.target.value as any)
+                setMonedaFiltro(e.target.value as 'todas' | 'USD' | 'VES' | 'BS')
                 setCarteraFiltro('todas')
               }}
               className={inputCls}
             >
-              <option value="todas" className="bg-[#11131a]">Todas</option>
-              <option value="USD" className="bg-[#11131a]">USD</option>
-              <option value="VES" className="bg-[#11131a]">VES / BS</option>
+              <option value="todas" className="bg-[#11131a]">
+                Todas
+              </option>
+              <option value="USD" className="bg-[#11131a]">
+                USD
+              </option>
+              <option value="VES" className="bg-[#11131a]">
+                VES / BS
+              </option>
             </select>
           </Field>
 
@@ -988,7 +1094,9 @@ export default function FinanzasResumenPage() {
               onChange={(e) => setCarteraFiltro(e.target.value)}
               className={inputCls}
             >
-              <option value="todas" className="bg-[#11131a]">Todas</option>
+              <option value="todas" className="bg-[#11131a]">
+                Todas
+              </option>
               {carterasDisponibles.map((c) => (
                 <option key={c.codigo} value={c.codigo} className="bg-[#11131a]">
                   {c.nombre} · {c.moneda}
@@ -1286,7 +1394,9 @@ export default function FinanzasResumenPage() {
 
                   <div className="mt-2 flex justify-between border-t border-white/10 pt-2 text-sm font-semibold">
                     <span className="text-white/75">Balance</span>
-                    <span className={r.ingresos - r.egresos >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                    <span
+                      className={r.ingresos - r.egresos >= 0 ? 'text-emerald-400' : 'text-rose-400'}
+                    >
                       {money(r.ingresos - r.egresos, monedaVista === 'USD' ? 'USD' : 'VES')}
                     </span>
                   </div>

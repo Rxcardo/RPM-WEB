@@ -16,6 +16,33 @@ type Cita = {
   } | null
 }
 
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function normalizeCita(row: any): Cita {
+  const cliente = firstOrNull(row?.clientes)
+  const servicio = firstOrNull(row?.servicios)
+
+  return {
+    id: String(row?.id ?? ''),
+    hora_inicio: String(row?.hora_inicio ?? ''),
+    hora_fin: String(row?.hora_fin ?? ''),
+    estado: row?.estado ?? null,
+    clientes: cliente
+      ? {
+          nombre: String(cliente?.nombre ?? ''),
+        }
+      : null,
+    servicios: servicio
+      ? {
+          nombre: String(servicio?.nombre ?? ''),
+        }
+      : null,
+  }
+}
+
 function toMinutes(hora: string) {
   const limpio = hora.slice(0, 5)
   const [h, m] = limpio.split(':').map(Number)
@@ -81,7 +108,8 @@ export default function DisponibilidadTerapeuta({
 
         if (error) throw error
 
-        setCitas((data || []) as Cita[])
+        const citasNormalizadas: Cita[] = ((data || []) as any[]).map(normalizeCita)
+        setCitas(citasNormalizadas)
       } catch (err) {
         console.error('Error cargando disponibilidad del terapeuta:', err)
         setCitas([])

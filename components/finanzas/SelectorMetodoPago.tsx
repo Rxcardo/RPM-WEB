@@ -13,6 +13,30 @@ type MetodoPagoV2 = {
     codigo: string
     color: string
     icono: string
+  } | null
+}
+
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function normalizeMetodoPagoV2(row: any): MetodoPagoV2 {
+  const cartera = firstOrNull(row?.cartera)
+
+  return {
+    id: String(row?.id ?? ''),
+    nombre: String(row?.nombre ?? ''),
+    moneda: String(row?.moneda ?? ''),
+    tipo: String(row?.tipo ?? ''),
+    cartera: cartera
+      ? {
+          nombre: String(cartera?.nombre ?? ''),
+          codigo: String(cartera?.codigo ?? ''),
+          color: String(cartera?.color ?? ''),
+          icono: String(cartera?.icono ?? ''),
+        }
+      : null,
   }
 }
 
@@ -33,7 +57,7 @@ export default function SelectorMetodoPago({
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    cargarMetodos()
+    void cargarMetodos()
   }, [])
 
   async function cargarMetodos() {
@@ -51,15 +75,20 @@ export default function SelectorMetodoPago({
       .order('orden')
 
     if (!error && data) {
-      setMetodos(data as MetodoPagoV2[])
+      const metodosNormalizados: MetodoPagoV2[] = ((data || []) as any[]).map(
+        normalizeMetodoPagoV2
+      )
+      setMetodos(metodosNormalizados)
+    } else {
+      setMetodos([])
     }
+
     setLoading(false)
   }
 
-  // Agrupar por cartera
   const grouped = useMemo(() => {
     return metodos.reduce((acc, metodo) => {
-      const carteraId = metodo.cartera.codigo
+      const carteraId = metodo.cartera?.codigo || 'sin-cartera'
       if (!acc[carteraId]) acc[carteraId] = []
       acc[carteraId].push(metodo)
       return acc
@@ -88,23 +117,32 @@ export default function SelectorMetodoPago({
         <option value="" className="bg-[#11131a]">
           Seleccionar método de pago
         </option>
-        {Object.entries(grouped).map(([carteraId, metodos]) => (
-          <optgroup 
-            key={carteraId} 
-            label={`${metodos[0].cartera.icono} ${metodos[0].cartera.nombre}`}
-            className="bg-[#11131a]"
-          >
-            {metodos.map((metodo) => (
-              <option 
-                key={metodo.id} 
-                value={metodo.id}
-                className="bg-[#11131a]"
-              >
-                {metodo.nombre}
-              </option>
-            ))}
-          </optgroup>
-        ))}
+
+        {Object.entries(grouped).map(([carteraId, metodosGrupo]) => {
+          const cartera = metodosGrupo[0]?.cartera
+
+          return (
+            <optgroup
+              key={carteraId}
+              label={
+                cartera
+                  ? `${cartera.icono} ${cartera.nombre}`
+                  : 'Sin cartera'
+              }
+              className="bg-[#11131a]"
+            >
+              {metodosGrupo.map((metodo) => (
+                <option
+                  key={metodo.id}
+                  value={metodo.id}
+                  className="bg-[#11131a]"
+                >
+                  {metodo.nombre}
+                </option>
+              ))}
+            </optgroup>
+          )
+        })}
       </select>
     </div>
   )

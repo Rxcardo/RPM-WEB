@@ -73,6 +73,46 @@ const TOTAL_HOURS = 24
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function normalizeMetodoPago(row: any): MetodoPago {
+  const cartera = firstOrNull(row?.cartera)
+
+  return {
+    id: String(row?.id ?? ''),
+    nombre: String(row?.nombre ?? ''),
+    tipo: row?.tipo ?? null,
+    moneda: row?.moneda ?? null,
+    color: row?.color ?? null,
+    icono: row?.icono ?? null,
+    cartera: cartera
+      ? {
+          nombre: String(cartera?.nombre ?? ''),
+          codigo: String(cartera?.codigo ?? ''),
+        }
+      : null,
+  }
+}
+
+function normalizeEntrenamientoExistente(row: any): EntrenamientoExistente {
+  const cliente = firstOrNull(row?.clientes)
+
+  return {
+    id: String(row?.id ?? ''),
+    hora_inicio: String(row?.hora_inicio ?? ''),
+    hora_fin: String(row?.hora_fin ?? ''),
+    fecha: String(row?.fecha ?? ''),
+    clientes: cliente
+      ? {
+          nombre: String(cliente?.nombre ?? ''),
+        }
+      : null,
+  }
+}
+
 function getTodayLocal() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
@@ -428,45 +468,61 @@ export default function NuevoClientePage() {
 
   async function loadData() {
     setLoadingData(true)
+    setErrorMsg('')
 
-    const [tRes, pRes, rRes, mRes] = await Promise.all([
-      supabase
-        .from('empleados')
-        .select('id, nombre, especialidad, comision_plan_porcentaje, comision_cita_porcentaje')
-        .eq('rol', 'terapeuta')
-        .eq('estado', 'activo')
-        .order('nombre'),
+    try {
+      const [tRes, pRes, rRes, mRes] = await Promise.all([
+        supabase
+          .from('empleados')
+          .select('id, nombre, especialidad, comision_plan_porcentaje, comision_cita_porcentaje')
+          .eq('rol', 'terapeuta')
+          .eq('estado', 'activo')
+          .order('nombre'),
 
-      supabase
-        .from('planes')
-        .select('id, nombre, sesiones_totales, vigencia_dias, precio, descripcion')
-        .eq('estado', 'activo')
-        .order('nombre'),
+        supabase
+          .from('planes')
+          .select('id, nombre, sesiones_totales, vigencia_dias, precio, descripcion')
+          .eq('estado', 'activo')
+          .order('nombre'),
 
-      supabase.from('recursos').select('id, nombre, tipo').order('nombre'),
+        supabase.from('recursos').select('id, nombre, tipo').order('nombre'),
 
-      supabase
-        .from('metodos_pago_v2')
-        .select(`
-          id,
-          nombre,
-          tipo,
-          moneda,
-          color,
-          icono,
-          cartera:carteras(nombre, codigo)
-        `)
-        .eq('activo', true)
-        .eq('permite_recibir', true)
-        .order('orden', { ascending: true })
-        .order('nombre', { ascending: true }),
-    ])
+        supabase
+          .from('metodos_pago_v2')
+          .select(`
+            id,
+            nombre,
+            tipo,
+            moneda,
+            color,
+            icono,
+            cartera:carteras(nombre, codigo)
+          `)
+          .eq('activo', true)
+          .eq('permite_recibir', true)
+          .order('orden', { ascending: true })
+          .order('nombre', { ascending: true }),
+      ])
 
-    setTerapeutas((tRes.data || []) as Terapeuta[])
-    setPlanes((pRes.data || []) as Plan[])
-    setRecursos((rRes.data || []) as Recurso[])
-    setMetodosPago((mRes.data || []) as MetodoPago[])
-    setLoadingData(false)
+      if (tRes.error) throw new Error(`Terapeutas: ${tRes.error.message}`)
+      if (pRes.error) throw new Error(`Planes: ${pRes.error.message}`)
+      if (rRes.error) throw new Error(`Recursos: ${rRes.error.message}`)
+      if (mRes.error) throw new Error(`Métodos de pago: ${mRes.error.message}`)
+
+      setTerapeutas((tRes.data || []) as Terapeuta[])
+      setPlanes((pRes.data || []) as Plan[])
+      setRecursos((rRes.data || []) as Recurso[])
+      setMetodosPago(((mRes.data || []) as any[]).map(normalizeMetodoPago))
+    } catch (err: any) {
+      console.error('Error cargando cliente nuevo:', err)
+      setErrorMsg(err?.message || 'No se pudieron cargar los datos.')
+      setTerapeutas([])
+      setPlanes([])
+      setRecursos([])
+      setMetodosPago([])
+    } finally {
+      setLoadingData(false)
+    }
   }
 
   useEffect(() => {
@@ -482,7 +538,15 @@ export default function NuevoClientePage() {
       .eq('fecha', fechaVistaCal)
       .neq('estado', 'cancelado')
       .order('hora_inicio')
-      .then(({ data }) => setEntrenamientosEmpleado((data || []) as unknown as EntrenamientoExistente[]))
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('Error cargando entrenamientos:', error.message)
+          setEntrenamientosEmpleado([])
+          return
+        }
+
+        setEntrenamientosEmpleado(((data || []) as any[]).map(normalizeEntrenamientoExistente))
+      })
   }, [empleadoId, fechaVistaCal])
 
   const metodoSeleccionado = useMemo(

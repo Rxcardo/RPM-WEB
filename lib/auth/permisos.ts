@@ -39,16 +39,35 @@ export type Permiso = (typeof PERMISOS)[keyof typeof PERMISOS]
 
 export type NombreRol = 'admin' | 'recepcionista' | 'terapeuta' | 'cliente'
 
+export type RolEmpleado = {
+  id: string
+  nombre: NombreRol
+  descripcion: string | null
+}
+
 export type EmpleadoConRol = {
   id: string
   nombre: string
   email: string
-  rol: {
-    id: string
-    nombre: NombreRol
-    descripcion: string | null
-  } | null
+  rol: RolEmpleado | null
   permisos: string[]
+}
+
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function normalizeRol(value: any): RolEmpleado | null {
+  const rol = firstOrNull(value)
+
+  if (!rol) return null
+
+  return {
+    id: String(rol?.id ?? ''),
+    nombre: String(rol?.nombre ?? '') as NombreRol,
+    descripcion: rol?.descripcion ?? null,
+  }
 }
 
 export async function obtenerEmpleadoActual(): Promise<EmpleadoConRol | null> {
@@ -78,7 +97,8 @@ export async function obtenerEmpleadoActual(): Promise<EmpleadoConRol | null> {
 
     if (error || !empleado) return null
 
-    const rolId = empleado.roles?.id
+    const rol = normalizeRol(empleado.roles)
+    const rolId = rol?.id ?? null
     let permisos: string[] = []
 
     if (rolId) {
@@ -93,14 +113,20 @@ export async function obtenerEmpleadoActual(): Promise<EmpleadoConRol | null> {
         )
         .eq('rol_id', rolId)
 
-      permisos = permisosData?.map((p: any) => p.permisos?.nombre).filter(Boolean) || []
+      permisos =
+        permisosData
+          ?.map((p: any) => {
+            const permiso = firstOrNull(p?.permisos)
+            return permiso?.nombre ? String(permiso.nombre) : null
+          })
+          .filter(Boolean) as string[] || []
     }
 
     return {
-      id: empleado.id,
-      nombre: empleado.nombre,
-      email: empleado.email,
-      rol: empleado.roles,
+      id: String(empleado.id),
+      nombre: String(empleado.nombre ?? ''),
+      email: String(empleado.email ?? ''),
+      rol,
       permisos,
     }
   } catch (error) {
@@ -113,11 +139,17 @@ export function tienePermiso(permisos: string[], permiso: Permiso): boolean {
   return permisos.includes(permiso)
 }
 
-export function tieneAlgunPermiso(permisos: string[], permisosRequeridos: Permiso[]): boolean {
+export function tieneAlgunPermiso(
+  permisos: string[],
+  permisosRequeridos: Permiso[]
+): boolean {
   return permisosRequeridos.some((permiso) => permisos.includes(permiso))
 }
 
-export function tieneTodosLosPermisos(permisos: string[], permisosRequeridos: Permiso[]): boolean {
+export function tieneTodosLosPermisos(
+  permisos: string[],
+  permisosRequeridos: Permiso[]
+): boolean {
   return permisosRequeridos.every((permiso) => permisos.includes(permiso))
 }
 

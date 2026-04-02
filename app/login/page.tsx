@@ -7,6 +7,16 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function getRolNombre(empleado: any): string | null {
+  const rol = firstOrNull(empleado?.roles)
+  return rol?.nombre ? String(rol.nombre) : null
+}
+
 export default function LoginPage() {
   const router = useRouter()
 
@@ -18,7 +28,7 @@ export default function LoginPage() {
   const [success, setSuccess] = useState('')
 
   useEffect(() => {
-    verificarSesion()
+    void verificarSesion()
   }, [])
 
   async function verificarSesion() {
@@ -34,7 +44,7 @@ export default function LoginPage() {
       .eq('id', session.user.id)
       .single()
 
-    const rol = empleado?.roles?.nombre
+    const rol = getRolNombre(empleado)
 
     if (rol === 'cliente') {
       router.replace('/cliente')
@@ -80,7 +90,7 @@ export default function LoginPage() {
         .eq('id', user.id)
         .single()
 
-      const rol = empleado?.roles?.nombre
+      const rol = getRolNombre(empleado)
 
       if (rol === 'cliente') {
         router.replace('/cliente')

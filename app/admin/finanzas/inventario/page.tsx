@@ -49,6 +49,32 @@ type NuevoProductoForm = {
   estado: string
 }
 
+type RawInventarioRelacionado =
+  | {
+      nombre?: unknown
+      unidad_medida?: unknown
+    }
+  | Array<{
+      nombre?: unknown
+      unidad_medida?: unknown
+    }>
+  | null
+  | undefined
+
+type RawMovimientoInventario = {
+  id?: unknown
+  inventario_id?: unknown
+  tipo?: unknown
+  cantidad?: unknown
+  cantidad_anterior?: unknown
+  cantidad_nueva?: unknown
+  concepto?: unknown
+  precio_unitario_usd?: unknown
+  monto_total_usd?: unknown
+  created_at?: unknown
+  inventario?: RawInventarioRelacionado
+}
+
 const inputCls =
   'w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/35 focus:border-white/20 focus:bg-white/[0.05]'
 
@@ -84,6 +110,55 @@ function movimientoBadge(tipo: string) {
   if (tipo === 'entrada') return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
   if (tipo === 'salida') return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
   return 'border-sky-400/20 bg-sky-400/10 text-sky-300'
+}
+
+function firstItem<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function toStringSafe(value: unknown, fallback = ''): string {
+  if (value === null || value === undefined) return fallback
+  return String(value)
+}
+
+function toStringOrNull(value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  return String(value)
+}
+
+function toNumberSafe(value: unknown, fallback = 0): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
+function toNumberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function normalizeMovimiento(raw: RawMovimientoInventario): MovimientoInventario {
+  const inventario = firstItem(raw.inventario)
+
+  return {
+    id: toStringSafe(raw.id),
+    inventario_id: toStringSafe(raw.inventario_id),
+    tipo: toStringSafe(raw.tipo),
+    cantidad: toNumberSafe(raw.cantidad),
+    cantidad_anterior: toNumberOrNull(raw.cantidad_anterior),
+    cantidad_nueva: toNumberOrNull(raw.cantidad_nueva),
+    concepto: toStringSafe(raw.concepto),
+    precio_unitario_usd: toNumberOrNull(raw.precio_unitario_usd),
+    monto_total_usd: toNumberOrNull(raw.monto_total_usd),
+    created_at: toStringOrNull(raw.created_at),
+    inventario: inventario?.nombre
+      ? {
+          nombre: toStringSafe(inventario.nombre),
+          unidad_medida: toStringOrNull(inventario.unidad_medida),
+        }
+      : null,
+  }
 }
 
 export default function InventarioPage() {
@@ -166,7 +241,7 @@ export default function InventarioPage() {
       if (movimientosRes.error) throw movimientosRes.error
 
       setItems((inventarioRes.data || []) as InventarioItem[])
-      setMovimientos((movimientosRes.data || []) as MovimientoInventario[])
+      setMovimientos(((movimientosRes.data || []) as RawMovimientoInventario[]).map(normalizeMovimiento))
     } catch (err: any) {
       console.error(err)
       setError(err?.message || 'Error cargando inventario.')

@@ -3,6 +3,27 @@ import { NextResponse, type NextRequest } from 'next/server'
 
 type NombreRol = 'admin' | 'recepcionista' | 'terapeuta' | 'cliente'
 
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function getRolNombre(empleado: any): NombreRol | undefined {
+  const rol = firstOrNull(empleado?.roles)
+  const nombre = rol?.nombre
+
+  if (
+    nombre === 'admin' ||
+    nombre === 'recepcionista' ||
+    nombre === 'terapeuta' ||
+    nombre === 'cliente'
+  ) {
+    return nombre
+  }
+
+  return undefined
+}
+
 export async function proxy(req: NextRequest) {
   let res = NextResponse.next()
 
@@ -56,7 +77,7 @@ export async function proxy(req: NextRequest) {
     .eq('id', user.id)
     .single()
 
-  const rol = empleado?.roles?.nombre as NombreRol | undefined
+  const rol = getRolNombre(empleado)
 
   if (!rol && (isAdminArea || isClienteArea)) {
     const redirectUrl = req.nextUrl.clone()
