@@ -255,123 +255,109 @@ export default function DisponibilidadTerapeuta({
       setLoading(true)
 
       try {
-        const queries: Promise<any>[] = []
-
+        // Ejecutar consultas directamente sin Promise.all para evitar problemas de tipos
         if (terapeutaId) {
-          queries.push(
-            supabase
-              .from('citas')
-              .select(`
-                id,
-                hora_inicio,
-                hora_fin,
-                estado,
-                clientes(nombre),
-                servicios(nombre)
-              `)
-              .eq('terapeuta_id', terapeutaId)
-              .eq('fecha', fecha)
-              .neq('estado', 'cancelada')
-              .order('hora_inicio', { ascending: true })
-              .then(res => res)
-          )
+          const terapeutaPromise = supabase
+            .from('citas')
+            .select(`
+              id,
+              hora_inicio,
+              hora_fin,
+              estado,
+              clientes(nombre),
+              servicios(nombre)
+            `)
+            .eq('terapeuta_id', terapeutaId)
+            .eq('fecha', fecha)
+            .neq('estado', 'cancelada')
+            .order('hora_inicio', { ascending: true })
 
-          queries.push(
-            supabase
-              .from('empleados_disponibilidad_eventos')
-              .select(`
-                id,
-                fecha,
-                hora_inicio,
-                hora_fin,
-                tipo,
-                motivo,
-                observaciones
-              `)
-              .eq('empleado_id', terapeutaId)
-              .eq('fecha', fecha)
-              .in('tipo', ['no_asistira', 'permiso', 'vacaciones', 'reposo', 'bloqueo_manual'])
-              .order('created_at', { ascending: false })
-              .then(res => res)
-          )
+          const eventosPromise = supabase
+            .from('empleados_disponibilidad_eventos')
+            .select(`
+              id,
+              fecha,
+              hora_inicio,
+              hora_fin,
+              tipo,
+              motivo,
+              observaciones
+            `)
+            .eq('empleado_id', terapeutaId)
+            .eq('fecha', fecha)
+            .in('tipo', ['no_asistira', 'permiso', 'vacaciones', 'reposo', 'bloqueo_manual'])
+            .order('created_at', { ascending: false })
+
+          const [terapeutaRes, eventosRes] = await Promise.all([terapeutaPromise, eventosPromise])
+
+          if (terapeutaRes.error) throw terapeutaRes.error
+          if (eventosRes.error) throw eventosRes.error
+
+          setCitasTerapeuta(((terapeutaRes.data || []) as any[]).map(normalizeCita))
+          setEventosDisponibilidad(((eventosRes.data || []) as any[]).map(normalizeEvento))
         } else {
-          queries.push(Promise.resolve({ data: [], error: null }))
-          queries.push(Promise.resolve({ data: [], error: null }))
+          setCitasTerapeuta([])
+          setEventosDisponibilidad([])
         }
 
         if (clienteId) {
-          queries.push(
-            supabase
-              .from('citas')
-              .select(`
-                id,
-                hora_inicio,
-                hora_fin,
-                estado,
-                clientes(nombre),
-                servicios(nombre)
-              `)
-              .eq('cliente_id', clienteId)
-              .eq('fecha', fecha)
-              .neq('estado', 'cancelada')
-              .order('hora_inicio', { ascending: true })
-              .then(res => res)
-          )
+          const clientePromise = supabase
+            .from('citas')
+            .select(`
+              id,
+              hora_inicio,
+              hora_fin,
+              estado,
+              clientes(nombre),
+              servicios(nombre)
+            `)
+            .eq('cliente_id', clienteId)
+            .eq('fecha', fecha)
+            .neq('estado', 'cancelada')
+            .order('hora_inicio', { ascending: true })
+
+          const clienteRes = await clientePromise
+
+          if (clienteRes.error) throw clienteRes.error
+
+          setCitasCliente(((clienteRes.data || []) as any[]).map(normalizeCita))
         } else {
-          queries.push(Promise.resolve({ data: [], error: null }))
+          setCitasCliente([])
         }
 
         if (recursoId) {
-          queries.push(
-            supabase
-              .from('citas')
-              .select(`
-                id,
-                hora_inicio,
-                hora_fin,
-                estado,
-                clientes(nombre),
-                servicios(nombre)
-              `)
-              .eq('recurso_id', recursoId)
-              .eq('fecha', fecha)
-              .neq('estado', 'cancelada')
-              .order('hora_inicio', { ascending: true })
-              .then(res => res)
-          )
+          const recursoCitasPromise = supabase
+            .from('citas')
+            .select(`
+              id,
+              hora_inicio,
+              hora_fin,
+              estado,
+              clientes(nombre),
+              servicios(nombre)
+            `)
+            .eq('recurso_id', recursoId)
+            .eq('fecha', fecha)
+            .neq('estado', 'cancelada')
+            .order('hora_inicio', { ascending: true })
 
-          queries.push(
-            supabase
-              .from('recursos')
-              .select('id, nombre, estado, capacidad, hora_inicio, hora_fin')
-              .eq('id', recursoId)
-              .maybeSingle()
-              .then(res => res)
-          )
+          const recursoInfoPromise = supabase
+            .from('recursos')
+            .select('id, nombre, estado, capacidad, hora_inicio, hora_fin')
+            .eq('id', recursoId)
+            .maybeSingle()
+
+          const [recursoCitasRes, recursoRes] = await Promise.all([recursoCitasPromise, recursoInfoPromise])
+
+          if (recursoCitasRes.error) throw recursoCitasRes.error
+          if (recursoRes.error) throw recursoRes.error
+
+          setCitasRecurso(((recursoCitasRes.data || []) as any[]).map(normalizeCita))
+          setRecurso((recursoRes.data as RecursoInfo | null) || null)
         } else {
-          queries.push(Promise.resolve({ data: [], error: null }))
-          queries.push(Promise.resolve({ data: null, error: null }))
+          setCitasRecurso([])
+          setRecurso(null)
         }
-
-        const [
-          terapeutaRes,
-          eventosRes,
-          clienteRes,
-          recursoCitasRes,
-          recursoRes,
-        ] = await Promise.all(queries)
-
-        if (terapeutaRes.error) throw terapeutaRes.error
-        if (eventosRes.error) throw eventosRes.error
-        if (clienteRes.error) throw clienteRes.error
-        if (recursoCitasRes.error) throw recursoCitasRes.error
-        if (recursoRes.error) throw recursoRes.error
-
-        setCitasTerapeuta(((terapeutaRes.data || []) as any[]).map(normalizeCita))
-        setEventosDisponibilidad(((eventosRes.data || []) as any[]).map(normalizeEvento))
-        setCitasCliente(((clienteRes.data || []) as any[]).map(normalizeCita))
-        setCitasRecurso(((recursoCitasRes.data || []) as any[]).map(normalizeCita))
-        setRecurso((recursoRes.data as RecursoInfo | null) || null)
       } catch (err) {
         console.error('Error cargando disponibilidad:', err)
         setCitasTerapeuta([])
