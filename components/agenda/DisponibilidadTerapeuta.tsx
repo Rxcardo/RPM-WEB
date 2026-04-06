@@ -273,6 +273,7 @@ export default function DisponibilidadTerapeuta({
               .eq('fecha', fecha)
               .neq('estado', 'cancelada')
               .order('hora_inicio', { ascending: true })
+              .then(res => res)
           )
 
           queries.push(
@@ -291,6 +292,7 @@ export default function DisponibilidadTerapeuta({
               .eq('fecha', fecha)
               .in('tipo', ['no_asistira', 'permiso', 'vacaciones', 'reposo', 'bloqueo_manual'])
               .order('created_at', { ascending: false })
+              .then(res => res)
           )
         } else {
           queries.push(Promise.resolve({ data: [], error: null }))
@@ -313,6 +315,7 @@ export default function DisponibilidadTerapeuta({
               .eq('fecha', fecha)
               .neq('estado', 'cancelada')
               .order('hora_inicio', { ascending: true })
+              .then(res => res)
           )
         } else {
           queries.push(Promise.resolve({ data: [], error: null }))
@@ -334,6 +337,7 @@ export default function DisponibilidadTerapeuta({
               .eq('fecha', fecha)
               .neq('estado', 'cancelada')
               .order('hora_inicio', { ascending: true })
+              .then(res => res)
           )
 
           queries.push(
@@ -342,6 +346,7 @@ export default function DisponibilidadTerapeuta({
               .select('id, nombre, estado, capacidad, hora_inicio, hora_fin')
               .eq('id', recursoId)
               .maybeSingle()
+              .then(res => res)
           )
         } else {
           queries.push(Promise.resolve({ data: [], error: null }))
