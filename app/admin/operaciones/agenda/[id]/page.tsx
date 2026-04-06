@@ -492,7 +492,7 @@ export default function VerCitaPage() {
         <div className="space-y-6 xl:col-span-2">
           <Section
             title="Información principal"
-            description="Datos base de la cita, cliente, personal y servicio."
+            description="Datos base de la cita, cliente, Fisioterapeuta y servicio."
           >
             <div className="grid gap-4 md:grid-cols-2">
               <DetailItem
@@ -501,9 +501,9 @@ export default function VerCitaPage() {
               />
 
               <DetailItem
-                label="Terapeuta"
-                value={cita.empleados?.nombre || 'Sin terapeuta'}
-              />
+  label="Fisioterapeuta"
+  value={cita.empleados?.nombre || 'Sin fisioterapeuta'}
+/>
 
               <DetailItem
                 label="Servicio"

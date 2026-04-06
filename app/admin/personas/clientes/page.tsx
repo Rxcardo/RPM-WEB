@@ -13,6 +13,7 @@ import ActionCard from '@/components/ui/ActionCard'
 type EmpleadoRef = {
   id: string
   nombre: string
+  rol: string | null
 } | null
 
 type Cliente = {
@@ -138,12 +139,39 @@ function getDateTimestamp(value: string | null | undefined) {
   return Number.isNaN(time) ? 0 : time
 }
 
+function formatEmpleadoLabel(ref: EmpleadoRef) {
+  if (!ref?.nombre?.trim()) return ''
+
+  const nombre = ref.nombre.trim()
+  const rol = (ref.rol || '').trim().toLowerCase()
+
+  if (rol === 'terapeuta' || rol === 'fisioterapeuta') {
+    return `${nombre} (Fisioterapeuta)`
+  }
+
+  if (rol === 'entrenador') {
+    return `${nombre} (Entrenador)`
+  }
+
+  if (rol) {
+    return `${nombre} (${rol})`
+  }
+
+  return nombre
+}
+
 function resolveEmpleadoNombre(cliente: Cliente) {
-  return (
-    cliente.terapeuta?.nombre?.trim() ||
-    cliente.empleado?.nombre?.trim() ||
-    'Sin asignar'
-  )
+  const fisioterapeuta = formatEmpleadoLabel(cliente.terapeuta)
+  const empleado = formatEmpleadoLabel(cliente.empleado)
+
+  if (fisioterapeuta && empleado) {
+    if (fisioterapeuta.toLowerCase() === empleado.toLowerCase()) {
+      return fisioterapeuta
+    }
+    return `${fisioterapeuta} / ${empleado}`
+  }
+
+  return fisioterapeuta || empleado || 'Sin asignar'
 }
 
 function Field({
@@ -202,13 +230,15 @@ export default function ClientesPage() {
             terapeuta_id,
             empleado_id,
             terapeuta:terapeuta_id (
-              id,
-              nombre
-            ),
-            empleado:empleado_id (
-              id,
-              nombre
-            )
+  id,
+  nombre,
+  rol
+),
+empleado:empleado_id (
+  id,
+  nombre,
+  rol
+)
           `)
           .order('created_at', { ascending: false }),
 
@@ -494,7 +524,7 @@ export default function ClientesPage() {
           </div>
 
           <div>
-            <Field label="Empleado">
+            <Field label="Fisioterapeuta">
               <select
                 value={empleadoFiltro}
                 onChange={(e) => setEmpleadoFiltro(e.target.value)}
@@ -522,9 +552,9 @@ export default function ClientesPage() {
                 className={inputClassName}
               >
                 <option value="nombre_asc" className="bg-[#11131a] text-white">Nombre A-Z</option>
-                <option value="nombre_desc" className="bg-[#11131a] text-white">Nombre Z-A</option>
-                <option value="empleado_asc" className="bg-[#11131a] text-white">Empleado A-Z</option>
-                <option value="empleado_desc" className="bg-[#11131a] text-white">Empleado Z-A</option>
+<option value="nombre_desc" className="bg-[#11131a] text-white">Nombre Z-A</option>
+<option value="empleado_asc" className="bg-[#11131a] text-white">Fisioterapeuta A-Z</option>
+<option value="empleado_desc" className="bg-[#11131a] text-white">Fisioterapeuta Z-A</option>
                 <option value="fecha_reciente" className="bg-[#11131a] text-white">Más recientes</option>
                 <option value="fecha_antigua" className="bg-[#11131a] text-white">Más antiguos</option>
                 <option value="estado" className="bg-[#11131a] text-white">Estado</option>
@@ -548,7 +578,7 @@ export default function ClientesPage() {
               <tr className="text-left text-white/55">
                 <th className="px-4 py-3 font-medium">Cliente</th>
                 <th className="px-4 py-3 font-medium">Contacto</th>
-                <th className="px-4 py-3 font-medium">Empleado</th>
+                <th className="px-4 py-3 font-medium">Fisioterapeuta</th>
                 <th className="px-4 py-3 font-medium">Estado</th>
                 <th className="px-4 py-3 font-medium">Plan activo</th>
                 <th className="px-4 py-3 font-medium">Sesiones</th>

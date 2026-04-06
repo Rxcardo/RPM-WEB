@@ -28,6 +28,9 @@ type Recurso = {
   id: string
   nombre: string
   estado: string | null
+  capacidad: number | null
+  hora_inicio: string | null
+  hora_fin: string | null
 }
 
 type CitaDetalle = {
@@ -45,6 +48,25 @@ type CitaDetalle = {
   empleados: { nombre: string } | null
   servicios: ServicioRaw | null
   recursos: { id: string; nombre: string } | null
+}
+
+type ValidacionCita = {
+  disponible: boolean
+  motivo: string
+  conflicto_terapeuta?: boolean
+  conflicto_cliente?: boolean
+  conflictos_recurso?: number
+  capacidad_recurso?: number
+  recurso_estado?: string | null
+  recurso_hora_inicio?: string | null
+  recurso_hora_fin?: string | null
+  detalle?: {
+    tipo?: string
+    motivo?: string
+    detalle?: string
+    hora_inicio?: string | null
+    hora_fin?: string | null
+  } | null
 }
 
 function getServicioDuracion(servicio: ServicioRaw | null): number | null {
@@ -95,6 +117,48 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
   )
 }
 
+function formatHora(hora?: string | null) {
+  if (!hora) return '—'
+  return hora.slice(0, 5)
+}
+
+function buildErrorFromValidacion(validacion: ValidacionCita | null | undefined) {
+  if (!validacion) return 'No se pudo validar la disponibilidad.'
+
+  switch (validacion.motivo) {
+    case 'ok':
+      return ''
+    case 'empleado_bloqueado':
+      return (
+        validacion.detalle?.detalle ||
+        validacion.detalle?.motivo ||
+        'El fisioterapeuta no está disponible en ese horario.'
+      )
+    case 'conflicto_terapeuta':
+      return 'Ese fisioterapeuta ya tiene una cita en ese horario.'
+    case 'conflicto_cliente':
+      return 'Ese cliente ya tiene una cita en ese horario.'
+    case 'conflicto_recurso':
+      return validacion.capacidad_recurso && validacion.capacidad_recurso > 1
+        ? `Ese recurso ya alcanzó su capacidad máxima (${validacion.capacidad_recurso}) en ese horario.`
+        : 'Ese recurso ya está ocupado en ese horario.'
+    case 'recurso_inactivo':
+      return 'Ese recurso está inactivo.'
+    case 'recurso_mantenimiento':
+      return 'Ese recurso está en mantenimiento.'
+    case 'fuera_horario_recurso_inicio':
+      return `Ese recurso solo está disponible desde las ${formatHora(validacion.recurso_hora_inicio)}.`
+    case 'fuera_horario_recurso_fin':
+      return `Ese recurso solo está disponible hasta las ${formatHora(validacion.recurso_hora_fin)}.`
+    case 'recurso_no_existe':
+      return 'El recurso seleccionado no existe.'
+    case 'hora_fin_invalida':
+      return 'La hora final debe ser mayor que la hora inicial.'
+    default:
+      return `No se puede guardar la cita (${validacion.motivo}).`
+  }
+}
+
 const inputClassName = `
   w-full rounded-2xl border border-white/10 bg-white/[0.03]
   px-4 py-3 text-sm text-white outline-none transition
@@ -114,6 +178,8 @@ export default function EditarCitaPage() {
 
   const [servicios, setServicios] = useState<Servicio[]>([])
   const [recursos, setRecursos] = useState<Recurso[]>([])
+
+  const [citaActual, setCitaActual] = useState<CitaDetalle | null>(null)
 
   const [resumen, setResumen] = useState({
     cliente: '',
@@ -137,6 +203,11 @@ export default function EditarCitaPage() {
     [servicios, form.servicio_id]
   )
 
+  const recursoSeleccionado = useMemo(
+    () => recursos.find((r) => r.id === form.recurso_id) || null,
+    [recursos, form.recurso_id]
+  )
+
   useEffect(() => {
     if (!id) return
     void loadData()
@@ -156,7 +227,7 @@ export default function EditarCitaPage() {
 
         supabase
           .from('recursos')
-          .select('id, nombre, estado')
+          .select('id, nombre, estado, capacidad, hora_inicio, hora_fin')
           .order('nombre', { ascending: true }),
 
         supabase
@@ -203,6 +274,7 @@ export default function EditarCitaPage() {
 
       const cita = citaRes.data as unknown as CitaDetalle
 
+      setCitaActual(cita)
       setServicios(serviciosData)
       setRecursos(recursosData)
 
@@ -238,44 +310,37 @@ export default function EditarCitaPage() {
       return
     }
 
+    if (!citaActual?.fecha || !citaActual?.hora_inicio || !citaActual?.hora_fin) {
+      setErrorMsg('La cita actual no tiene fecha u horario válidos.')
+      return
+    }
+
     setSaving(true)
 
     try {
-      // Buscar la cita actual para validar conflicto de recurso usando su fecha y horas bloqueadas
-      const { data: citaActual, error: citaActualError } = await supabase
-        .from('citas')
-        .select('id, fecha, hora_inicio, hora_fin')
-        .eq('id', id)
-        .single()
+      const { data: validacion, error: validacionError } = await supabase.rpc(
+        'validar_disponibilidad_cita_edicion',
+        {
+          p_cita_id: id,
+          p_cliente_id: citaActual.cliente_id,
+          p_terapeuta_id: citaActual.terapeuta_id,
+          p_recurso_id: form.recurso_id || null,
+          p_fecha: citaActual.fecha,
+          p_hora_inicio: citaActual.hora_inicio,
+          p_hora_fin: citaActual.hora_fin,
+        }
+      )
 
-      if (citaActualError || !citaActual) {
-        throw new Error('No se pudo cargar la cita actual para validar cambios.')
+      if (validacionError) {
+        throw new Error(`Error validando disponibilidad: ${validacionError.message}`)
       }
 
-      const horaInicioNormalizada = citaActual.hora_inicio
-      const horaFinNormalizada = citaActual.hora_fin
+      const validacionParsed = validacion as ValidacionCita
 
-      if (form.recurso_id) {
-        const { data: conflictoRecurso, error: errorRecurso } = await supabase
-          .from('citas')
-          .select('id')
-          .eq('recurso_id', form.recurso_id)
-          .eq('fecha', citaActual.fecha)
-          .neq('estado', 'cancelada')
-          .neq('id', id)
-          .lt('hora_inicio', horaFinNormalizada)
-          .gt('hora_fin', horaInicioNormalizada)
-          .limit(1)
-
-        if (errorRecurso) {
-          throw new Error(`Error validando recurso: ${errorRecurso.message}`)
-        }
-
-        if (conflictoRecurso && conflictoRecurso.length > 0) {
-          setErrorMsg('Ese recurso ya está ocupado en ese horario.')
-          setSaving(false)
-          return
-        }
+      if (!validacionParsed?.disponible) {
+        setErrorMsg(buildErrorFromValidacion(validacionParsed))
+        setSaving(false)
+        return
       }
 
       const payload = {
@@ -329,7 +394,7 @@ export default function EditarCitaPage() {
       >
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <SummaryItem label="Cliente" value={resumen.cliente} />
-          <SummaryItem label="Terapeuta" value={resumen.terapeuta} />
+          <SummaryItem label="Fisioterapeuta" value={resumen.terapeuta} />
           <SummaryItem label="Fecha" value={resumen.fecha} />
           <SummaryItem label="Hora inicio" value={resumen.horaInicio} />
           <SummaryItem label="Hora fin" value={resumen.horaFin} />
@@ -381,7 +446,16 @@ export default function EditarCitaPage() {
                 </select>
               </Field>
 
-              <Field label="Recurso">
+              <Field
+                label="Recurso"
+                helper={
+                  recursoSeleccionado
+                    ? `Capacidad: ${Number(recursoSeleccionado.capacidad || 1)} · Horario: ${formatHora(
+                        recursoSeleccionado.hora_inicio
+                      )} - ${formatHora(recursoSeleccionado.hora_fin)}`
+                    : 'Sin recurso'
+                }
+              >
                 <select
                   value={form.recurso_id}
                   onChange={(e) => setForm((prev) => ({ ...prev, recurso_id: e.target.value }))}

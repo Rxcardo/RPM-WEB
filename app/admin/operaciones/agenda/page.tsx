@@ -346,7 +346,7 @@ export default function AgendaPage() {
 
       <Section
         title="Filtros"
-        description="Busca por cliente, personal, servicio, plan, tipo o filtra por fecha."
+        description="Busca por cliente, Fisioterapeuta, servicio, plan, tipo o filtra por fecha."
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
           <div className="md:col-span-2">
@@ -354,7 +354,7 @@ export default function AgendaPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Cliente, personal, servicio, plan, tipo..."
+              placeholder="Cliente, fisioterapeuta, servicio, plan, tipo..."
               className="
                 w-full rounded-2xl border border-white/10 bg-white/[0.03]
                 px-4 py-3 text-sm text-white outline-none transition
@@ -412,7 +412,7 @@ export default function AgendaPage() {
               <tr className="text-left text-sm text-white/55">
                 <th className="px-4 py-4 font-medium">Fecha / Hora</th>
                 <th className="px-4 py-4 font-medium">Cliente</th>
-                <th className="px-4 py-4 font-medium">Personal</th>
+                <th className="px-4 py-4 font-medium">Fisioterapeuta</th>
                 <th className="px-4 py-4 font-medium">Servicio</th>
                 <th className="px-4 py-4 font-medium">Tipo</th>
                 <th className="px-4 py-4 font-medium">Estado</th>
@@ -481,7 +481,11 @@ export default function AgendaPage() {
                           {cita.empleados?.nombre || 'Sin asignar'}
                         </div>
                         <div className="mt-1 text-xs text-white/45">
-                          {cita.empleados?.rol || 'Sin rol'}
+                          {cita.empleados?.rol === 'terapeuta'
+  ? 'Fisioterapeuta'
+  : cita.empleados?.rol === 'fisioterapeuta'
+  ? 'Fisioterapeuta'
+  : cita.empleados?.rol || 'Sin rol'}
                         </div>
                       </td>
 

@@ -2,7 +2,14 @@
 
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
@@ -12,9 +19,10 @@ import SelectorTasaBCV from '@/components/finanzas/SelectorTasaBCV'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
-type Terapeuta = {
+type EmpleadoAsignable = {
   id: string
   nombre: string
+  rol: string | null
   especialidad: string | null
   comision_plan_porcentaje: number
   comision_cita_porcentaje: number
@@ -54,6 +62,17 @@ type EntrenamientoExistente = {
   hora_fin: string
   fecha: string
   clientes: { nombre: string } | null
+}
+
+type PlanificacionSesiones = {
+  fechas: string[]
+  fechaFinPlan: string
+  sesionesPosibles: number
+  sesionesSolicitadas: number
+  alcanzaVigencia: boolean
+  semanasBase: number
+  diasSeleccionados: number
+  ultimaFechaPosible: string | null
 }
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
@@ -128,6 +147,11 @@ function addDaysToDate(dateStr: string, days: number) {
   ).padStart(2, '0')}`
 }
 
+function getFechaFinByVigencia(fechaInicio: string, vigenciaDias: number) {
+  const diasReales = Math.max(Number(vigenciaDias || 0) - 1, 0)
+  return addDaysToDate(fechaInicio, diasReales)
+}
+
 function formatDate(v: string | null) {
   if (!v) return '—'
   try {
@@ -165,25 +189,6 @@ function sumarMinutos(hora: string, minutos: number) {
   return `${minutesToTime(timeToMinutes(hora) + minutos)}:00`
 }
 
-function generarFechasSesiones(fechaInicio: string, diasSemana: number[], totalSesiones: number): string[] {
-  if (!diasSemana.length || !totalSesiones) return []
-  const fechas: string[] = []
-  const current = new Date(`${fechaInicio}T00:00:00`)
-  let guard = 0
-  while (fechas.length < totalSesiones && guard < 1000) {
-    if (diasSemana.includes(current.getDay())) {
-      fechas.push(
-        `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(
-          current.getDate()
-        ).padStart(2, '0')}`
-      )
-    }
-    current.setDate(current.getDate() + 1)
-    guard++
-  }
-  return fechas
-}
-
 function r2(v: number) {
   return Math.round(v * 100) / 100
 }
@@ -215,9 +220,107 @@ function detectarMetodoBs(metodo: MetodoPago | null) {
   )
 }
 
+function getRolLabel(rol: string | null | undefined) {
+  const value = (rol || '').trim().toLowerCase()
+
+  if (value === 'terapeuta' || value === 'fisioterapeuta') return 'Fisioterapeuta'
+  if (value === 'entrenador') return 'Entrenador'
+  if (!value) return 'Sin rol'
+
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function calcularPlanificacionSesiones(
+  fechaInicio: string,
+  diasSemana: number[],
+  totalSesiones: number,
+  vigenciaDias: number
+): PlanificacionSesiones {
+  if (!fechaInicio || !diasSemana.length || !totalSesiones || !vigenciaDias) {
+    return {
+      fechas: [],
+      fechaFinPlan: fechaInicio || '',
+      sesionesPosibles: 0,
+      sesionesSolicitadas: totalSesiones || 0,
+      alcanzaVigencia: false,
+      semanasBase: 0,
+      diasSeleccionados: diasSemana.length,
+      ultimaFechaPosible: null,
+    }
+  }
+
+  const diasOrdenados = [...diasSemana].sort((a, b) => a - b)
+  const fechaFinPlan = getFechaFinByVigencia(fechaInicio, vigenciaDias)
+  const inicio = new Date(`${fechaInicio}T00:00:00`)
+  const fin = new Date(`${fechaFinPlan}T23:59:59`)
+  const current = new Date(`${fechaInicio}T00:00:00`)
+
+  const fechas: string[] = []
+  let guard = 0
+
+  while (current <= fin && guard < 5000) {
+    if (diasOrdenados.includes(current.getDay())) {
+      fechas.push(
+        `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(
+          current.getDate()
+        ).padStart(2, '0')}`
+      )
+      if (fechas.length >= totalSesiones) break
+    }
+
+    current.setDate(current.getDate() + 1)
+    guard++
+  }
+
+  let sesionesPosibles = 0
+  const scan = new Date(`${fechaInicio}T00:00:00`)
+  guard = 0
+
+  while (scan <= fin && guard < 5000) {
+    if (diasOrdenados.includes(scan.getDay())) {
+      sesionesPosibles++
+    }
+    scan.setDate(scan.getDate() + 1)
+    guard++
+  }
+
+  const diasPorSemana = Math.max(diasSemana.length, 1)
+  const semanasBase = Math.ceil(totalSesiones / diasPorSemana)
+
+  const diasEntre = Math.max(
+    1,
+    Math.floor(
+      (new Date(`${fechaFinPlan}T00:00:00`).getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24)
+    ) + 1
+  )
+
+  return {
+    fechas,
+    fechaFinPlan,
+    sesionesPosibles,
+    sesionesSolicitadas: totalSesiones,
+    alcanzaVigencia: sesionesPosibles >= totalSesiones,
+    semanasBase,
+    diasSeleccionados: diasSemana.length,
+    ultimaFechaPosible: diasEntre > 0 ? fechaFinPlan : null,
+  }
+}
+
+function buildEntrenamientoKey(fecha: string, horaInicio: string, horaFin: string, empleadoId: string) {
+  return `${fecha}__${horaInicio}__${horaFin}__${empleadoId}`
+}
+
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 
-function Field({ label, children, helper }: { label: string; children: ReactNode; helper?: string }) {
+function Field({
+  label,
+  children,
+  helper,
+}: {
+  label: string
+  children: ReactNode
+  helper?: string
+}) {
   return (
     <div>
       <label className="mb-2 block text-sm font-medium text-white/75">{label}</label>
@@ -257,9 +360,11 @@ function PasoIndicator({ actual }: { paso?: number; actual: number }) {
           >
             {p.n < actual ? '✓' : p.n}
           </div>
+
           <span className={`hidden text-sm sm:block ${p.n === actual ? 'text-white' : 'text-white/35'}`}>
             {p.label}
           </span>
+
           {i < pasos.length - 1 && (
             <div className={`h-px w-8 ${p.n < actual ? 'bg-emerald-400/30' : 'bg-white/10'}`} />
           )}
@@ -312,6 +417,7 @@ function CalendarioDisponibilidad({
               })
             : '—'}
         </span>
+
         <div className="flex gap-3">
           <span className="flex items-center gap-1">
             <span className="inline-block h-2 w-2 rounded-full bg-rose-500/70" />
@@ -357,6 +463,7 @@ function CalendarioDisponibilidad({
           {entrenamientosExistentes.map((ent) => {
             const top = getTop(timeToMinutes(ent.hora_inicio))
             const height = Math.max(20, getTop(timeToMinutes(ent.hora_fin)) - top)
+
             return (
               <div
                 key={ent.id}
@@ -408,11 +515,16 @@ function CalendarioDisponibilidad({
 
 export default function NuevoClientePage() {
   const router = useRouter()
+
+  const creatingClientRef = useRef(false)
+  const creatingPlanRef = useRef(false)
+  const creatingPagoRef = useRef(false)
+
   const [paso, setPaso] = useState(1)
   const [saving, setSaving] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
 
-  const [terapeutas, setTerapeutas] = useState<Terapeuta[]>([])
+  const [empleadosAsignables, setEmpleadosAsignables] = useState<EmpleadoAsignable[]>([])
   const [planes, setPlanes] = useState<Plan[]>([])
   const [recursos, setRecursos] = useState<Recurso[]>([])
   const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([])
@@ -474,9 +586,9 @@ export default function NuevoClientePage() {
       const [tRes, pRes, rRes, mRes] = await Promise.all([
         supabase
           .from('empleados')
-          .select('id, nombre, especialidad, comision_plan_porcentaje, comision_cita_porcentaje')
-          .eq('rol', 'terapeuta')
+          .select('id, nombre, rol, especialidad, comision_plan_porcentaje, comision_cita_porcentaje')
           .eq('estado', 'activo')
+          .neq('rol', 'admin')
           .order('nombre'),
 
         supabase
@@ -504,19 +616,23 @@ export default function NuevoClientePage() {
           .order('nombre', { ascending: true }),
       ])
 
-      if (tRes.error) throw new Error(`Terapeutas: ${tRes.error.message}`)
+      if (tRes.error) throw new Error(`Empleados: ${tRes.error.message}`)
       if (pRes.error) throw new Error(`Planes: ${pRes.error.message}`)
       if (rRes.error) throw new Error(`Recursos: ${rRes.error.message}`)
       if (mRes.error) throw new Error(`Métodos de pago: ${mRes.error.message}`)
 
-      setTerapeutas((tRes.data || []) as Terapeuta[])
+      setEmpleadosAsignables(
+        ((tRes.data || []) as EmpleadoAsignable[]).filter(
+          (emp) => (emp.rol || '').trim().toLowerCase() !== 'admin'
+        )
+      )
       setPlanes((pRes.data || []) as Plan[])
       setRecursos((rRes.data || []) as Recurso[])
       setMetodosPago(((mRes.data || []) as any[]).map(normalizeMetodoPago))
     } catch (err: any) {
       console.error('Error cargando cliente nuevo:', err)
       setErrorMsg(err?.message || 'No se pudieron cargar los datos.')
-      setTerapeutas([])
+      setEmpleadosAsignables([])
       setPlanes([])
       setRecursos([])
       setMetodosPago([])
@@ -567,10 +683,19 @@ export default function NuevoClientePage() {
 
   const montoBase = usarPrecioPlan ? planSeleccionado?.precio || 0 : Number(montoPersonalizado || 0)
 
-  const fechasPreview = useMemo(() => {
-    if (!fechaInicio || !diasSemana.length || !planSeleccionado) return []
-    return generarFechasSesiones(fechaInicio, diasSemana, planSeleccionado.sesiones_totales)
+  const planificacion = useMemo(() => {
+    if (!fechaInicio || !diasSemana.length || !planSeleccionado) return null
+    return calcularPlanificacionSesiones(
+      fechaInicio,
+      diasSemana,
+      planSeleccionado.sesiones_totales,
+      planSeleccionado.vigencia_dias
+    )
   }, [fechaInicio, diasSemana, planSeleccionado])
+
+  const fechasPreview = useMemo(() => {
+    return planificacion?.fechas || []
+  }, [planificacion])
 
   function toggleDia(dia: number) {
     setDiasSemana((prev) => (prev.includes(dia) ? prev.filter((d) => d !== dia) : [...prev, dia]))
@@ -635,6 +760,18 @@ export default function NuevoClientePage() {
       const rpm = r2((montoBaseComision * porcRpm) / 100)
       const profesional = r2(montoBaseComision - rpm)
 
+      const { data: existente } = await supabase
+        .from('comisiones_detalle')
+        .select('id')
+        .eq('empleado_id', empId)
+        .eq('cliente_id', clienteIdValue)
+        .eq('cliente_plan_id', clientePlanIdValue)
+        .eq('tipo', 'plan')
+        .limit(1)
+        .maybeSingle()
+
+      if (existente?.id) return
+
       const { error } = await supabase.from('comisiones_detalle').insert({
         empleado_id: empId,
         cliente_id: clienteIdValue,
@@ -656,6 +793,9 @@ export default function NuevoClientePage() {
 
   async function handleGuardarCliente(e: React.FormEvent) {
     e.preventDefault()
+
+    if (creatingClientRef.current || saving) return
+
     setErrorMsg('')
 
     if (!formCliente.nombre.trim()) {
@@ -668,44 +808,57 @@ export default function NuevoClientePage() {
       return
     }
 
+    creatingClientRef.current = true
     setSaving(true)
 
-    const { data, error } = await supabase
-      .from('clientes')
-      .insert({
-        nombre: formCliente.nombre.trim(),
-        telefono: formCliente.telefono.trim() || null,
-        email: formCliente.email.trim() || null,
-        fecha_nacimiento: formCliente.fecha_nacimiento || null,
-        genero: formCliente.genero || null,
-        direccion: formCliente.direccion.trim() || null,
-        terapeuta_id: formCliente.terapeuta_id || null,
-        estado: formCliente.estado,
-        notas: formCliente.notas.trim() || null,
-      })
-      .select('id')
-      .single()
+    try {
+      if (clienteId) {
+        setPaso(2)
+        return
+      }
 
-    setSaving(false)
+      const { data, error } = await supabase
+        .from('clientes')
+        .insert({
+          nombre: formCliente.nombre.trim(),
+          telefono: formCliente.telefono.trim() || null,
+          email: formCliente.email.trim() || null,
+          fecha_nacimiento: formCliente.fecha_nacimiento || null,
+          genero: formCliente.genero || null,
+          direccion: formCliente.direccion.trim() || null,
+          terapeuta_id: formCliente.terapeuta_id || null,
+          estado: formCliente.estado,
+          notas: formCliente.notas.trim() || null,
+        })
+        .select('id')
+        .single()
 
-    if (error || !data) {
-      setErrorMsg(error?.message || 'No se pudo guardar el cliente.')
-      return
+      if (error || !data) {
+        throw new Error(error?.message || 'No se pudo guardar el cliente.')
+      }
+
+      setClienteId(data.id)
+
+      if (formCliente.terapeuta_id) {
+        setEmpleadoId(formCliente.terapeuta_id)
+        setFechaVistaCal(fechaInicio)
+      }
+
+      setPaso(2)
+      setErrorMsg('')
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'No se pudo guardar el cliente.')
+    } finally {
+      setSaving(false)
+      creatingClientRef.current = false
     }
-
-    setClienteId(data.id)
-
-    if (formCliente.terapeuta_id) {
-      setEmpleadoId(formCliente.terapeuta_id)
-      setFechaVistaCal(fechaInicio)
-    }
-
-    setPaso(2)
-    setErrorMsg('')
   }
 
   async function handleGuardarPlan(e: React.FormEvent) {
     e.preventDefault()
+
+    if (creatingPlanRef.current || saving) return
+
     setErrorMsg('')
 
     if (saltarPlan) {
@@ -719,7 +872,7 @@ export default function NuevoClientePage() {
     }
 
     if (!empleadoId) {
-      setErrorMsg('Selecciona un entrenador.')
+      setErrorMsg('Selecciona un fisioterapeuta.')
       return
     }
 
@@ -738,38 +891,92 @@ export default function NuevoClientePage() {
       return
     }
 
-    const plan = planSeleccionado!
+    if (!planSeleccionado) {
+      setErrorMsg('No se encontró el plan seleccionado.')
+      return
+    }
+
+    if (!planificacion) {
+      setErrorMsg('No se pudo calcular la planificación del plan.')
+      return
+    }
+
+    if (!planificacion.alcanzaVigencia) {
+      setErrorMsg(
+        `La vigencia no alcanza. Con los días seleccionados solo caben ${planificacion.sesionesPosibles} de ${planificacion.sesionesSolicitadas} sesiones antes del ${formatDate(planificacion.fechaFinPlan)}.`
+      )
+      return
+    }
+
+    creatingPlanRef.current = true
     setSaving(true)
 
     try {
-      const fechaFin = addDaysToDate(fechaInicio, plan.vigencia_dias)
-
-      const { data: nuevoPlan, error: cpError } = await supabase
-        .from('clientes_planes')
-        .insert({
-          cliente_id: clienteId,
-          plan_id: plan.id,
-          sesiones_totales: plan.sesiones_totales,
-          sesiones_usadas: 0,
-          fecha_inicio: fechaInicio,
-          fecha_fin: fechaFin,
-          estado: 'activo',
-        })
-        .select('id')
-        .single()
-
-      if (cpError) throw new Error(cpError.message)
-
-      setClientePlanId(nuevoPlan.id)
-
-      const fechas = generarFechasSesiones(fechaInicio, diasSemana, plan.sesiones_totales)
+      const plan = planSeleccionado
+      const fechaFin = planificacion.fechaFinPlan
       const horaInicioNorm = horaInicio.length === 5 ? `${horaInicio}:00` : horaInicio
       const horaFinNorm = horaFin.length === 5 ? `${horaFin}:00` : horaFin
 
-      if (fechas.length > 0) {
-        const { error: entError } = await supabase.from('entrenamientos').insert(
-          fechas.map((fecha) => ({
-            cliente_plan_id: nuevoPlan.id,
+      let planIdActual = clientePlanId
+
+      if (!planIdActual) {
+        const { data: nuevoPlan, error: cpError } = await supabase
+          .from('clientes_planes')
+          .insert({
+            cliente_id: clienteId,
+            plan_id: plan.id,
+            sesiones_totales: plan.sesiones_totales,
+            sesiones_usadas: 0,
+            fecha_inicio: fechaInicio,
+            fecha_fin: fechaFin,
+            estado: 'activo',
+          })
+          .select('id')
+          .single()
+
+        if (cpError) throw new Error(cpError.message)
+
+        planIdActual = nuevoPlan.id
+        setClientePlanId(nuevoPlan.id)
+      } else {
+        const { error: updatePlanError } = await supabase
+          .from('clientes_planes')
+          .update({
+            plan_id: plan.id,
+            sesiones_totales: plan.sesiones_totales,
+            fecha_inicio: fechaInicio,
+            fecha_fin: fechaFin,
+            estado: 'activo',
+          })
+          .eq('id', planIdActual)
+
+        if (updatePlanError) throw new Error(updatePlanError.message)
+      }
+
+      const fechas = planificacion.fechas
+
+      if (fechas.length > 0 && planIdActual) {
+        const { data: existentes, error: existentesError } = await supabase
+          .from('entrenamientos')
+          .select('id, fecha, hora_inicio, hora_fin, empleado_id')
+          .eq('cliente_plan_id', planIdActual)
+
+        if (existentesError) throw new Error(existentesError.message)
+
+        const existentesSet = new Set(
+          ((existentes || []) as any[]).map((row) =>
+            buildEntrenamientoKey(
+              String(row.fecha || ''),
+              String(row.hora_inicio || ''),
+              String(row.hora_fin || ''),
+              String(row.empleado_id || '')
+            )
+          )
+        )
+
+        const entrenamientosNuevos = fechas
+          .map((fecha) => ({
+            cliente_plan_id: planIdActual,
             cliente_id: clienteId,
             empleado_id: empleadoId,
             recurso_id: recursoId || null,
@@ -778,9 +985,22 @@ export default function NuevoClientePage() {
             hora_fin: horaFinNorm,
             estado: 'programado',
           }))
-        )
+          .filter((item) => {
+            const key = buildEntrenamientoKey(
+              item.fecha,
+              item.hora_inicio,
+              item.hora_fin,
+              item.empleado_id
+            )
+            return !existentesSet.has(key)
+          })
 
-        if (entError) throw new Error(`Plan creado pero error en entrenamientos: ${entError.message}`)
+        if (entrenamientosNuevos.length > 0) {
+          const { error: entError } = await supabase.from('entrenamientos').insert(entrenamientosNuevos)
+          if (entError) {
+            throw new Error(`Plan creado pero error en entrenamientos: ${entError.message}`)
+          }
+        }
       }
 
       setPaso(3)
@@ -789,12 +1009,21 @@ export default function NuevoClientePage() {
       setErrorMsg(err?.message || 'Error al guardar el plan.')
     } finally {
       setSaving(false)
+      creatingPlanRef.current = false
     }
   }
 
   async function handleGuardarPago(e: React.FormEvent) {
     e.preventDefault()
+
+    if (creatingPagoRef.current || saving) return
+
     setErrorMsg('')
+
+    if (!clienteId) {
+      setErrorMsg('No se encontró el cliente.')
+      return
+    }
 
     if (!saltarPago) {
       if (!metodoPagoId) {
@@ -813,17 +1042,19 @@ export default function NuevoClientePage() {
           return
         }
 
+        creatingPagoRef.current = true
         setSaving(true)
 
         try {
           const monedaPago = esBs ? 'BS' : 'USD'
           const montoPagoFinal = esBs && montoBsPersonalizado ? montoBsPersonalizado : montoBase
-          const montoEquivalenteUSD = esBs && tasaCongelada
-            ? r2(montoPagoFinal / tasaCongelada)
-            : montoBase
+          const montoEquivalenteUSD =
+            esBs && tasaCongelada ? r2(montoPagoFinal / tasaCongelada) : montoBase
           const montoEquivalenteBS = esBs
             ? montoPagoFinal
-            : (tasaCongelada ? r2(montoBase * tasaCongelada) : null)
+            : tasaCongelada
+              ? r2(montoBase * tasaCongelada)
+              : null
 
           const concepto = esBs
             ? `Plan: ${planSeleccionado.nombre} — ${formCliente.nombre} (${formatMoney(
@@ -831,27 +1062,44 @@ export default function NuevoClientePage() {
               )} × ${tasaCongelada} = ${formatBs(montoPagoFinal)})`
             : `Plan: ${planSeleccionado.nombre} — ${formCliente.nombre}`
 
-          const { error: pagoError } = await supabase.from('pagos').insert({
-            fecha: fechaInicio,
-            tipo_origen: 'plan',
-            cliente_id: clienteId,
-            cliente_plan_id: clientePlanId,
-            concepto,
-            categoria: 'plan',
-            monto: montoPagoFinal,
-            monto_pago: montoPagoFinal,
-            moneda_pago: monedaPago,
-            tasa_bcv: tasaCongelada,
-            monto_equivalente_usd: montoEquivalenteUSD,
-            monto_equivalente_bs: montoEquivalenteBS,
-            metodo_pago_id: null,
-            metodo_pago_v2_id: metodoPagoId,
-            estado: 'pagado',
-            referencia: referenciaPago || null,
-            notas: notasPago || null,
-          })
+          const { data: pagoExistente, error: pagoExistenteError } = await supabase
+            .from('pagos')
+            .select('id')
+            .eq('tipo_origen', 'plan')
+            .eq('cliente_id', clienteId)
+            .eq('cliente_plan_id', clientePlanId)
+            .eq('metodo_pago_v2_id', metodoPagoId)
+            .eq('monto', montoPagoFinal)
+            .limit(1)
+            .maybeSingle()
 
-          if (pagoError) throw new Error(pagoError.message)
+          if (pagoExistenteError) {
+            throw new Error(pagoExistenteError.message)
+          }
+
+          if (!pagoExistente?.id) {
+            const { error: pagoError } = await supabase.from('pagos').insert({
+              fecha: fechaInicio,
+              tipo_origen: 'plan',
+              cliente_id: clienteId,
+              cliente_plan_id: clientePlanId,
+              concepto,
+              categoria: 'plan',
+              monto: montoPagoFinal,
+              monto_pago: montoPagoFinal,
+              moneda_pago: monedaPago,
+              tasa_bcv: tasaCongelada,
+              monto_equivalente_usd: montoEquivalenteUSD,
+              monto_equivalente_bs: montoEquivalenteBS,
+              metodo_pago_id: null,
+              metodo_pago_v2_id: metodoPagoId,
+              estado: 'pagado',
+              referencia: referenciaPago || null,
+              notas: notasPago || null,
+            })
+
+            if (pagoError) throw new Error(pagoError.message)
+          }
 
           if (empleadoId && clientePlanId) {
             await registrarComision(
@@ -874,9 +1122,11 @@ export default function NuevoClientePage() {
         } catch (err: any) {
           setErrorMsg(err?.message || 'Error registrando el pago.')
           setSaving(false)
+          creatingPagoRef.current = false
           return
         } finally {
           setSaving(false)
+          creatingPagoRef.current = false
         }
       }
     }
@@ -987,7 +1237,7 @@ export default function NuevoClientePage() {
                 </Field>
               </div>
 
-              <Field label="Entrenador principal" helper="Se pre-seleccionará en el paso de entrenamientos">
+              <Field label="Fisioterapeuta principal" helper="Se pre-seleccionará en el paso de entrenamientos">
                 <select
                   name="terapeuta_id"
                   value={formCliente.terapeuta_id}
@@ -995,9 +1245,10 @@ export default function NuevoClientePage() {
                   className={inputCls}
                 >
                   <option value="" className="bg-[#11131a]">Sin asignar</option>
-                  {terapeutas.map((t) => (
+                  {empleadosAsignables.map((t) => (
                     <option key={t.id} value={t.id} className="bg-[#11131a]">
                       {t.nombre}
+                      {t.rol ? ` · ${getRolLabel(t.rol)}` : ''}
                       {t.especialidad ? ` · ${t.especialidad}` : ''}
                     </option>
                   ))}
@@ -1200,7 +1451,7 @@ export default function NuevoClientePage() {
                       <div>
                         <p className="text-xs text-white/45">Vence</p>
                         <p className="font-medium text-white">
-                          {formatDate(addDaysToDate(fechaInicio, planSeleccionado.vigencia_dias))}
+                          {formatDate(getFechaFinByVigencia(fechaInicio, planSeleccionado.vigencia_dias))}
                         </p>
                       </div>
                     </div>
@@ -1208,7 +1459,7 @@ export default function NuevoClientePage() {
                 )}
 
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Entrenador" helper="Pre-seleccionado del paso anterior, puedes cambiarlo">
+                  <Field label="Fisioterapeuta" helper="Pre-seleccionado del paso anterior, puedes cambiarlo">
                     <select
                       value={empleadoId}
                       onChange={(e) => {
@@ -1217,10 +1468,11 @@ export default function NuevoClientePage() {
                       }}
                       className={inputCls}
                     >
-                      <option value="" className="bg-[#11131a]">Seleccionar entrenador</option>
-                      {terapeutas.map((t) => (
+                      <option value="" className="bg-[#11131a]">Seleccionar fisioterapeuta</option>
+                      {empleadosAsignables.map((t) => (
                         <option key={t.id} value={t.id} className="bg-[#11131a]">
                           {t.nombre}
+                          {t.rol ? ` · ${getRolLabel(t.rol)}` : ''}
                           {t.especialidad ? ` · ${t.especialidad}` : ''}
                         </option>
                       ))}
@@ -1293,7 +1545,7 @@ export default function NuevoClientePage() {
                 {empleadoId && (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-medium text-white/75">Disponibilidad del entrenador</p>
+                      <p className="text-sm font-medium text-white/75">Disponibilidad del fisioterapeuta</p>
 
                       <div className="flex items-center gap-2">
                         <button
@@ -1347,27 +1599,65 @@ export default function NuevoClientePage() {
                   </div>
                 )}
 
-                {fechasPreview.length > 0 && (
-                  <Card className="border-violet-400/20 bg-violet-400/5 p-4">
-                    <p className="text-sm font-medium text-violet-300">
-                      Se generarán {fechasPreview.length} entrenamientos
+                {planificacion && (
+                  <Card
+                    className={`p-4 ${
+                      planificacion.alcanzaVigencia
+                        ? 'border-violet-400/20 bg-violet-400/5'
+                        : 'border-rose-400/20 bg-rose-400/5'
+                    }`}
+                  >
+                    <p
+                      className={`text-sm font-medium ${
+                        planificacion.alcanzaVigencia ? 'text-violet-300' : 'text-rose-300'
+                      }`}
+                    >
+                      {planificacion.alcanzaVigencia
+                        ? `Se generarán ${fechasPreview.length} entrenamientos dentro de la vigencia`
+                        : `La vigencia no alcanza: solo caben ${planificacion.sesionesPosibles} de ${planificacion.sesionesSolicitadas} sesiones`}
                     </p>
-                    <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">
-                      {fechasPreview.slice(0, 24).map((f, i) => (
-                        <span
-                          key={i}
-                          className="rounded-lg bg-violet-500/10 px-2 py-0.5 text-xs text-violet-400"
-                        >
-                          {new Date(`${f}T00:00:00`).toLocaleDateString('es', {
-                            day: 'numeric',
-                            month: 'short',
-                          })}
-                        </span>
-                      ))}
-                      {fechasPreview.length > 24 && (
-                        <span className="text-xs text-violet-400/60">+{fechasPreview.length - 24} más</span>
-                      )}
+
+                    <div className="mt-3 grid gap-3 sm:grid-cols-4 text-sm">
+                      <div>
+                        <p className="text-xs text-white/45">Días por semana</p>
+                        <p className="font-medium text-white">{planificacion.diasSeleccionados}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/45">Semanas base aprox.</p>
+                        <p className="font-medium text-white">{planificacion.semanasBase}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/45">Vence</p>
+                        <p className="font-medium text-white">{formatDate(planificacion.fechaFinPlan)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/45">Sesiones posibles</p>
+                        <p className="font-medium text-white">{planificacion.sesionesPosibles}</p>
+                      </div>
                     </div>
+
+                    {fechasPreview.length > 0 && (
+                      <div className="mt-3 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">
+                        {fechasPreview.slice(0, 24).map((f, i) => (
+                          <span
+                            key={i}
+                            className={`rounded-lg px-2 py-0.5 text-xs ${
+                              planificacion.alcanzaVigencia
+                                ? 'bg-violet-500/10 text-violet-400'
+                                : 'bg-rose-500/10 text-rose-300'
+                            }`}
+                          >
+                            {new Date(`${f}T00:00:00`).toLocaleDateString('es', {
+                              day: 'numeric',
+                              month: 'short',
+                            })}
+                          </span>
+                        ))}
+                        {fechasPreview.length > 24 && (
+                          <span className="text-xs text-white/50">+{fechasPreview.length - 24} más</span>
+                        )}
+                      </div>
+                    )}
                   </Card>
                 )}
               </>

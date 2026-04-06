@@ -92,6 +92,16 @@ function isUUID(value: string) {
   )
 }
 
+function getRolLabel(rol: string | null | undefined) {
+  const value = (rol || '').trim().toLowerCase()
+
+  if (value === 'terapeuta' || value === 'fisioterapeuta') return 'Fisioterapeuta'
+  if (value === 'entrenador') return 'Entrenador'
+  if (!value) return 'Sin rol'
+
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
 export default function EditarClientePage() {
   const params = useParams()
   const router = useRouter()
@@ -152,8 +162,9 @@ export default function EditarClientePage() {
         supabase
           .from('empleados')
           .select('id, nombre, rol, estado')
-          .eq('rol', 'terapeuta')
           .eq('estado', 'activo')
+          .neq('rol', 'admin')
+          .neq('rol', 'recepcion')
           .order('nombre', { ascending: true }),
       ])
 
@@ -166,12 +177,17 @@ export default function EditarClientePage() {
       }
 
       if (terapeutasRes.error) {
-        throw new Error(terapeutasRes.error.message || 'No se pudieron cargar los terapeutas.')
+        throw new Error(terapeutasRes.error.message || 'No se pudieron cargar los empleados.')
       }
 
       const cliente = clienteRes.data as ClienteDB
 
-      setTerapeutas((terapeutasRes.data || []) as Empleado[])
+      setTerapeutas(
+        ((terapeutasRes.data || []) as Empleado[]).filter((empleado) => {
+          const rol = (empleado.rol || '').trim().toLowerCase()
+          return rol !== 'admin' && rol !== 'recepcion'
+        })
+      )
 
       setForm({
         nombre: cliente.nombre || '',
@@ -415,7 +431,7 @@ export default function EditarClientePage() {
               </select>
             </Field>
 
-            <Field label="Terapeuta asignado">
+            <Field label="Fisioterapeuta asignado">
               <select
                 name="terapeuta_id"
                 value={form.terapeuta_id}
@@ -428,6 +444,7 @@ export default function EditarClientePage() {
                 {terapeutas.map((terapeuta) => (
                   <option key={terapeuta.id} value={terapeuta.id} className="bg-[#11131a] text-white">
                     {terapeuta.nombre}
+                    {terapeuta.rol ? ` · ${getRolLabel(terapeuta.rol)}` : ''}
                   </option>
                 ))}
               </select>

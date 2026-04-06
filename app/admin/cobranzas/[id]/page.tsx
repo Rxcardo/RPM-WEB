@@ -28,6 +28,7 @@ import {
   type Abono,
 } from '@/lib/cobranzas/abonos'
 import { supabase } from '@/lib/supabase/client'
+import SelectorTasaBCV from '@/components/finanzas/SelectorTasaBCV'
 
 function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(' ')
@@ -75,6 +76,10 @@ function diasParaVencer(fechaVencimiento: string | null) {
 
   const diff = venc.getTime() - hoy.getTime()
   return Math.ceil(diff / (1000 * 60 * 60 * 24))
+}
+
+function r2(value: number) {
+  return Math.round(value * 100) / 100
 }
 
 function Card({
@@ -198,12 +203,20 @@ function StatusBadge({
   )
 }
 
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
 type MetodoPagoV2 = {
   id: string
   nombre: string
   cartera_id: string | null
+  moneda: string | null
+  tipo: string | null
   cartera: {
     nombre: string
+    codigo: string | null
   } | null
 }
 
@@ -211,7 +224,45 @@ type MetodoPagoV2Raw = {
   id: string
   nombre: string
   cartera_id: string | null
-  cartera: { nombre: string }[] | { nombre: string } | null
+  moneda: string | null
+  tipo: string | null
+  cartera:
+    | {
+        nombre: string
+        codigo: string | null
+      }[]
+    | {
+        nombre: string
+        codigo: string | null
+      }
+    | null
+}
+
+function detectarMetodoBs(metodo: MetodoPagoV2 | null) {
+  if (!metodo) return false
+
+  const moneda = String(metodo.moneda || '').toUpperCase()
+  const nombre = String(metodo.nombre || '').toLowerCase()
+  const tipo = String(metodo.tipo || '').toLowerCase()
+  const carteraCodigo = String(metodo.cartera?.codigo || '').toLowerCase()
+
+  return (
+    moneda === 'BS' ||
+    moneda === 'VES' ||
+    nombre.includes('bs') ||
+    nombre.includes('bolívar') ||
+    nombre.includes('bolivar') ||
+    nombre.includes('pago movil') ||
+    nombre.includes('pago móvil') ||
+    nombre.includes('movil') ||
+    nombre.includes('móvil') ||
+    tipo.includes('bs') ||
+    tipo.includes('bolívar') ||
+    tipo.includes('bolivar') ||
+    tipo.includes('pago_movil') ||
+    carteraCodigo.includes('bs') ||
+    carteraCodigo.includes('ves')
+  )
 }
 
 export default function DetalleCuentaPage() {
@@ -234,6 +285,9 @@ export default function DetalleCuentaPage() {
     fecha: new Date().toISOString().split('T')[0],
     notas: '',
   })
+
+  const [tasaCongelada, setTasaCongelada] = useState<number | null>(null)
+  const [montoBsPersonalizado, setMontoBsPersonalizado] = useState<number | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -271,7 +325,9 @@ export default function DetalleCuentaPage() {
           id,
           nombre,
           cartera_id,
-          cartera:carteras(nombre)
+          moneda,
+          tipo,
+          cartera:carteras(nombre, codigo)
         `)
         .eq('activo', true)
         .order('nombre')
@@ -279,12 +335,23 @@ export default function DetalleCuentaPage() {
       if (error) throw error
 
       const metodosNormalizados: MetodoPagoV2[] = ((data || []) as MetodoPagoV2Raw[]).map(
-        (item) => ({
-          id: item.id,
-          nombre: item.nombre,
-          cartera_id: item.cartera_id,
-          cartera: Array.isArray(item.cartera) ? item.cartera[0] ?? null : item.cartera,
-        })
+        (item) => {
+          const cartera = firstOrNull(item.cartera)
+
+          return {
+            id: item.id,
+            nombre: item.nombre,
+            cartera_id: item.cartera_id,
+            moneda: item.moneda ?? null,
+            tipo: item.tipo ?? null,
+            cartera: cartera
+              ? {
+                  nombre: cartera.nombre,
+                  codigo: cartera.codigo ?? null,
+                }
+              : null,
+          }
+        }
       )
 
       setMetodosPago(metodosNormalizados)
@@ -294,18 +361,58 @@ export default function DetalleCuentaPage() {
     }
   }
 
+  const metodoSeleccionado = useMemo(
+    () => metodosPago.find((m) => m.id === formAbono.metodo_pago_v2_id) || null,
+    [metodosPago, formAbono.metodo_pago_v2_id]
+  )
+
+  const esBs = useMemo(() => detectarMetodoBs(metodoSeleccionado), [metodoSeleccionado])
+
+  const montoAbonoFinalUsd = useMemo(() => {
+    if (esBs && montoBsPersonalizado && tasaCongelada && tasaCongelada > 0) {
+      return r2(montoBsPersonalizado / tasaCongelada)
+    }
+
+    return r2(Number(formAbono.monto_usd || 0))
+  }, [esBs, montoBsPersonalizado, tasaCongelada, formAbono.monto_usd])
+
+  const montoAbonoFinalBs = useMemo(() => {
+    if (esBs && montoBsPersonalizado) return r2(montoBsPersonalizado)
+    if (esBs && tasaCongelada && formAbono.monto_usd > 0) {
+      return r2(formAbono.monto_usd * tasaCongelada)
+    }
+    return 0
+  }, [esBs, montoBsPersonalizado, tasaCongelada, formAbono.monto_usd])
+
+  function resetAbonoForm() {
+    setFormAbono({
+      monto_usd: 0,
+      metodo_pago_v2_id: '',
+      referencia: '',
+      fecha: new Date().toISOString().split('T')[0],
+      notas: '',
+    })
+    setTasaCongelada(null)
+    setMontoBsPersonalizado(null)
+  }
+
   async function handleRegistrarAbono(e: React.FormEvent) {
     e.preventDefault()
 
     if (!cuenta) return
 
-    if (formAbono.monto_usd <= 0) {
+    if (montoAbonoFinalUsd <= 0) {
       setError('El monto debe ser mayor a 0.')
       return
     }
 
-    if (formAbono.monto_usd > Number(cuenta.saldo_usd || 0)) {
+    if (montoAbonoFinalUsd > Number(cuenta.saldo_usd || 0)) {
       setError(`El monto no puede ser mayor al saldo (${money(cuenta.saldo_usd)}).`)
+      return
+    }
+
+    if (esBs && (!tasaCongelada || tasaCongelada <= 0)) {
+      setError('Debes cargar la tasa BCV para registrar un pago en bolívares.')
       return
     }
 
@@ -313,25 +420,28 @@ export default function DetalleCuentaPage() {
       setGuardandoAbono(true)
       setError('')
 
+      const notasFinales = [
+        formAbono.notas?.trim() || '',
+        esBs && tasaCongelada
+          ? `Pago en Bs | Tasa BCV: ${tasaCongelada} | Monto Bs: ${money(montoAbonoFinalBs, 'VES')} | Equivalente USD: ${money(montoAbonoFinalUsd)}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' | ')
+
       await registrarAbono({
         cuenta_cobrar_id: id,
-        monto_usd: formAbono.monto_usd,
+        monto_usd: montoAbonoFinalUsd,
         metodo_pago_v2_id: formAbono.metodo_pago_v2_id || null,
         referencia: formAbono.referencia || null,
         fecha: formAbono.fecha,
-        notas: formAbono.notas || null,
-      })
+        notas: notasFinales || null,
+      } as any)
 
       await cargarDatos()
 
       setMostrarFormAbono(false)
-      setFormAbono({
-        monto_usd: 0,
-        metodo_pago_v2_id: '',
-        referencia: '',
-        fecha: new Date().toISOString().split('T')[0],
-        notas: '',
-      })
+      resetAbonoForm()
     } catch (err: any) {
       console.error('Error registrando abono:', err)
       setError(err?.message || 'Error al registrar el abono.')
@@ -567,8 +677,8 @@ export default function DetalleCuentaPage() {
                       estaVencida
                         ? 'text-rose-400'
                         : porVencer
-                        ? 'text-amber-400'
-                        : 'text-white'
+                          ? 'text-amber-400'
+                          : 'text-white'
                     )}
                   >
                     {formatDate(cuenta.fecha_vencimiento)}
@@ -581,8 +691,8 @@ export default function DetalleCuentaPage() {
                         estaVencida
                           ? 'text-rose-400/75'
                           : porVencer
-                          ? 'text-amber-400/75'
-                          : 'text-white/45'
+                            ? 'text-amber-400/75'
+                            : 'text-white/45'
                       )}
                     >
                       {estaVencida
@@ -731,6 +841,7 @@ export default function DetalleCuentaPage() {
                 onClick={() => {
                   setMostrarFormAbono(false)
                   setError('')
+                  resetAbonoForm()
                 }}
                 className="rounded-2xl border border-white/10 bg-white/[0.03] p-2.5 transition hover:bg-white/[0.06]"
               >
@@ -750,66 +861,35 @@ export default function DetalleCuentaPage() {
               </div>
 
               <div className="grid gap-5 sm:grid-cols-2">
-                <Field label="Monto del abono (USD)" helper="No puede ser mayor al saldo pendiente.">
-                  <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/35">
-                      $
-                    </span>
-                    <input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      max={saldo}
-                      value={formAbono.monto_usd || ''}
-                      onChange={(e) => {
-                        setFormAbono((prev) => ({
-                          ...prev,
-                          monto_usd: parseFloat(e.target.value) || 0,
-                        }))
-                        setError('')
-                      }}
-                      className={`${inputClassName} pl-8`}
-                      required
-                    />
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFormAbono((prev) => ({ ...prev, monto_usd: saldo }))
-                      }
-                      className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
-                    >
-                      Pago total
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFormAbono((prev) => ({
-                          ...prev,
-                          monto_usd: Number((saldo / 2).toFixed(2)),
-                        }))
-                      }
-                      className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
-                    >
-                      50%
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setFormAbono((prev) => ({
-                          ...prev,
-                          monto_usd: Number((saldo * 0.25).toFixed(2)),
-                        }))
-                      }
-                      className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
-                    >
-                      25%
-                    </button>
-                  </div>
+                <Field label="Método de pago">
+                  <select
+                    value={formAbono.metodo_pago_v2_id}
+                    onChange={(e) => {
+                      setFormAbono((prev) => ({
+                        ...prev,
+                        metodo_pago_v2_id: e.target.value,
+                      }))
+                      setTasaCongelada(null)
+                      setMontoBsPersonalizado(null)
+                      setError('')
+                    }}
+                    className={inputClassName}
+                  >
+                    <option value="" className="bg-[#11131a] text-white">
+                      Seleccionar método
+                    </option>
+                    {metodosPago.map((metodo) => (
+                      <option
+                        key={metodo.id}
+                        value={metodo.id}
+                        className="bg-[#11131a] text-white"
+                      >
+                        {metodo.nombre}
+                        {metodo.moneda ? ` · ${metodo.moneda}` : ''}
+                        {metodo.cartera?.nombre ? ` · ${metodo.cartera.nombre}` : ''}
+                      </option>
+                    ))}
+                  </select>
                 </Field>
 
                 <Field label="Fecha">
@@ -824,32 +904,184 @@ export default function DetalleCuentaPage() {
                   />
                 </Field>
 
-                <Field label="Método de pago">
-                  <select
-                    value={formAbono.metodo_pago_v2_id}
-                    onChange={(e) =>
-                      setFormAbono((prev) => ({
-                        ...prev,
-                        metodo_pago_v2_id: e.target.value,
-                      }))
-                    }
-                    className={inputClassName}
-                  >
-                    <option value="" className="bg-[#11131a] text-white">
-                      Seleccionar método
-                    </option>
-                    {metodosPago.map((metodo) => (
-                      <option
-                        key={metodo.id}
-                        value={metodo.id}
-                        className="bg-[#11131a] text-white"
+                {!esBs ? (
+                  <Field label="Monto del abono (USD)" helper="No puede ser mayor al saldo pendiente.">
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/35">
+                        $
+                      </span>
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        max={saldo}
+                        value={formAbono.monto_usd || ''}
+                        onChange={(e) => {
+                          setFormAbono((prev) => ({
+                            ...prev,
+                            monto_usd: parseFloat(e.target.value) || 0,
+                          }))
+                          setError('')
+                        }}
+                        className={`${inputClassName} pl-8`}
+                        required
+                      />
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFormAbono((prev) => ({ ...prev, monto_usd: saldo }))
+                        }
+                        className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
                       >
-                        {metodo.nombre}
-                        {metodo.cartera?.nombre ? ` · ${metodo.cartera.nombre}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                        Pago total
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFormAbono((prev) => ({
+                            ...prev,
+                            monto_usd: Number((saldo / 2).toFixed(2)),
+                          }))
+                        }
+                        className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
+                      >
+                        50%
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFormAbono((prev) => ({
+                            ...prev,
+                            monto_usd: Number((saldo * 0.25).toFixed(2)),
+                          }))
+                        }
+                        className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
+                      >
+                        25%
+                      </button>
+                    </div>
+                  </Field>
+                ) : (
+                  <div className="sm:col-span-2">
+                    <Field
+                      label="Monto base del abono (USD)"
+                      helper="Este monto es el equivalente en USD que se registrará en la cuenta."
+                    >
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/35">
+                          $
+                        </span>
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          max={saldo}
+                          value={formAbono.monto_usd || ''}
+                          onChange={(e) => {
+                            setFormAbono((prev) => ({
+                              ...prev,
+                              monto_usd: parseFloat(e.target.value) || 0,
+                            }))
+                            setMontoBsPersonalizado(null)
+                            setError('')
+                          }}
+                          className={`${inputClassName} pl-8`}
+                          required
+                        />
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFormAbono((prev) => ({ ...prev, monto_usd: saldo }))
+                            if (tasaCongelada && tasaCongelada > 0) {
+                              setMontoBsPersonalizado(r2(saldo * tasaCongelada))
+                            }
+                          }}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
+                        >
+                          Pago total
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const usd = Number((saldo / 2).toFixed(2))
+                            setFormAbono((prev) => ({ ...prev, monto_usd: usd }))
+                            if (tasaCongelada && tasaCongelada > 0) {
+                              setMontoBsPersonalizado(r2(usd * tasaCongelada))
+                            }
+                          }}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
+                        >
+                          50%
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const usd = Number((saldo * 0.25).toFixed(2))
+                            setFormAbono((prev) => ({ ...prev, monto_usd: usd }))
+                            if (tasaCongelada && tasaCongelada > 0) {
+                              setMontoBsPersonalizado(r2(usd * tasaCongelada))
+                            }
+                          }}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
+                        >
+                          25%
+                        </button>
+                      </div>
+                    </Field>
+
+                    <div className="mt-5">
+                      <SelectorTasaBCV
+                        fecha={formAbono.fecha}
+                        monedaPago="BS"
+                        montoUSD={Number(formAbono.monto_usd || 0)}
+                        montoBs={montoBsPersonalizado || undefined}
+                        onTasaChange={setTasaCongelada}
+                        onMontoBsChange={(monto) => {
+                          setMontoBsPersonalizado(monto)
+                          if (monto > 0 && tasaCongelada) {
+                            setFormAbono((prev) => ({
+                              ...prev,
+                              monto_usd: r2(monto / tasaCongelada),
+                            }))
+                          }
+                        }}
+                      />
+                    </div>
+
+                    <div className="mt-5 grid gap-4 sm:grid-cols-3">
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                        <p className="text-xs text-white/45">Tasa BCV</p>
+                        <p className="mt-2 text-lg font-semibold text-white">
+                          {tasaCongelada ? tasaCongelada : '—'}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                        <p className="text-xs text-white/45">Total Bs</p>
+                        <p className="mt-2 text-lg font-semibold text-amber-300">
+                          {montoAbonoFinalBs > 0 ? money(montoAbonoFinalBs, 'VES') : '—'}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                        <p className="text-xs text-white/45">Equivalente USD</p>
+                        <p className="mt-2 text-lg font-semibold text-emerald-400">
+                          {montoAbonoFinalUsd > 0 ? money(montoAbonoFinalUsd) : '—'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <Field label="Referencia">
                   <input
@@ -896,6 +1128,7 @@ export default function DetalleCuentaPage() {
                   onClick={() => {
                     setMostrarFormAbono(false)
                     setError('')
+                    resetAbonoForm()
                   }}
                   className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
                 >

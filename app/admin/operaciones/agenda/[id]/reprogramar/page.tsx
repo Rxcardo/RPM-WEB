@@ -11,6 +11,7 @@ import ActionCard from '@/components/ui/ActionCard'
 
 type CitaDetalle = {
   id: string
+  cliente_id: string
   terapeuta_id: string | null
   servicio_id: string | null
   recurso_id: string | null
@@ -23,6 +24,25 @@ type CitaDetalle = {
   empleados: { nombre: string } | null
   servicios: { nombre: string } | null
   recursos: { id: string; nombre: string } | null
+}
+
+type ValidacionCita = {
+  disponible: boolean
+  motivo: string
+  conflicto_terapeuta?: boolean
+  conflicto_cliente?: boolean
+  conflictos_recurso?: number
+  capacidad_recurso?: number
+  recurso_estado?: string | null
+  recurso_hora_inicio?: string | null
+  recurso_hora_fin?: string | null
+  detalle?: {
+    tipo?: string
+    motivo?: string
+    detalle?: string
+    hora_inicio?: string | null
+    hora_fin?: string | null
+  } | null
 }
 
 function Field({
@@ -52,6 +72,48 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
   )
 }
 
+function formatHora(hora?: string | null) {
+  if (!hora) return '—'
+  return hora.slice(0, 5)
+}
+
+function buildErrorFromValidacion(validacion: ValidacionCita | null | undefined) {
+  if (!validacion) return 'No se pudo validar la disponibilidad.'
+
+  switch (validacion.motivo) {
+    case 'ok':
+      return ''
+    case 'empleado_bloqueado':
+      return (
+        validacion.detalle?.detalle ||
+        validacion.detalle?.motivo ||
+        'El fisioterapeuta no está disponible en ese horario.'
+      )
+    case 'conflicto_terapeuta':
+      return 'Ese fisioterapeuta ya tiene una cita en ese horario.'
+    case 'conflicto_cliente':
+      return 'Ese cliente ya tiene una cita en ese horario.'
+    case 'conflicto_recurso':
+      return validacion.capacidad_recurso && validacion.capacidad_recurso > 1
+        ? `Ese recurso ya alcanzó su capacidad máxima (${validacion.capacidad_recurso}) en ese horario.`
+        : 'Ese recurso ya está ocupado en ese horario.'
+    case 'recurso_inactivo':
+      return 'Ese recurso está inactivo.'
+    case 'recurso_mantenimiento':
+      return 'Ese recurso está en mantenimiento.'
+    case 'fuera_horario_recurso_inicio':
+      return `Ese recurso solo está disponible desde las ${formatHora(validacion.recurso_hora_inicio)}.`
+    case 'fuera_horario_recurso_fin':
+      return `Ese recurso solo está disponible hasta las ${formatHora(validacion.recurso_hora_fin)}.`
+    case 'recurso_no_existe':
+      return 'El recurso seleccionado no existe.'
+    case 'hora_fin_invalida':
+      return 'La hora final debe ser mayor que la hora inicial.'
+    default:
+      return `No se puede guardar la cita (${validacion.motivo}).`
+  }
+}
+
 const inputClassName = `
   w-full rounded-2xl border border-white/10 bg-white/[0.03]
   px-4 py-3 text-sm text-white outline-none transition
@@ -69,6 +131,8 @@ export default function ReprogramarCitaPage() {
   const [saving, setSaving] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
 
+  const [citaActual, setCitaActual] = useState<CitaDetalle | null>(null)
+
   const [resumen, setResumen] = useState({
     cliente: '',
     terapeuta: '',
@@ -79,12 +143,6 @@ export default function ReprogramarCitaPage() {
     horaFinOriginal: '',
     estadoOriginal: '',
     notas: '',
-  })
-
-  const [bloqueados, setBloqueados] = useState({
-    terapeuta_id: '',
-    servicio_id: '',
-    recurso_id: '',
   })
 
   const [form, setForm] = useState({
@@ -108,6 +166,7 @@ export default function ReprogramarCitaPage() {
         .from('citas')
         .select(`
           id,
+          cliente_id,
           terapeuta_id,
           servicio_id,
           recurso_id,
@@ -130,6 +189,8 @@ export default function ReprogramarCitaPage() {
 
       const cita = data as unknown as CitaDetalle
 
+      setCitaActual(cita)
+
       setResumen({
         cliente: cita.clientes?.nombre || 'Sin cliente',
         terapeuta: cita.empleados?.nombre || 'Sin terapeuta',
@@ -140,12 +201,6 @@ export default function ReprogramarCitaPage() {
         horaFinOriginal: cita.hora_fin ? cita.hora_fin.slice(0, 5) : '—',
         estadoOriginal: cita.estado || '—',
         notas: cita.notas || 'Sin notas',
-      })
-
-      setBloqueados({
-        terapeuta_id: cita.terapeuta_id || '',
-        servicio_id: cita.servicio_id || '',
-        recurso_id: cita.recurso_id || '',
       })
 
       setForm({
@@ -174,6 +229,11 @@ export default function ReprogramarCitaPage() {
       return
     }
 
+    if (!citaActual?.cliente_id || !citaActual?.terapeuta_id) {
+      setErrorMsg('La cita no tiene cliente o fisioterapeuta válidos.')
+      return
+    }
+
     setSaving(true)
 
     try {
@@ -183,50 +243,29 @@ export default function ReprogramarCitaPage() {
       const horaFinNormalizada =
         form.hora_fin.length === 5 ? `${form.hora_fin}:00` : form.hora_fin
 
-      if (bloqueados.recurso_id) {
-        const { data: conflictoRecurso, error: errorRecurso } = await supabase
-          .from('citas')
-          .select('id')
-          .eq('recurso_id', bloqueados.recurso_id)
-          .eq('fecha', form.fecha)
-          .neq('estado', 'cancelada')
-          .neq('id', id)
-          .lt('hora_inicio', horaFinNormalizada)
-          .gt('hora_fin', horaInicioNormalizada)
-          .limit(1)
-
-        if (errorRecurso) {
-          throw new Error(`Error validando recurso: ${errorRecurso.message}`)
+      const { data: validacion, error: validacionError } = await supabase.rpc(
+        'validar_disponibilidad_cita_edicion',
+        {
+          p_cita_id: id,
+          p_cliente_id: citaActual.cliente_id,
+          p_terapeuta_id: citaActual.terapeuta_id,
+          p_recurso_id: citaActual.recurso_id || null,
+          p_fecha: form.fecha,
+          p_hora_inicio: horaInicioNormalizada,
+          p_hora_fin: horaFinNormalizada,
         }
+      )
 
-        if (conflictoRecurso && conflictoRecurso.length > 0) {
-          setErrorMsg('Ese recurso ya está ocupado en ese horario.')
-          setSaving(false)
-          return
-        }
+      if (validacionError) {
+        throw new Error(`Error validando disponibilidad: ${validacionError.message}`)
       }
 
-      if (bloqueados.terapeuta_id) {
-        const { data: conflictoTerapeuta, error: errorTerapeuta } = await supabase
-          .from('citas')
-          .select('id')
-          .eq('terapeuta_id', bloqueados.terapeuta_id)
-          .eq('fecha', form.fecha)
-          .neq('estado', 'cancelada')
-          .neq('id', id)
-          .lt('hora_inicio', horaFinNormalizada)
-          .gt('hora_fin', horaInicioNormalizada)
-          .limit(1)
+      const validacionParsed = validacion as ValidacionCita
 
-        if (errorTerapeuta) {
-          throw new Error(`Error validando terapeuta: ${errorTerapeuta.message}`)
-        }
-
-        if (conflictoTerapeuta && conflictoTerapeuta.length > 0) {
-          setErrorMsg('Ese terapeuta ya tiene una cita en ese horario.')
-          setSaving(false)
-          return
-        }
+      if (!validacionParsed?.disponible) {
+        setErrorMsg(buildErrorFromValidacion(validacionParsed))
+        setSaving(false)
+        return
       }
 
       const payload = {
@@ -282,7 +321,7 @@ export default function ReprogramarCitaPage() {
       >
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <SummaryItem label="Cliente" value={resumen.cliente} />
-          <SummaryItem label="Terapeuta" value={resumen.terapeuta} />
+          <SummaryItem label="Fisioterapeuta" value={resumen.terapeuta} />
           <SummaryItem label="Servicio" value={resumen.servicio} />
           <SummaryItem label="Recurso" value={resumen.recurso} />
           <SummaryItem label="Fecha original" value={resumen.fechaOriginal} />

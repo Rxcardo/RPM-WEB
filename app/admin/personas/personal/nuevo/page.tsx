@@ -8,7 +8,7 @@ import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import ActionCard from '@/components/ui/ActionCard'
 
-type RolUI = 'admin' | 'recepcionista' | 'terapeuta' | 'entrenador'
+type RolUI = 'admin' | 'recepcionista' | 'fisioterapeuta'
 
 type FormState = {
   nombre: string
@@ -24,7 +24,7 @@ const INITIAL_FORM: FormState = {
   nombre: '',
   email: '',
   telefono: '',
-  rol: 'terapeuta',
+  rol: 'fisioterapeuta',
   estado: 'activo',
   comision_plan_porcentaje: '0',
   comision_cita_porcentaje: '0',
@@ -65,7 +65,7 @@ function parsePorcentaje(value: string): number {
 }
 
 function mapearRolCatalogo(rolUI: RolUI): 'admin' | 'recepcionista' | 'terapeuta' {
-  if (rolUI === 'entrenador') return 'terapeuta'
+  if (rolUI === 'fisioterapeuta') return 'terapeuta'
   return rolUI
 }
 
@@ -114,7 +114,7 @@ export default function NuevoPersonalPage() {
         rol: form.rol, // visual / legado
         rol_id: rolData.id, // permisos reales
         estado: form.estado,
-        especialidad: form.rol === 'terapeuta' || form.rol === 'entrenador' ? '' : null,
+        especialidad: form.rol === 'fisioterapeuta' ? '' : null,
         comision_plan_porcentaje: comisionPlan,
         comision_cita_porcentaje: comisionCita,
       }
@@ -213,12 +213,9 @@ export default function NuevoPersonalPage() {
               onChange={(e) => setForm({ ...form, rol: e.target.value as RolUI })}
               className={inputClassName}
             >
-              <option value="terapeuta" className="bg-[#11131a] text-white">
-                Terapeuta
-              </option>
-              <option value="entrenador" className="bg-[#11131a] text-white">
-                Entrenador
-              </option>
+              <option value="fisioterapeuta">
+  Fisioterapeuta
+</option>
               <option value="recepcionista" className="bg-[#11131a] text-white">
                 Recepcionista
               </option>
@@ -246,33 +243,9 @@ export default function NuevoPersonalPage() {
             </select>
           </Field>
 
-          <Field label="Comisión por plan (%)">
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={form.comision_plan_porcentaje}
-              onChange={(e) =>
-                setForm({ ...form, comision_plan_porcentaje: e.target.value })
-              }
-              placeholder="0"
-              className={inputClassName}
-            />
-          </Field>
+          
 
-          <Field label="Comisión por cita (%)">
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={form.comision_cita_porcentaje}
-              onChange={(e) =>
-                setForm({ ...form, comision_cita_porcentaje: e.target.value })
-              }
-              placeholder="0"
-              className={inputClassName}
-            />
-          </Field>
+          
         </div>
 
         <div className="mt-6 flex flex-wrap gap-3">

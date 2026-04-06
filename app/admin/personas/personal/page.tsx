@@ -49,7 +49,7 @@ type PersonalRow = {
   canceladas: number
 }
 
-type RolUI = 'admin' | 'recepcionista' | 'terapeuta' | 'entrenador'
+type RolUI = 'admin' | 'recepcionista' | 'fisioterapeuta'
 
 type FormState = {
   nombre: string
@@ -63,7 +63,7 @@ const INITIAL_FORM: FormState = {
   nombre: '',
   email: '',
   telefono: '',
-  rol: 'terapeuta',
+  rol: 'fisioterapeuta',
   estado: 'activo',
 }
 
@@ -138,7 +138,7 @@ function getFirstExistingKey(obj: Record<string, any>, keys: string[]) {
 }
 
 function mapearRolCatalogo(rolUI: RolUI): 'admin' | 'recepcionista' | 'terapeuta' {
-  if (rolUI === 'entrenador') return 'terapeuta'
+  if (rolUI === 'fisioterapeuta') return 'terapeuta'
   return rolUI
 }
 
@@ -298,7 +298,7 @@ export default function PersonalPage() {
         rol: form.rol,
         rol_id: rolId,
         estado: form.estado,
-        especialidad: form.rol === 'terapeuta' || form.rol === 'entrenador' ? '' : null,
+        especialidad: form.rol === 'fisioterapeuta' ? '' : null,
       }
 
       const { error } = await supabase.from('empleados').insert(payload)
@@ -597,12 +597,9 @@ export default function PersonalPage() {
                   <option value="todos" className="bg-[#11131a] text-white">
                     Todos
                   </option>
-                  <option value="terapeuta" className="bg-[#11131a] text-white">
-                    Terapeutas
-                  </option>
-                  <option value="entrenador" className="bg-[#11131a] text-white">
-                    Entrenadores
-                  </option>
+                  <option value="fisioterapeuta">
+  Fisioterapeuta
+</option>
                   <option value="admin" className="bg-[#11131a] text-white">
                     Admin
                   </option>
@@ -895,12 +892,9 @@ export default function PersonalPage() {
                           onChange={(e) => setForm({ ...form, rol: e.target.value as RolUI })}
                           className={inputClassName}
                         >
-                          <option value="terapeuta" className="bg-[#11131a] text-white">
-                            Terapeuta
-                          </option>
-                          <option value="entrenador" className="bg-[#11131a] text-white">
-                            Entrenador
-                          </option>
+                          <option value="fisioterapeuta">
+  Fisioterapeuta
+</option>
                           <option value="recepcionista" className="bg-[#11131a] text-white">
                             Recepcionista
                           </option>

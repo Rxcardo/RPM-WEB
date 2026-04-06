@@ -53,6 +53,9 @@ type Recurso = {
   id: string
   nombre: string
   estado: string | null
+  capacidad: number | null
+  hora_inicio: string | null
+  hora_fin: string | null
 }
 
 type MetodoPago = {
@@ -79,6 +82,25 @@ type ClientePlan = {
   fecha_fin: string | null
   planes?: {
     nombre: string
+  } | null
+}
+
+type ValidacionCita = {
+  disponible: boolean
+  motivo: string
+  conflicto_terapeuta?: boolean
+  conflicto_cliente?: boolean
+  conflictos_recurso?: number
+  capacidad_recurso?: number
+  recurso_estado?: string | null
+  recurso_hora_inicio?: string | null
+  recurso_hora_fin?: string | null
+  detalle?: {
+    tipo?: string
+    motivo?: string
+    detalle?: string
+    hora_inicio?: string | null
+    hora_fin?: string | null
   } | null
 }
 
@@ -144,6 +166,56 @@ function getServicioDuracion(servicio: ServicioRaw) {
   const n = Number(servicio.duracion_minutos)
   if (!Number.isNaN(n) && n > 0) return n
   return null
+}
+
+function toMinutes(hora: string | null | undefined) {
+  if (!hora) return null
+  const limpia = hora.slice(0, 5)
+  const [h, m] = limpia.split(':').map(Number)
+  if (Number.isNaN(h) || Number.isNaN(m)) return null
+  return h * 60 + m
+}
+
+function formatHoraCorta(hora: string | null | undefined) {
+  if (!hora) return '—'
+  return hora.slice(0, 5)
+}
+
+function buildErrorFromValidacion(validacion: ValidacionCita | null | undefined) {
+  if (!validacion) return 'No se pudo validar la disponibilidad.'
+
+  switch (validacion.motivo) {
+    case 'ok':
+      return ''
+    case 'empleado_bloqueado':
+      return (
+        validacion.detalle?.detalle ||
+        validacion.detalle?.motivo ||
+        'El fisioterapeuta no está disponible en ese horario.'
+      )
+    case 'conflicto_terapeuta':
+      return 'Ese fisioterapeuta ya tiene una cita en ese horario.'
+    case 'conflicto_cliente':
+      return 'Ese cliente ya tiene una cita en ese horario.'
+    case 'conflicto_recurso':
+      return validacion.capacidad_recurso && validacion.capacidad_recurso > 1
+        ? `Ese recurso ya alcanzó su capacidad máxima (${validacion.capacidad_recurso}) en ese horario.`
+        : 'Ese recurso ya está ocupado en ese horario.'
+    case 'recurso_inactivo':
+      return 'Ese recurso está inactivo.'
+    case 'recurso_mantenimiento':
+      return 'Ese recurso está en mantenimiento.'
+    case 'fuera_horario_recurso_inicio':
+      return `Ese recurso solo está disponible desde las ${formatHoraCorta(validacion.recurso_hora_inicio)}.`
+    case 'fuera_horario_recurso_fin':
+      return `Ese recurso solo está disponible hasta las ${formatHoraCorta(validacion.recurso_hora_fin)}.`
+    case 'recurso_no_existe':
+      return 'El recurso seleccionado no existe.'
+    case 'hora_fin_invalida':
+      return 'La hora final debe ser mayor que la hora inicial.'
+    default:
+      return `No se puede guardar la cita (${validacion.motivo}).`
+  }
 }
 
 function Field({
@@ -229,10 +301,7 @@ function getPlanLabel(plan: ClientePlan) {
 function NuevaCitaPageFallback() {
   return (
     <div className="space-y-6">
-      <Section
-        title="Formulario de cita"
-        description="Cargando vista..."
-      >
+      <Section title="Formulario de cita" description="Cargando vista...">
         <Card className="p-6">
           <p className="text-sm text-white/55">Cargando formulario...</p>
         </Card>
@@ -334,6 +403,11 @@ function NuevaCitaPageContent() {
     [planesCliente, form.cliente_plan_id]
   )
 
+  const recursoSeleccionado = useMemo(
+    () => recursos.find((r) => r.id === form.recurso_id) || null,
+    [recursos, form.recurso_id]
+  )
+
   useEffect(() => {
     if (!form.hora_inicio || !servicioSeleccionado?.duracion_min) return
 
@@ -386,7 +460,7 @@ function NuevaCitaPageContent() {
         supabase
           .from('empleados')
           .select('id, nombre, comision_cita_porcentaje')
-          .eq('rol', 'terapeuta')
+          .in('rol', ['terapeuta', 'fisioterapeuta'])
           .eq('estado', 'activo')
           .order('nombre', { ascending: true }),
 
@@ -398,7 +472,7 @@ function NuevaCitaPageContent() {
 
         supabase
           .from('recursos')
-          .select('id, nombre, estado')
+          .select('id, nombre, estado, capacidad, hora_inicio, hora_fin')
           .order('nombre', { ascending: true }),
 
         supabase
@@ -624,13 +698,23 @@ function NuevaCitaPageContent() {
       !form.hora_inicio
     ) {
       alert(
-        'Completa cliente, terapeuta, servicio, fecha y selecciona una hora en el calendario.'
+        'Completa cliente, fisioterapeuta, servicio, fecha y selecciona una hora en el calendario.'
       )
       return
     }
 
     if (!form.hora_fin) {
       alert('No se pudo calcular la hora final.')
+      return
+    }
+
+    if (toMinutes(form.hora_inicio) === null || toMinutes(form.hora_fin) === null) {
+      alert('La hora seleccionada no es válida.')
+      return
+    }
+
+    if ((toMinutes(form.hora_fin) || 0) <= (toMinutes(form.hora_inicio) || 0)) {
+      alert('La hora final debe ser mayor que la hora inicial.')
       return
     }
 
@@ -684,44 +768,32 @@ function NuevaCitaPageContent() {
     setLoading(true)
 
     try {
-      if (form.recurso_id) {
-        const { data: conflictoRecurso, error: errorRecurso } = await supabase
-          .from('citas')
-          .select('id')
-          .eq('recurso_id', form.recurso_id)
-          .eq('fecha', form.fecha)
-          .neq('estado', 'cancelada')
-          .lt('hora_inicio', form.hora_fin)
-          .gt('hora_fin', form.hora_inicio)
-          .limit(1)
+      const horaInicioNormalizada =
+        form.hora_inicio.length === 5 ? `${form.hora_inicio}:00` : form.hora_inicio
 
-        if (errorRecurso) {
-          throw new Error(`Error validando recurso: ${errorRecurso.message}`)
-        }
+      const horaFinNormalizada =
+        form.hora_fin.length === 5 ? `${form.hora_fin}:00` : form.hora_fin
 
-        if (conflictoRecurso && conflictoRecurso.length > 0) {
-          alert('Ese recurso ya está ocupado en ese horario.')
-          setLoading(false)
-          return
+      const { data: validacion, error: validacionError } = await supabase.rpc(
+        'validar_disponibilidad_cita',
+        {
+          p_cliente_id: form.cliente_id,
+          p_terapeuta_id: form.terapeuta_id,
+          p_recurso_id: form.recurso_id || null,
+          p_fecha: form.fecha,
+          p_hora_inicio: horaInicioNormalizada,
+          p_hora_fin: horaFinNormalizada,
         }
+      )
+
+      if (validacionError) {
+        throw new Error(`Error validando disponibilidad: ${validacionError.message}`)
       }
 
-      const { data: conflictoTerapeuta, error: errorTerapeuta } = await supabase
-        .from('citas')
-        .select('id')
-        .eq('terapeuta_id', form.terapeuta_id)
-        .eq('fecha', form.fecha)
-        .neq('estado', 'cancelada')
-        .lt('hora_inicio', form.hora_fin)
-        .gt('hora_fin', form.hora_inicio)
-        .limit(1)
+      const validacionParsed = validacion as ValidacionCita
 
-      if (errorTerapeuta) {
-        throw new Error(`Error validando terapeuta: ${errorTerapeuta.message}`)
-      }
-
-      if (conflictoTerapeuta && conflictoTerapeuta.length > 0) {
-        alert('Ese terapeuta ya tiene una cita en ese horario.')
+      if (!validacionParsed?.disponible) {
+        alert(buildErrorFromValidacion(validacionParsed))
         setLoading(false)
         return
       }
@@ -732,11 +804,8 @@ function NuevaCitaPageContent() {
         servicio_id: form.servicio_id,
         recurso_id: form.recurso_id || null,
         fecha: form.fecha,
-        hora_inicio:
-          form.hora_inicio.length === 5
-            ? `${form.hora_inicio}:00`
-            : form.hora_inicio,
-        hora_fin: form.hora_fin,
+        hora_inicio: horaInicioNormalizada,
+        hora_fin: horaFinNormalizada,
         estado: form.estado,
         notas: form.notas || null,
         cliente_plan_id: form.tipo_cita === 'plan' ? form.cliente_plan_id : null,
@@ -885,7 +954,7 @@ function NuevaCitaPageContent() {
 
       <Section
         title="Formulario de cita"
-        description="Selecciona cliente, terapeuta, servicio, horario, tipo y notas."
+        description="Selecciona cliente, fisioterapeuta, servicio, horario, tipo y notas."
       >
         {loadingData ? (
           <Card className="p-6">
@@ -951,7 +1020,7 @@ function NuevaCitaPageContent() {
               </Field>
             )}
 
-            <Field label="Terapeuta">
+            <Field label="Fisioterapeuta">
               <select
                 value={form.terapeuta_id}
                 onChange={(e) =>
@@ -965,13 +1034,13 @@ function NuevaCitaPageContent() {
                 className={inputClassName}
               >
                 <option value="" className="bg-[#11131a] text-white">
-                  Seleccionar terapeuta
+                  Seleccionar fisioterapeuta
                 </option>
                 {terapeutas.map((t) => (
                   <option key={t.id} value={t.id} className="bg-[#11131a] text-white">
                     {t.nombre}{' '}
                     {t.comision_cita_porcentaje
-                      ? `(${t.comision_cita_porcentaje}% terapeuta)`
+                      ? `(${t.comision_cita_porcentaje}% fisioterapeuta)`
                       : ''}
                   </option>
                 ))}
@@ -1023,10 +1092,26 @@ function NuevaCitaPageContent() {
               </select>
             </Field>
 
-            <Field label="Recurso">
+            <Field
+              label="Recurso"
+              helper={
+                recursoSeleccionado
+                  ? `Capacidad: ${Number(recursoSeleccionado.capacidad || 1)} · Horario: ${formatHoraCorta(
+                      recursoSeleccionado.hora_inicio
+                    )} - ${formatHoraCorta(recursoSeleccionado.hora_fin)}`
+                  : 'Selecciona un recurso si la cita debe reservar cubículo/equipo.'
+              }
+            >
               <select
                 value={form.recurso_id}
-                onChange={(e) => setForm({ ...form, recurso_id: e.target.value })}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    recurso_id: e.target.value,
+                    hora_inicio: '',
+                    hora_fin: '',
+                  }))
+                }
                 className={inputClassName}
               >
                 <option value="" className="bg-[#11131a] text-white">
@@ -1035,6 +1120,8 @@ function NuevaCitaPageContent() {
                 {recursos.map((r) => (
                   <option key={r.id} value={r.id} className="bg-[#11131a] text-white">
                     {r.nombre}
+                    {r.estado ? ` · ${r.estado}` : ''}
+                    {r.capacidad ? ` · cap. ${r.capacidad}` : ''}
                   </option>
                 ))}
               </select>
@@ -1086,6 +1173,8 @@ function NuevaCitaPageContent() {
             <div className="md:col-span-2">
               <DisponibilidadTerapeuta
                 terapeutaId={form.terapeuta_id}
+                clienteId={form.cliente_id}
+                recursoId={form.recurso_id}
                 fecha={form.fecha}
                 duracion={servicioSeleccionado?.duracion_min || null}
                 horaSeleccionada={form.hora_inicio}
@@ -1462,17 +1551,6 @@ function NuevaCitaPageContent() {
               </span>
             </div>
 
-            <div className="flex justify-between">
-              <span className="text-white/55">Tipo:</span>
-              <span className="text-white/75">
-                {form.tipo_cita === 'plan'
-                  ? 'Plan de entrenamiento'
-                  : form.tipo_cita === 'recovery'
-                  ? 'Recovery'
-                  : 'Independiente'}
-              </span>
-            </div>
-
             {form.tipo_cita === 'plan' && (
               <div className="flex justify-between">
                 <span className="text-white/55">Plan:</span>
@@ -1483,7 +1561,7 @@ function NuevaCitaPageContent() {
             )}
 
             <div className="flex justify-between">
-              <span className="text-white/55">Terapeuta:</span>
+              <span className="text-white/55">Fisioterapeuta:</span>
               <span className="text-white/75">
                 {terapeutas.find((t) => t.id === form.terapeuta_id)?.nombre || 'No seleccionado'}
               </span>
@@ -1493,6 +1571,13 @@ function NuevaCitaPageContent() {
               <span className="text-white/55">Servicio:</span>
               <span className="text-white/75">
                 {servicioSeleccionado?.nombre || 'No seleccionado'}
+              </span>
+            </div>
+
+            <div className="flex justify-between">
+              <span className="text-white/55">Recurso:</span>
+              <span className="text-white/75">
+                {recursoSeleccionado?.nombre || 'Sin recurso'}
               </span>
             </div>
 
