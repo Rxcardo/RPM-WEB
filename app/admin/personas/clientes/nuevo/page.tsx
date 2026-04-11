@@ -3,6 +3,8 @@
 export const dynamic = 'force-dynamic'
 
 import {
+  memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -17,7 +19,7 @@ import Section from '@/components/ui/Section'
 import ActionCard from '@/components/ui/ActionCard'
 import SelectorTasaBCV from '@/components/finanzas/SelectorTasaBCV'
 
-// ─── Tipos ────────────────────────────────────────────────────────────────────
+type VigenciaTipo = 'dias' | 'semanas' | 'meses'
 
 type EmpleadoAsignable = {
   id: string
@@ -32,9 +34,13 @@ type Plan = {
   id: string
   nombre: string
   sesiones_totales: number
-  vigencia_dias: number
+  vigencia_valor: number
+  vigencia_tipo: VigenciaTipo
   precio: number
   descripcion: string | null
+  comision_base?: number | null
+  comision_rpm?: number | null
+  comision_entrenador?: number | null
 }
 
 type Recurso = {
@@ -75,7 +81,16 @@ type PlanificacionSesiones = {
   ultimaFechaPosible: string | null
 }
 
-// ─── Constantes ───────────────────────────────────────────────────────────────
+type PagoMixtoItem = {
+  id_local: string
+  moneda_pago: 'USD' | 'BS'
+  metodo_pago_v2_id: string
+  monto_usd: string
+  monto_bs: number | null
+  tasa_bcv: number | null
+  referencia: string
+  notas: string
+}
 
 const DIAS_SEMANA = [
   { key: 1, label: 'L', nombre: 'Lunes' },
@@ -89,8 +104,6 @@ const DIAS_SEMANA = [
 
 const HOUR_HEIGHT = 40
 const TOTAL_HOURS = 24
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null
@@ -147,8 +160,17 @@ function addDaysToDate(dateStr: string, days: number) {
   ).padStart(2, '0')}`
 }
 
-function getFechaFinByVigencia(fechaInicio: string, vigenciaDias: number) {
-  const diasReales = Math.max(Number(vigenciaDias || 0) - 1, 0)
+function getVigenciaDias(vigenciaValor: number, vigenciaTipo: VigenciaTipo) {
+  const valor = Math.max(Number(vigenciaValor || 0), 0)
+
+  if (vigenciaTipo === 'semanas') return valor * 7
+  if (vigenciaTipo === 'meses') return valor * 30
+  return valor
+}
+
+function getFechaFinByVigencia(fechaInicio: string, vigenciaValor: number, vigenciaTipo: VigenciaTipo) {
+  const vigenciaDias = getVigenciaDias(vigenciaValor, vigenciaTipo)
+  const diasReales = Math.max(vigenciaDias - 1, 0)
   return addDaysToDate(fechaInicio, diasReales)
 }
 
@@ -174,6 +196,20 @@ function formatBs(v: number) {
     currency: 'VES',
     maximumFractionDigits: 2,
   }).format(v)
+}
+
+function formatVigencia(valor: number, tipo: VigenciaTipo) {
+  if (!valor) return '—'
+
+  if (valor === 1) {
+    if (tipo === 'dias') return '1 día'
+    if (tipo === 'semanas') return '1 semana'
+    return '1 mes'
+  }
+
+  if (tipo === 'dias') return `${valor} días`
+  if (tipo === 'semanas') return `${valor} semanas`
+  return `${valor} meses`
 }
 
 function timeToMinutes(t: string) {
@@ -220,6 +256,23 @@ function detectarMetodoBs(metodo: MetodoPago | null) {
   )
 }
 
+function detectarMetodoUsd(metodo: MetodoPago | null) {
+  if (!metodo) return false
+
+  const moneda = (metodo.moneda || '').toUpperCase()
+  const nombre = (metodo.nombre || '').toLowerCase()
+  const carteraCodigo = (metodo.cartera?.codigo || '').toLowerCase()
+
+  return (
+    moneda === 'USD' ||
+    nombre.includes('usd') ||
+    nombre.includes('zelle') ||
+    nombre.includes('efectivo $') ||
+    nombre.includes('efectivo usd') ||
+    carteraCodigo.includes('usd')
+  )
+}
+
 function getRolLabel(rol: string | null | undefined) {
   const value = (rol || '').trim().toLowerCase()
 
@@ -234,8 +287,11 @@ function calcularPlanificacionSesiones(
   fechaInicio: string,
   diasSemana: number[],
   totalSesiones: number,
-  vigenciaDias: number
+  vigenciaValor: number,
+  vigenciaTipo: VigenciaTipo
 ): PlanificacionSesiones {
+  const vigenciaDias = getVigenciaDias(vigenciaValor, vigenciaTipo)
+
   if (!fechaInicio || !diasSemana.length || !totalSesiones || !vigenciaDias) {
     return {
       fechas: [],
@@ -250,7 +306,7 @@ function calcularPlanificacionSesiones(
   }
 
   const diasOrdenados = [...diasSemana].sort((a, b) => a - b)
-  const fechaFinPlan = getFechaFinByVigencia(fechaInicio, vigenciaDias)
+  const fechaFinPlan = getFechaFinByVigencia(fechaInicio, vigenciaValor, vigenciaTipo)
   const inicio = new Date(`${fechaInicio}T00:00:00`)
   const fin = new Date(`${fechaFinPlan}T23:59:59`)
   const current = new Date(`${fechaInicio}T00:00:00`)
@@ -310,8 +366,6 @@ function buildEntrenamientoKey(fecha: string, horaInicio: string, horaFin: strin
   return `${fecha}__${horaInicio}__${horaFin}__${empleadoId}`
 }
 
-// ─── UI helpers ───────────────────────────────────────────────────────────────
-
 function Field({
   label,
   children,
@@ -335,8 +389,6 @@ const inputCls = `
   px-4 py-3 text-sm text-white outline-none transition
   placeholder:text-white/35 focus:border-white/20 focus:bg-white/[0.05]
 `
-
-// ─── Paso indicator ───────────────────────────────────────────────────────────
 
 function PasoIndicator({ actual }: { paso?: number; actual: number }) {
   const pasos = [
@@ -373,8 +425,6 @@ function PasoIndicator({ actual }: { paso?: number; actual: number }) {
     </div>
   )
 }
-
-// ─── Calendario disponibilidad ────────────────────────────────────────────────
 
 function CalendarioDisponibilidad({
   fechaVista,
@@ -511,7 +561,44 @@ function CalendarioDisponibilidad({
   )
 }
 
-// ─── Página principal ─────────────────────────────────────────────────────────
+function makePagoItem(moneda: 'USD' | 'BS' = 'USD'): PagoMixtoItem {
+  return {
+    id_local: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    moneda_pago: moneda,
+    metodo_pago_v2_id: '',
+    monto_usd: '',
+    monto_bs: null,
+    tasa_bcv: null,
+    referencia: '',
+    notas: '',
+  }
+}
+
+const PagoBsSelector = memo(function PagoBsSelector({
+  fecha,
+  montoUsd,
+  montoBs,
+  onChangeTasa,
+  onChangeMontoBs,
+}: {
+  fecha: string
+  montoUsd: number
+  montoBs: number | null
+  onChangeTasa: (tasa: number | null) => void
+  onChangeMontoBs: (monto: number) => void
+}) {
+  return (
+    <SelectorTasaBCV
+      fecha={fecha}
+      monedaPago="BS"
+      monedaReferencia="EUR"
+      montoUSD={montoUsd}
+      montoBs={montoBs || undefined}
+      onTasaChange={onChangeTasa}
+      onMontoBsChange={onChangeMontoBs}
+    />
+  )
+})
 
 export default function NuevoClientePage() {
   const router = useRouter()
@@ -523,6 +610,7 @@ export default function NuevoClientePage() {
   const [paso, setPaso] = useState(1)
   const [saving, setSaving] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
+  const [empleadoActualId, setEmpleadoActualId] = useState('')
 
   const [empleadosAsignables, setEmpleadosAsignables] = useState<EmpleadoAsignable[]>([])
   const [planes, setPlanes] = useState<Plan[]>([])
@@ -536,6 +624,7 @@ export default function NuevoClientePage() {
 
   const [formCliente, setFormCliente] = useState({
     nombre: '',
+    cedula: '',
     telefono: '',
     email: '',
     fecha_nacimiento: '',
@@ -557,26 +646,61 @@ export default function NuevoClientePage() {
   const [fechaVistaCal, setFechaVistaCal] = useState(getTodayLocal())
 
   const [saltarPago, setSaltarPago] = useState(false)
-  const [metodoPagoId, setMetodoPagoId] = useState('')
   const [usarPrecioPlan, setUsarPrecioPlan] = useState(true)
   const [montoPersonalizado, setMontoPersonalizado] = useState('')
-  const [notasPago, setNotasPago] = useState('')
-  const [referenciaPago, setReferenciaPago] = useState('')
-  const [porcentajeRpm, setPorcentajeRpm] = useState(35)
+  const [notasPagoGenerales, setNotasPagoGenerales] = useState('')
   const [mostrarCrearPlan, setMostrarCrearPlan] = useState(false)
   const [nuevoPlanNombre, setNuevoPlanNombre] = useState('')
   const [nuevoPlanSesiones, setNuevoPlanSesiones] = useState(12)
   const [nuevoPlanVigencia, setNuevoPlanVigencia] = useState(30)
+  const [nuevoPlanVigenciaTipo, setNuevoPlanVigenciaTipo] = useState<VigenciaTipo>('dias')
   const [nuevoPlanPrecio, setNuevoPlanPrecio] = useState('')
   const [creandoPlan, setCreandoPlan] = useState(false)
-
-  const [esBs, setEsBs] = useState(false)
-  const [tasaCongelada, setTasaCongelada] = useState<number | null>(null)
-  const [montoBsPersonalizado, setMontoBsPersonalizado] = useState<number | null>(null)
+  const [pagosMixtos, setPagosMixtos] = useState<PagoMixtoItem[]>([makePagoItem('USD')])
 
   useEffect(() => {
     void loadData()
+    void loadEmpleadoActual()
   }, [])
+
+  async function resolveEmpleadoActualId(): Promise<string> {
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError) return ''
+
+      const authUserId = authData.user?.id
+      if (!authUserId) return ''
+
+      const { data: empleadoPorAuth, error: errorPorAuth } = await supabase
+        .from('empleados')
+        .select('id, nombre, auth_user_id')
+        .eq('auth_user_id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorAuth && empleadoPorAuth?.id) {
+        return String(empleadoPorAuth.id)
+      }
+
+      const { data: empleadoPorId, error: errorPorId } = await supabase
+        .from('empleados')
+        .select('id, nombre')
+        .eq('id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorId && empleadoPorId?.id) {
+        return String(empleadoPorId.id)
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
+  async function loadEmpleadoActual() {
+    const empleadoId = await resolveEmpleadoActualId()
+    setEmpleadoActualId(empleadoId)
+  }
 
   async function loadData() {
     setLoadingData(true)
@@ -593,7 +717,18 @@ export default function NuevoClientePage() {
 
         supabase
           .from('planes')
-          .select('id, nombre, sesiones_totales, vigencia_dias, precio, descripcion')
+          .select(`
+            id,
+            nombre,
+            sesiones_totales,
+            vigencia_valor,
+            vigencia_tipo,
+            precio,
+            descripcion,
+            comision_base,
+            comision_rpm,
+            comision_entrenador
+          `)
           .eq('estado', 'activo')
           .order('nombre'),
 
@@ -665,23 +800,57 @@ export default function NuevoClientePage() {
       })
   }, [empleadoId, fechaVistaCal])
 
-  const metodoSeleccionado = useMemo(
-    () => metodosPago.find((x) => x.id === metodoPagoId) || null,
-    [metodosPago, metodoPagoId]
+  const planSeleccionado = useMemo(
+    () => planes.find((p) => p.id === planId) || null,
+    [planes, planId]
   )
 
-  useEffect(() => {
-    setEsBs(detectarMetodoBs(metodoSeleccionado))
-  }, [metodoSeleccionado])
+  const montoBaseComisionPlan = useMemo(() => {
+    if (!planSeleccionado) return 0
+    return Number(planSeleccionado.comision_base ?? planSeleccionado.precio ?? 0)
+  }, [planSeleccionado])
 
-  const planSeleccionado = useMemo(() => planes.find((p) => p.id === planId) || null, [planes, planId])
+  const montoRpmPlan = useMemo(() => {
+    if (!planSeleccionado) return 0
+    return Number(planSeleccionado.comision_rpm ?? 0)
+  }, [planSeleccionado])
+
+  const montoEntrenadorPlan = useMemo(() => {
+    if (!planSeleccionado) return 0
+    return Number(planSeleccionado.comision_entrenador ?? 0)
+  }, [planSeleccionado])
+
+  const porcentajeRpmPlan = useMemo(() => {
+    if (!montoBaseComisionPlan) return 0
+    return r2((montoRpmPlan / montoBaseComisionPlan) * 100)
+  }, [montoBaseComisionPlan, montoRpmPlan])
+
+  const porcentajeEntrenadorPlan = useMemo(() => {
+    if (!montoBaseComisionPlan) return 0
+    return r2((montoEntrenadorPlan / montoBaseComisionPlan) * 100)
+  }, [montoBaseComisionPlan, montoEntrenadorPlan])
 
   const horaFin = useMemo(() => {
     if (!horaInicio) return ''
     return sumarMinutos(horaInicio, duracionMin)
   }, [horaInicio, duracionMin])
 
-  const montoBase = usarPrecioPlan ? planSeleccionado?.precio || 0 : Number(montoPersonalizado || 0)
+  const montoBase = useMemo(
+    () => (usarPrecioPlan ? planSeleccionado?.precio || 0 : Number(montoPersonalizado || 0)),
+    [usarPrecioPlan, planSeleccionado, montoPersonalizado]
+  )
+
+  const baseComisionAplicada = useMemo(() => {
+    return usarPrecioPlan ? montoBaseComisionPlan : montoBase
+  }, [usarPrecioPlan, montoBaseComisionPlan, montoBase])
+
+  const montoRpmAplicado = useMemo(() => {
+    return r2((baseComisionAplicada * porcentajeRpmPlan) / 100)
+  }, [baseComisionAplicada, porcentajeRpmPlan])
+
+  const montoEntrenadorAplicado = useMemo(() => {
+    return r2((baseComisionAplicada * porcentajeEntrenadorPlan) / 100)
+  }, [baseComisionAplicada, porcentajeEntrenadorPlan])
 
   const planificacion = useMemo(() => {
     if (!fechaInicio || !diasSemana.length || !planSeleccionado) return null
@@ -689,7 +858,8 @@ export default function NuevoClientePage() {
       fechaInicio,
       diasSemana,
       planSeleccionado.sesiones_totales,
-      planSeleccionado.vigencia_dias
+      planSeleccionado.vigencia_valor,
+      planSeleccionado.vigencia_tipo
     )
   }, [fechaInicio, diasSemana, planSeleccionado])
 
@@ -717,19 +887,49 @@ export default function NuevoClientePage() {
       return
     }
 
+    if (Number(nuevoPlanSesiones) <= 0) {
+      alert('Ingresa una cantidad válida de sesiones.')
+      return
+    }
+
+    if (Number(nuevoPlanVigencia) <= 0) {
+      alert('Ingresa una vigencia válida.')
+      return
+    }
+
     setCreandoPlan(true)
 
     try {
+      const precio = Number(nuevoPlanPrecio)
+      const comisionBase = precio
+      const comisionRpm = r2(precio * 0.5)
+      const comisionEntrenador = r2(precio * 0.5)
+
       const { data: plan, error } = await supabase
         .from('planes')
         .insert({
           nombre: nuevoPlanNombre.trim(),
           sesiones_totales: nuevoPlanSesiones,
-          vigencia_dias: nuevoPlanVigencia,
-          precio: Number(nuevoPlanPrecio),
+          vigencia_valor: nuevoPlanVigencia,
+          vigencia_tipo: nuevoPlanVigenciaTipo,
+          precio,
+          comision_base: comisionBase,
+          comision_rpm: comisionRpm,
+          comision_entrenador: comisionEntrenador,
           estado: 'activo',
         })
-        .select('id, nombre, sesiones_totales, vigencia_dias, precio, descripcion')
+        .select(`
+          id,
+          nombre,
+          sesiones_totales,
+          vigencia_valor,
+          vigencia_tipo,
+          precio,
+          descripcion,
+          comision_base,
+          comision_rpm,
+          comision_entrenador
+        `)
         .single()
 
       if (error) throw new Error(error.message)
@@ -740,6 +940,7 @@ export default function NuevoClientePage() {
       setNuevoPlanNombre('')
       setNuevoPlanSesiones(12)
       setNuevoPlanVigencia(30)
+      setNuevoPlanVigenciaTipo('dias')
       setNuevoPlanPrecio('')
     } catch (err: any) {
       alert(err?.message || 'Error al crear el plan.')
@@ -817,10 +1018,18 @@ export default function NuevoClientePage() {
         return
       }
 
+      let auditorId = empleadoActualId || ''
+
+      if (!auditorId) {
+        auditorId = await resolveEmpleadoActualId()
+        setEmpleadoActualId(auditorId)
+      }
+
       const { data, error } = await supabase
         .from('clientes')
         .insert({
           nombre: formCliente.nombre.trim(),
+          cedula: formCliente.cedula.trim() || null,
           telefono: formCliente.telefono.trim() || null,
           email: formCliente.email.trim() || null,
           fecha_nacimiento: formCliente.fecha_nacimiento || null,
@@ -829,6 +1038,8 @@ export default function NuevoClientePage() {
           terapeuta_id: formCliente.terapeuta_id || null,
           estado: formCliente.estado,
           notas: formCliente.notas.trim() || null,
+          created_by: auditorId || null,
+          updated_by: auditorId || null,
         })
         .select('id')
         .single()
@@ -930,6 +1141,8 @@ export default function NuevoClientePage() {
             fecha_inicio: fechaInicio,
             fecha_fin: fechaFin,
             estado: 'activo',
+            porcentaje_rpm: porcentajeRpmPlan,
+            monto_base_comision: montoBaseComisionPlan,
           })
           .select('id')
           .single()
@@ -947,6 +1160,8 @@ export default function NuevoClientePage() {
             fecha_inicio: fechaInicio,
             fecha_fin: fechaFin,
             estado: 'activo',
+            porcentaje_rpm: porcentajeRpmPlan,
+            monto_base_comision: montoBaseComisionPlan,
           })
           .eq('id', planIdActual)
 
@@ -1013,6 +1228,111 @@ export default function NuevoClientePage() {
     }
   }
 
+  function getMetodosForMoneda(moneda: 'USD' | 'BS') {
+    return moneda === 'USD'
+      ? metodosPago.filter((m) => detectarMetodoUsd(m))
+      : metodosPago.filter((m) => detectarMetodoBs(m))
+  }
+
+  function updatePagoItem(idLocal: string, patch: Partial<PagoMixtoItem>) {
+    setPagosMixtos((prev) =>
+      prev.map((item) => (item.id_local === idLocal ? { ...item, ...patch } : item))
+    )
+  }
+
+  function addPagoItem(moneda: 'USD' | 'BS' = 'USD') {
+    setPagosMixtos((prev) => [...prev, makePagoItem(moneda)])
+  }
+
+  function removePagoItem(idLocal: string) {
+    setPagosMixtos((prev) => {
+      if (prev.length <= 1) return prev
+      return prev.filter((item) => item.id_local !== idLocal)
+    })
+  }
+
+  const handlePagoBsTasaChange = useCallback((idLocal: string, tasa: number | null) => {
+    setPagosMixtos((prev) =>
+      prev.map((item) =>
+        item.id_local === idLocal
+          ? {
+              ...item,
+              tasa_bcv: tasa,
+            }
+          : item
+      )
+    )
+  }, [])
+
+  const handlePagoBsMontoChange = useCallback((idLocal: string, monto: number) => {
+    setPagosMixtos((prev) =>
+      prev.map((item) =>
+        item.id_local === idLocal
+          ? {
+              ...item,
+              monto_bs: monto,
+            }
+          : item
+      )
+    )
+  }, [])
+
+  const resumenPagos = useMemo(() => {
+    const items = pagosMixtos.map((item) => {
+      const montoUsdEq =
+        item.moneda_pago === 'USD'
+          ? r2(Number(item.monto_usd || 0))
+          : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+            ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+            : 0
+
+      const montoBs =
+        item.moneda_pago === 'BS'
+          ? r2(Number(item.monto_bs || 0))
+          : Number(item.tasa_bcv || 0) > 0 && Number(item.monto_usd || 0) > 0
+            ? r2(Number(item.monto_usd || 0) * Number(item.tasa_bcv || 0))
+            : 0
+
+      return {
+        ...item,
+        monto_equivalente_usd: montoUsdEq,
+        monto_equivalente_bs: montoBs > 0 ? montoBs : null,
+        monto_insertar:
+          item.moneda_pago === 'BS'
+            ? r2(Number(item.monto_bs || 0))
+            : r2(Number(item.monto_usd || 0)),
+        valido:
+          !!item.metodo_pago_v2_id &&
+          (
+            item.moneda_pago === 'USD'
+              ? Number(item.monto_usd || 0) > 0
+              : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+          ),
+      }
+    })
+
+    const totalUsd = r2(
+      items.reduce((acc, item) => acc + Number(item.monto_equivalente_usd || 0), 0)
+    )
+    const totalBs = r2(
+      items.reduce((acc, item) => acc + Number(item.monto_equivalente_bs || 0), 0)
+    )
+    const faltanteUsd = r2(Math.max(montoBase - totalUsd, 0))
+    const excedenteUsd = r2(Math.max(totalUsd - montoBase, 0))
+    const diferenciaUsd = r2(montoBase - totalUsd)
+
+    return {
+      items,
+      totalUsd,
+      totalBs,
+      faltanteUsd,
+      excedenteUsd,
+      diferenciaUsd,
+      cuadra: Math.abs(diferenciaUsd) < 0.01 && montoBase > 0,
+      todosValidos: items.every((item) => item.valido),
+    }
+  }, [pagosMixtos, montoBase])
+
   async function handleGuardarPago(e: React.FormEvent) {
     e.preventDefault()
 
@@ -1026,108 +1346,102 @@ export default function NuevoClientePage() {
     }
 
     if (!saltarPago) {
-      if (!metodoPagoId) {
-        setErrorMsg('Selecciona un método de pago.')
+      if (!planSeleccionado) {
+        setErrorMsg('No se encontró el plan.')
         return
       }
 
-      if (esBs && (!tasaCongelada || tasaCongelada <= 0)) {
-        setErrorMsg('Ingresa la tasa BCV.')
+      if (!saltarPlan && !clientePlanId) {
+        setErrorMsg('Error: No se encontró el plan del cliente para registrar el pago.')
         return
       }
 
-      if (clienteId && planSeleccionado && montoBase > 0) {
-        if (!saltarPlan && !clientePlanId) {
-          setErrorMsg('Error: No se encontró el plan del cliente para registrar el pago.')
-          return
+      if (montoBase <= 0) {
+        setErrorMsg('El monto del plan debe ser mayor a 0.')
+        return
+      }
+
+      if (!resumenPagos.todosValidos) {
+        setErrorMsg('Completa correctamente todos los fragmentos del pago mixto.')
+        return
+      }
+
+      if (!resumenPagos.cuadra) {
+        setErrorMsg(
+          `La suma de pagos no cuadra. Objetivo: ${formatMoney(montoBase)} | Registrado: ${formatMoney(
+            resumenPagos.totalUsd
+          )} | Faltante: ${formatMoney(resumenPagos.faltanteUsd)}`
+        )
+        return
+      }
+
+      creatingPagoRef.current = true
+      setSaving(true)
+
+      try {
+        let auditorId = empleadoActualId || ''
+
+        if (!auditorId) {
+          auditorId = await resolveEmpleadoActualId()
+          setEmpleadoActualId(auditorId)
         }
 
-        creatingPagoRef.current = true
-        setSaving(true)
+        const concepto = `Plan: ${planSeleccionado.nombre} — ${formCliente.nombre}`
 
-        try {
-          const monedaPago = esBs ? 'BS' : 'USD'
-          const montoPagoFinal = esBs && montoBsPersonalizado ? montoBsPersonalizado : montoBase
-          const montoEquivalenteUSD =
-            esBs && tasaCongelada ? r2(montoPagoFinal / tasaCongelada) : montoBase
-          const montoEquivalenteBS = esBs
-            ? montoPagoFinal
-            : tasaCongelada
-              ? r2(montoBase * tasaCongelada)
-              : null
+        const pagosRpcPayload = resumenPagos.items.map((item) => ({
+          metodo_pago_v2_id: item.metodo_pago_v2_id,
+          moneda_pago: item.moneda_pago,
+          monto: item.monto_insertar,
+          tasa_bcv: item.moneda_pago === 'BS' ? item.tasa_bcv : item.tasa_bcv || null,
+          referencia: item.referencia || null,
+          notas: item.notas || null,
+        }))
 
-          const concepto = esBs
-            ? `Plan: ${planSeleccionado.nombre} — ${formCliente.nombre} (${formatMoney(
-                montoEquivalenteUSD
-              )} × ${tasaCongelada} = ${formatBs(montoPagoFinal)})`
-            : `Plan: ${planSeleccionado.nombre} — ${formCliente.nombre}`
+        const { error: pagosMixtosError } = await supabase.rpc('registrar_pagos_mixtos', {
+          p_fecha: fechaInicio,
+          p_tipo_origen: 'plan',
+          p_categoria: 'plan',
+          p_concepto: concepto,
+          p_cliente_id: clienteId,
+          p_cita_id: null,
+          p_cliente_plan_id: clientePlanId,
+          p_cuenta_cobrar_id: null,
+          p_inventario_id: null,
+          p_registrado_por: auditorId || null,
+          p_notas_generales: notasPagoGenerales || null,
+          p_pagos: pagosRpcPayload,
+        })
 
-          const { data: pagoExistente, error: pagoExistenteError } = await supabase
-            .from('pagos')
-            .select('id')
-            .eq('tipo_origen', 'plan')
-            .eq('cliente_id', clienteId)
-            .eq('cliente_plan_id', clientePlanId)
-            .eq('metodo_pago_v2_id', metodoPagoId)
-            .eq('monto', montoPagoFinal)
-            .limit(1)
-            .maybeSingle()
+        if (pagosMixtosError) {
+          throw new Error(pagosMixtosError.message)
+        }
 
-          if (pagoExistenteError) {
-            throw new Error(pagoExistenteError.message)
-          }
+        if (empleadoId && clientePlanId) {
+          await registrarComision(
+            clientePlanId,
+            empleadoId,
+            clienteId,
+            baseComisionAplicada,
+            fechaInicio,
+            porcentajeRpmPlan
+          )
 
-          if (!pagoExistente?.id) {
-            const { error: pagoError } = await supabase.from('pagos').insert({
-              fecha: fechaInicio,
-              tipo_origen: 'plan',
-              cliente_id: clienteId,
-              cliente_plan_id: clientePlanId,
-              concepto,
-              categoria: 'plan',
-              monto: montoPagoFinal,
-              monto_pago: montoPagoFinal,
-              moneda_pago: monedaPago,
-              tasa_bcv: tasaCongelada,
-              monto_equivalente_usd: montoEquivalenteUSD,
-              monto_equivalente_bs: montoEquivalenteBS,
-              metodo_pago_id: null,
-              metodo_pago_v2_id: metodoPagoId,
-              estado: 'pagado',
-              referencia: referenciaPago || null,
-              notas: notasPago || null,
+          await supabase
+            .from('clientes_planes')
+            .update({
+              porcentaje_rpm: porcentajeRpmPlan,
+              monto_base_comision: baseComisionAplicada,
             })
-
-            if (pagoError) throw new Error(pagoError.message)
-          }
-
-          if (empleadoId && clientePlanId) {
-            await registrarComision(
-              clientePlanId,
-              empleadoId,
-              clienteId,
-              montoBase,
-              fechaInicio,
-              porcentajeRpm
-            )
-
-            await supabase
-              .from('clientes_planes')
-              .update({
-                porcentaje_rpm: porcentajeRpm,
-                monto_base_comision: montoBase,
-              })
-              .eq('id', clientePlanId)
-          }
-        } catch (err: any) {
-          setErrorMsg(err?.message || 'Error registrando el pago.')
-          setSaving(false)
-          creatingPagoRef.current = false
-          return
-        } finally {
-          setSaving(false)
-          creatingPagoRef.current = false
+            .eq('id', clientePlanId)
         }
+      } catch (err: any) {
+        setErrorMsg(err?.message || 'Error registrando el pago.')
+        setSaving(false)
+        creatingPagoRef.current = false
+        return
+      } finally {
+        setSaving(false)
+        creatingPagoRef.current = false
       }
     }
 
@@ -1178,6 +1492,16 @@ export default function NuevoClientePage() {
                   />
                 </Field>
               </div>
+
+              <Field label="Cédula">
+                <input
+                  name="cedula"
+                  value={formCliente.cedula}
+                  onChange={handleClienteChange}
+                  placeholder="Ej: V-12345678"
+                  className={inputCls}
+                />
+              </Field>
 
               <Field label="Teléfono">
                 <input
@@ -1336,7 +1660,7 @@ export default function NuevoClientePage() {
                         <option value="" className="bg-[#11131a]">Seleccionar plan</option>
                         {planes.map((p) => (
                           <option key={p.id} value={p.id} className="bg-[#11131a]">
-                            {p.nombre} · {p.sesiones_totales} ses. · {formatMoney(p.precio)}
+                            {p.nombre} · {p.sesiones_totales} ses. · {formatVigencia(p.vigencia_valor, p.vigencia_tipo)} · {formatMoney(p.precio)}
                           </option>
                         ))}
                       </select>
@@ -1390,7 +1714,7 @@ export default function NuevoClientePage() {
                           </div>
 
                           <div>
-                            <label className="mb-1 block text-xs text-white/55">Vigencia (días)</label>
+                            <label className="mb-1 block text-xs text-white/55">Vigencia</label>
                             <input
                               type="number"
                               min={1}
@@ -1398,6 +1722,46 @@ export default function NuevoClientePage() {
                               onChange={(e) => setNuevoPlanVigencia(Number(e.target.value))}
                               className={inputCls}
                             />
+                          </div>
+
+                          <div className="sm:col-span-2">
+                            <label className="mb-1 block text-xs text-white/55">Tipo de vigencia</label>
+                            <select
+                              value={nuevoPlanVigenciaTipo}
+                              onChange={(e) => setNuevoPlanVigenciaTipo(e.target.value as VigenciaTipo)}
+                              className={inputCls}
+                            >
+                              <option value="dias" className="bg-[#11131a]">Días</option>
+                              <option value="semanas" className="bg-[#11131a]">Semanas</option>
+                              <option value="meses" className="bg-[#11131a]">Meses</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="rounded-[28px] border border-white/10 bg-white/[0.03] p-4">
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                            <div className="rounded-[24px] border border-white/10 bg-white/[0.05] p-4">
+                              <p className="text-sm text-white/60">Base</p>
+                              <p className="mt-2 text-2xl font-bold text-white">
+                                {formatMoney(Number(nuevoPlanPrecio || 0))}
+                              </p>
+                            </div>
+
+                            <div className="rounded-[24px] border border-violet-400/15 bg-white/[0.05] p-4">
+                              <p className="text-sm text-white/60">RPM recibe</p>
+                              <p className="mt-2 text-2xl font-bold text-violet-400">
+                                {formatMoney(r2(Number(nuevoPlanPrecio || 0) * 0.5))}
+                              </p>
+                              <p className="mt-2 text-sm text-white/50">50%</p>
+                            </div>
+
+                            <div className="rounded-[24px] border border-emerald-400/15 bg-white/[0.05] p-4">
+                              <p className="text-sm text-white/60">Entrenador recibe</p>
+                              <p className="mt-2 text-2xl font-bold text-emerald-400">
+                                {formatMoney(r2(Number(nuevoPlanPrecio || 0) * 0.5))}
+                              </p>
+                              <p className="mt-2 text-sm text-white/50">50%</p>
+                            </div>
                           </div>
                         </div>
 
@@ -1434,28 +1798,73 @@ export default function NuevoClientePage() {
                 </div>
 
                 {planSeleccionado && (
-                  <Card className="border-white/10 bg-white/[0.02] p-4">
-                    <p className="font-medium text-white">{planSeleccionado.nombre}</p>
-                    {planSeleccionado.descripcion && (
-                      <p className="mt-1 text-sm text-white/55">{planSeleccionado.descripcion}</p>
-                    )}
-                    <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
-                      <div>
-                        <p className="text-xs text-white/45">Sesiones</p>
-                        <p className="font-medium text-white">{planSeleccionado.sesiones_totales}</p>
+                  <div className="space-y-4">
+                    <Card className="border-white/10 bg-white/[0.02] p-4">
+                      <p className="font-medium text-white">{planSeleccionado.nombre}</p>
+                      {planSeleccionado.descripcion && (
+                        <p className="mt-1 text-sm text-white/55">{planSeleccionado.descripcion}</p>
+                      )}
+                      <div className="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+                        <div>
+                          <p className="text-xs text-white/45">Sesiones</p>
+                          <p className="font-medium text-white">{planSeleccionado.sesiones_totales}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-white/45">Vigencia</p>
+                          <p className="font-medium text-white">
+                            {formatVigencia(planSeleccionado.vigencia_valor, planSeleccionado.vigencia_tipo)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-white/45">Vence</p>
+                          <p className="font-medium text-white">
+                            {formatDate(
+                              getFechaFinByVigencia(
+                                fechaInicio,
+                                planSeleccionado.vigencia_valor,
+                                planSeleccionado.vigencia_tipo
+                              )
+                            )}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-white/45">Precio</p>
+                          <p className="font-medium text-white">{formatMoney(planSeleccionado.precio)}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-xs text-white/45">Vigencia</p>
-                        <p className="font-medium text-white">{planSeleccionado.vigencia_dias} días</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-white/45">Vence</p>
-                        <p className="font-medium text-white">
-                          {formatDate(getFechaFinByVigencia(fechaInicio, planSeleccionado.vigencia_dias))}
-                        </p>
+                    </Card>
+
+                    <div className="rounded-[28px] border border-white/10 bg-white/[0.03] p-5 md:p-6">
+                      <p className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/40">
+                        Configuración de comisión del plan
+                      </p>
+
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <div className="rounded-[28px] border border-white/10 bg-white/[0.05] p-5">
+                          <p className="text-sm text-white/60">Base</p>
+                          <p className="mt-2 text-3xl font-bold text-white">
+                            {formatMoney(montoBaseComisionPlan)}
+                          </p>
+                        </div>
+
+                        <div className="rounded-[28px] border border-violet-400/15 bg-white/[0.05] p-5">
+                          <p className="text-sm text-white/60">RPM recibe</p>
+                          <p className="mt-2 text-3xl font-bold text-violet-400">
+                            {formatMoney(montoRpmPlan)}
+                          </p>
+                          <p className="mt-2 text-sm text-white/50">{porcentajeRpmPlan}%</p>
+                        </div>
+
+                        <div className="rounded-[28px] border border-emerald-400/15 bg-white/[0.05] p-5">
+                          <p className="text-sm text-white/60">Entrenador recibe</p>
+                          <p className="mt-2 text-3xl font-bold text-emerald-400">
+                            {formatMoney(montoEntrenadorPlan)}
+                          </p>
+                          <p className="mt-2 text-sm text-white/50">{porcentajeEntrenadorPlan}%</p>
+                        </div>
                       </div>
                     </div>
-                  </Card>
+                  </div>
                 )}
 
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -1715,135 +2124,396 @@ export default function NuevoClientePage() {
 
             {!saltarPago && planSeleccionado && (
               <div className="space-y-4">
-                <div className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-                  <p className="text-sm font-medium text-white/75">Configuración de comisión</p>
+                <div className="rounded-[28px] border border-white/10 bg-white/[0.03] p-5 md:p-6">
+                  <p className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/40">
+                    Configuración de comisión
+                  </p>
 
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Precio oficial (base comisión)" helper={`Plan: $${planSeleccionado.precio}`}>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                    <Field
+                      label="Precio (USD)"
+                      helper={usarPrecioPlan ? 'Tomando el precio del plan.' : 'Precio editable solo para este cobro.'}
+                    >
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={usarPrecioPlan ? String(planSeleccionado.precio ?? '') : montoPersonalizado}
+                          readOnly={usarPrecioPlan}
+                          onChange={(e) => setMontoPersonalizado(e.target.value)}
+                          className={`${inputCls} ${usarPrecioPlan ? 'cursor-not-allowed opacity-70' : ''}`}
+                          placeholder="0.00"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setUsarPrecioPlan((p) => !p)}
+                          className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.03] px-3 text-xs text-white/60 hover:bg-white/[0.06]"
+                        >
+                          {usarPrecioPlan ? 'Editar' : 'Plan'}
+                        </button>
+                      </div>
+                    </Field>
+
+                    <Field label="Base comisión">
                       <input
                         type="number"
-                        min={0}
-                        step="0.01"
-                        value={montoBase || planSeleccionado.precio}
+                        value={String(baseComisionAplicada)}
                         readOnly
                         className={`${inputCls} cursor-not-allowed opacity-80`}
                       />
                     </Field>
 
-                    <Field label="% RPM sobre precio oficial">
+                    <Field label="RPM recibe">
                       <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={1}
-                        value={porcentajeRpm}
-                        onChange={(e) => setPorcentajeRpm(Number(e.target.value))}
-                        className={inputCls}
+                        type="text"
+                        value={`${formatMoney(montoRpmAplicado)} · ${porcentajeRpmPlan}%`}
+                        readOnly
+                        className={`${inputCls} cursor-not-allowed opacity-80`}
+                      />
+                    </Field>
+
+                    <Field label="Entrenador recibe">
+                      <input
+                        type="text"
+                        value={`${formatMoney(montoEntrenadorAplicado)} · ${porcentajeEntrenadorPlan}%`}
+                        readOnly
+                        className={`${inputCls} cursor-not-allowed opacity-80`}
                       />
                     </Field>
                   </div>
-                </div>
 
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Método de pago">
-                    <select
-                      value={metodoPagoId}
-                      onChange={(e) => setMetodoPagoId(e.target.value)}
-                      className={inputCls}
-                    >
-                      <option value="" className="bg-[#11131a]">Seleccionar</option>
-                      {metodosPago.map((m) => (
-                        <option key={m.id} value={m.id} className="bg-[#11131a]">
-                          {m.nombre}
-                          {m.moneda ? ` · ${m.moneda}` : ''}
-                          {m.tipo ? ` · ${m.tipo}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-
-                  <Field label="Monto" helper={usarPrecioPlan ? 'Precio del plan' : 'Monto personalizado'}>
-                    <div className="flex gap-2">
-                      <input
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={usarPrecioPlan ? (planSeleccionado.precio ?? '') : montoPersonalizado}
-                        readOnly={usarPrecioPlan}
-                        onChange={(e) => setMontoPersonalizado(e.target.value)}
-                        className={`${inputCls} ${usarPrecioPlan ? 'cursor-not-allowed opacity-60' : ''}`}
-                        placeholder="0.00"
-                      />
-
-                      <button
-                        type="button"
-                        onClick={() => setUsarPrecioPlan((p) => !p)}
-                        className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.03] px-3 text-xs text-white/60 hover:bg-white/[0.06]"
-                      >
-                        {usarPrecioPlan ? 'Editar' : 'Plan'}
-                      </button>
-                    </div>
-                  </Field>
-                </div>
-
-                {esBs && (
-                  <SelectorTasaBCV
-                    fecha={fechaInicio}
-                    monedaPago="BS"
-                    montoUSD={montoBase}
-                    montoBs={montoBsPersonalizado || undefined}
-                    onTasaChange={setTasaCongelada}
-                    onMontoBsChange={(monto) => {
-                      setMontoBsPersonalizado(monto)
-                      if (monto > 0 && tasaCongelada) {
-                        setUsarPrecioPlan(false)
-                        setMontoPersonalizado(String(Math.round((monto / tasaCongelada) * 100) / 100))
-                      }
-                    }}
-                  />
-                )}
-
-                <Field label="Referencia">
-                  <input
-                    value={referenciaPago}
-                    onChange={(e) => setReferenciaPago(e.target.value)}
-                    className={inputCls}
-                    placeholder="Referencia o comprobante"
-                  />
-                </Field>
-
-                <Field label="Notas del pago">
-                  <textarea
-                    value={notasPago}
-                    onChange={(e) => setNotasPago(e.target.value)}
-                    rows={2}
-                    className={`${inputCls} resize-none`}
-                    placeholder="Notas opcionales..."
-                  />
-                </Field>
-
-                <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
-                  <p className="text-sm font-medium text-emerald-300">Resumen del registro</p>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                    <div>
-                      <p className="text-xs text-white/45">Cliente</p>
-                      <p className="text-white">{formCliente.nombre}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-white/45">Plan</p>
-                      <p className="text-white">{planSeleccionado.nombre}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-white/45">Sesiones</p>
-                      <p className="text-white">{planSeleccionado.sesiones_totales}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-white/45">Monto</p>
-                      <p className="font-semibold text-emerald-400">
-                        {esBs && montoBsPersonalizado ? formatBs(montoBsPersonalizado) : formatMoney(montoBase)}
+                  <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div className="rounded-[28px] border border-white/10 bg-white/[0.05] p-5">
+                      <p className="text-sm text-white/60">Base</p>
+                      <p className="mt-2 text-3xl font-bold text-white">{formatMoney(baseComisionAplicada)}</p>
+                      <p className="mt-2 text-xs text-white/40">
+                        Precio cobrado: {formatMoney(montoBase)}
                       </p>
                     </div>
+
+                    <div className="rounded-[28px] border border-violet-400/15 bg-white/[0.05] p-5">
+                      <p className="text-sm text-white/60">RPM recibe</p>
+                      <p className="mt-2 text-3xl font-bold text-violet-400">{formatMoney(montoRpmAplicado)}</p>
+                      <p className="mt-2 text-sm text-white/50">{porcentajeRpmPlan}%</p>
+                    </div>
+
+                    <div className="rounded-[28px] border border-emerald-400/15 bg-white/[0.05] p-5">
+                      <p className="text-sm text-white/60">Entrenador recibe</p>
+                      <p className="mt-2 text-3xl font-bold text-emerald-400">{formatMoney(montoEntrenadorAplicado)}</p>
+                      <p className="mt-2 text-sm text-white/50">{porcentajeEntrenadorPlan}%</p>
+                    </div>
                   </div>
+                </div>
+
+                <Card className="p-6">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Field label="Monto objetivo USD" helper={usarPrecioPlan ? 'Precio del plan' : 'Monto personalizado'}>
+                      <input
+                        type="text"
+                        value={formatMoney(montoBase)}
+                        readOnly
+                        className={`${inputCls} cursor-not-allowed opacity-70`}
+                      />
+                    </Field>
+
+                    <Field label="Total registrado USD">
+                      <input
+                        type="text"
+                        value={formatMoney(resumenPagos.totalUsd)}
+                        readOnly
+                        className={`${inputCls} cursor-not-allowed opacity-70`}
+                      />
+                    </Field>
+
+                    <div className="md:col-span-2">
+                      <Field label="Notas generales del pago (opcional)">
+                        <textarea
+                          value={notasPagoGenerales}
+                          onChange={(e) => setNotasPagoGenerales(e.target.value)}
+                          rows={3}
+                          className={`${inputCls} resize-none`}
+                          placeholder="Notas generales que aplican a toda la operación..."
+                        />
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 space-y-4">
+                    {pagosMixtos.map((item, index) => {
+                      const metodosDisponibles = getMetodosForMoneda(item.moneda_pago)
+                      const montoUsdEq =
+                        item.moneda_pago === 'USD'
+                          ? r2(Number(item.monto_usd || 0))
+                          : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+                            ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+                            : 0
+
+                      return (
+                        <div
+                          key={item.id_local}
+                          className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"
+                        >
+                          <div className="mb-4 flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-semibold text-white">
+                                Fragmento #{index + 1}
+                              </p>
+                              <p className="text-xs text-white/45">
+                                {item.moneda_pago === 'BS'
+                                  ? `Equivalente USD calculado: ${formatMoney(montoUsdEq)}`
+                                  : `Monto del fragmento: ${formatMoney(montoUsdEq)}`}
+                              </p>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => removePagoItem(item.id_local)}
+                              disabled={pagosMixtos.length <= 1}
+                              className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/70 hover:bg-white/[0.06] disabled:opacity-40"
+                            >
+                              Quitar
+                            </button>
+                          </div>
+
+                          <div className="grid gap-4 md:grid-cols-3">
+                            <Field label="Moneda">
+                              <select
+                                value={item.moneda_pago}
+                                onChange={(e) =>
+                                  updatePagoItem(item.id_local, {
+                                    moneda_pago: e.target.value as 'USD' | 'BS',
+                                    metodo_pago_v2_id: '',
+                                    monto_usd: '',
+                                    monto_bs: null,
+                                    tasa_bcv: null,
+                                  })
+                                }
+                                className={inputCls}
+                              >
+                                <option value="USD" className="bg-[#11131a]">
+                                  USD
+                                </option>
+                                <option value="BS" className="bg-[#11131a]">
+                                  Bs
+                                </option>
+                              </select>
+                            </Field>
+
+                            <Field label={item.moneda_pago === 'USD' ? 'Método USD' : 'Método Bs'}>
+                              <select
+                                value={item.metodo_pago_v2_id}
+                                onChange={(e) =>
+                                  updatePagoItem(item.id_local, {
+                                    metodo_pago_v2_id: e.target.value,
+                                  })
+                                }
+                                className={inputCls}
+                              >
+                                <option value="" className="bg-[#11131a]">
+                                  Seleccionar
+                                </option>
+                                {metodosDisponibles.map((m) => (
+                                  <option key={m.id} value={m.id} className="bg-[#11131a]">
+                                    {m.nombre}
+                                    {m.moneda ? ` · ${m.moneda}` : ''}
+                                    {m.tipo ? ` · ${m.tipo}` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </Field>
+
+                            {item.moneda_pago === 'USD' ? (
+                              <Field label="Monto USD">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step="0.01"
+                                  value={item.monto_usd}
+                                  onChange={(e) =>
+                                    updatePagoItem(item.id_local, {
+                                      monto_usd: e.target.value,
+                                    })
+                                  }
+                                  className={inputCls}
+                                  placeholder="0.00"
+                                />
+                              </Field>
+                            ) : (
+                              <Field label="Monto Bs">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step="0.01"
+                                  value={item.monto_bs ?? ''}
+                                  onChange={(e) =>
+                                    updatePagoItem(item.id_local, {
+                                      monto_bs: e.target.value ? Number(e.target.value) : null,
+                                    })
+                                  }
+                                  className={inputCls}
+                                  placeholder="0.00"
+                                />
+                              </Field>
+                            )}
+
+                            {item.moneda_pago === 'BS' && (
+                              <div className="md:col-span-3">
+                                <PagoBsSelector
+                                  fecha={fechaInicio}
+                                  montoUsd={
+                                    Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+                                      ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+                                      : 0
+                                  }
+                                  montoBs={item.monto_bs}
+                                  onChangeTasa={(tasa) => handlePagoBsTasaChange(item.id_local, tasa)}
+                                  onChangeMontoBs={(monto) => handlePagoBsMontoChange(item.id_local, monto)}
+                                />
+                              </div>
+                            )}
+
+                            {item.moneda_pago === 'BS' && (
+                              <div className="md:col-span-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm">
+                                <div className="flex justify-between">
+                                  <span className="text-white/55">Equivalente USD calculado:</span>
+                                  <span className="text-white">
+                                    {formatMoney(
+                                      Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+                                        ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+                                        : 0
+                                    )}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+
+                            <Field label="Referencia">
+                              <input
+                                value={item.referencia}
+                                onChange={(e) =>
+                                  updatePagoItem(item.id_local, {
+                                    referencia: e.target.value,
+                                  })
+                                }
+                                className={inputCls}
+                                placeholder="Referencia o comprobante"
+                              />
+                            </Field>
+
+                            <div className="md:col-span-2">
+                              <Field label="Notas del fragmento">
+                                <input
+                                  value={item.notas}
+                                  onChange={(e) =>
+                                    updatePagoItem(item.id_local, {
+                                      notas: e.target.value,
+                                    })
+                                  }
+                                  className={inputCls}
+                                  placeholder="Notas opcionales..."
+                                />
+                              </Field>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={() => addPagoItem('USD')}
+                      className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                    >
+                      + Agregar pago USD
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => addPagoItem('BS')}
+                      className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                    >
+                      + Agregar pago Bs
+                    </button>
+                  </div>
+
+                  <Card className="mt-4 border-emerald-400/20 bg-emerald-400/5 p-4">
+                    <p className="text-sm font-medium text-emerald-300">Resumen del registro</p>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <p className="text-xs text-white/45">Cliente</p>
+                        <p className="text-white">{formCliente.nombre}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/45">Plan</p>
+                        <p className="text-white">{planSeleccionado.nombre}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/45">Sesiones</p>
+                        <p className="text-white">{planSeleccionado.sesiones_totales}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/45">Objetivo</p>
+                        <p className="font-semibold text-emerald-400">{formatMoney(montoBase)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/45">Base comisión</p>
+                        <p className="text-white">{formatMoney(baseComisionAplicada)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/45">RPM</p>
+                        <p className="text-violet-300">
+                          {formatMoney(montoRpmAplicado)} · {porcentajeRpmPlan}%
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/45">Entrenador</p>
+                        <p className="text-emerald-300">
+                          {formatMoney(montoEntrenadorAplicado)} · {porcentajeEntrenadorPlan}%
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/45">Total USD</p>
+                        <p className="text-white">{formatMoney(resumenPagos.totalUsd)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-white/45">Total Bs</p>
+                        <p className="text-white">{formatBs(resumenPagos.totalBs)}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                      {!resumenPagos.cuadra ? (
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-white/55">Faltante USD:</span>
+                            <span className="font-semibold text-amber-300">
+                              {formatMoney(resumenPagos.faltanteUsd)}
+                            </span>
+                          </div>
+
+                          {resumenPagos.excedenteUsd > 0 && (
+                            <div className="flex justify-between text-sm">
+                              <span className="text-white/55">Excedente USD:</span>
+                              <span className="font-semibold text-rose-300">
+                                {formatMoney(resumenPagos.excedenteUsd)}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-white/55">Estado:</span>
+                          <span className="font-semibold text-emerald-300">
+                            Pago completo
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
                 </Card>
               </div>
             )}

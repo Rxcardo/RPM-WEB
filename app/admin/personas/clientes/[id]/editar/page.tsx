@@ -18,6 +18,7 @@ import ActionCard from '@/components/ui/ActionCard'
 type ClienteDB = {
   id: string
   nombre: string | null
+  cedula: string | null
   telefono: string | null
   email: string | null
   genero: string | null
@@ -37,6 +38,7 @@ type Empleado = {
 
 type FormState = {
   nombre: string
+  cedula: string
   telefono: string
   email: string
   genero: string
@@ -49,6 +51,7 @@ type FormState = {
 
 const INITIAL_FORM: FormState = {
   nombre: '',
+  cedula: '',
   telefono: '',
   email: '',
   genero: '',
@@ -146,6 +149,7 @@ export default function EditarClientePage() {
           .select(`
             id,
             nombre,
+            cedula,
             telefono,
             email,
             genero,
@@ -191,6 +195,7 @@ export default function EditarClientePage() {
 
       setForm({
         nombre: cliente.nombre || '',
+        cedula: cliente.cedula || '',
         telefono: cliente.telefono || '',
         email: cliente.email || '',
         genero: cliente.genero || '',
@@ -238,6 +243,7 @@ export default function EditarClientePage() {
     try {
       const payload = {
         nombre: form.nombre.trim(),
+        cedula: form.cedula.trim() || null,
         telefono: form.telefono.trim() || null,
         email: form.email.trim() || null,
         genero: form.genero || null,
@@ -357,6 +363,17 @@ export default function EditarClientePage() {
                 />
               </Field>
             </div>
+
+            <Field label="Cédula">
+              <input
+                type="text"
+                name="cedula"
+                value={form.cedula}
+                onChange={handleChange}
+                placeholder="Ej: V-12345678"
+                className={inputClassName}
+              />
+            </Field>
 
             <Field label="Teléfono">
               <input

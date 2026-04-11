@@ -16,6 +16,11 @@ type Cliente = {
   terapeuta_id?: string | null
 }
 
+type AuditorRef = {
+  id: string
+  nombre: string | null
+} | null
+
 type Comunicacion = {
   id: string
   titulo: string
@@ -27,7 +32,14 @@ type Comunicacion = {
   destino: string | null
   cliente_id: string | null
   created_at: string
+  updated_at: string | null
   enviado_at: string | null
+  created_by: string | null
+  updated_by: string | null
+  sent_by: string | null
+  creado_por: AuditorRef
+  editado_por: AuditorRef
+  enviado_por: AuditorRef
 }
 
 type FormState = {
@@ -368,6 +380,29 @@ function formatDateTime(value: string | null | undefined) {
   }
 }
 
+function getAuditLines(item: Comunicacion) {
+  const creador = item.creado_por?.nombre || 'Sin registro'
+  const editor = item.editado_por?.nombre || 'Sin registro'
+  const sender = item.enviado_por?.nombre || 'Sin registro'
+
+  const lines = [`Creó: ${creador} · ${formatDateTime(item.created_at)}`]
+
+  const wasEdited =
+    !!item.updated_at &&
+    item.updated_at !== item.created_at &&
+    !!item.updated_by
+
+  if (wasEdited) {
+    lines.push(`Editó: ${editor} · ${formatDateTime(item.updated_at)}`)
+  }
+
+  if (item.estado === 'enviado' || item.enviado_at || item.sent_by) {
+    lines.push(`Envió: ${sender} · ${formatDateTime(item.enviado_at)}`)
+  }
+
+  return lines
+}
+
 export default function ComunicacionPage() {
   const [clientes, setClientes] = useState<Cliente[]>([])
   const [comunicaciones, setComunicaciones] = useState<Comunicacion[]>([])
@@ -378,6 +413,7 @@ export default function ComunicacionPage() {
   const [sending, setSending] = useState(false)
   const [reSendingId, setReSendingId] = useState<string | null>(null)
   const [plantillaLoading, setPlantillaLoading] = useState(false)
+  const [empleadoActualId, setEmpleadoActualId] = useState('')
 
   const [alert, setAlert] = useState<AlertState>(null)
   const [search, setSearch] = useState('')
@@ -397,7 +433,47 @@ export default function ComunicacionPage() {
 
   useEffect(() => {
     void loadData()
+    void loadEmpleadoActual()
   }, [])
+
+  async function resolveEmpleadoActualId(): Promise<string> {
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError) return ''
+
+      const authUserId = authData.user?.id
+      if (!authUserId) return ''
+
+      const { data: empleadoPorAuth, error: errorPorAuth } = await supabase
+        .from('empleados')
+        .select('id, nombre, auth_user_id')
+        .eq('auth_user_id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorAuth && empleadoPorAuth?.id) {
+        return String(empleadoPorAuth.id)
+      }
+
+      const { data: empleadoPorId, error: errorPorId } = await supabase
+        .from('empleados')
+        .select('id, nombre')
+        .eq('id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorId && empleadoPorId?.id) {
+        return String(empleadoPorId.id)
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
+  async function loadEmpleadoActual() {
+    const empleadoId = await resolveEmpleadoActualId()
+    setEmpleadoActualId(empleadoId)
+  }
 
   async function loadData() {
     try {
@@ -413,7 +489,35 @@ export default function ComunicacionPage() {
 
         supabase
           .from('comunicaciones')
-          .select('id, titulo, asunto, mensaje, tipo, canal, estado, destino, cliente_id, created_at, enviado_at')
+          .select(`
+            id,
+            titulo,
+            asunto,
+            mensaje,
+            tipo,
+            canal,
+            estado,
+            destino,
+            cliente_id,
+            created_at,
+            updated_at,
+            enviado_at,
+            created_by,
+            updated_by,
+            sent_by,
+            creado_por:created_by (
+              id,
+              nombre
+            ),
+            editado_por:updated_by (
+              id,
+              nombre
+            ),
+            enviado_por:sent_by (
+              id,
+              nombre
+            )
+          `)
           .eq('canal', 'whatsapp')
           .order('created_at', { ascending: false }),
       ])
@@ -422,7 +526,7 @@ export default function ComunicacionPage() {
       if (comRes.error) throw comRes.error
 
       setClientes((cliRes.data || []) as Cliente[])
-      setComunicaciones((comRes.data || []) as Comunicacion[])
+      setComunicaciones((comRes.data || []) as unknown as Comunicacion[])
     } catch (err: any) {
       showAlert('error', 'Error', err?.message || 'No se pudo cargar la comunicación.')
       setClientes([])
@@ -453,7 +557,10 @@ export default function ComunicacionPage() {
         c.tipo?.toLowerCase().includes(q) ||
         c.canal?.toLowerCase().includes(q) ||
         c.estado?.toLowerCase().includes(q) ||
-        c.destino?.toLowerCase().includes(q)
+        c.destino?.toLowerCase().includes(q) ||
+        c.creado_por?.nombre?.toLowerCase().includes(q) ||
+        c.enviado_por?.nombre?.toLowerCase().includes(q) ||
+        c.editado_por?.nombre?.toLowerCase().includes(q)
       )
     })
   }, [comunicaciones, search])
@@ -675,7 +782,7 @@ export default function ComunicacionPage() {
           },
           contexto: terapeuta?.nombre
             ? `Terapeuta cargado: ${terapeuta.nombre}`
-            : 'Cliente sin terapeuta asignado. Se dejó RPM .',
+            : 'Cliente sin terapeuta asignado. Se dejó RPM.',
         }
       }
 
@@ -843,6 +950,13 @@ export default function ComunicacionPage() {
   }
 
   async function guardarHistorial(estado: 'borrador' | 'enviado', destinoOverride?: string) {
+    let auditorId = empleadoActualId || ''
+
+    if (!auditorId) {
+      auditorId = await resolveEmpleadoActualId()
+      setEmpleadoActualId(auditorId)
+    }
+
     const payload: Record<string, any> = {
       titulo: form.titulo.trim(),
       asunto: null,
@@ -852,10 +966,13 @@ export default function ComunicacionPage() {
       estado,
       destino: destinoOverride || destinoFinal || null,
       cliente_id: form.cliente_id || null,
+      created_by: auditorId || null,
+      updated_by: auditorId || null,
     }
 
     if (estado === 'enviado') {
       payload.enviado_at = new Date().toISOString()
+      payload.sent_by = auditorId || null
     }
 
     const { error } = await supabase.from('comunicaciones').insert(payload)
@@ -1261,18 +1378,18 @@ export default function ComunicacionPage() {
                       {c.mensaje}
                     </div>
 
+                    <div className="mt-3 space-y-1">
+                      {getAuditLines(c).map((line, index) => (
+                        <div key={index} className="text-[11px] leading-4 text-white/35">
+                          {line}
+                        </div>
+                      ))}
+                    </div>
+
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-white/45">
                       <div>
                         <span className="font-medium text-white/70">Destino:</span>{' '}
                         {c.destino || '—'}
-                        <span className="mx-1">•</span>
-                        {formatDateTime(c.created_at)}
-                        {c.enviado_at ? (
-                          <>
-                            <span className="mx-1">•</span>
-                            Enviado: {formatDateTime(c.enviado_at)}
-                          </>
-                        ) : null}
                       </div>
 
                       <div className="flex gap-2">

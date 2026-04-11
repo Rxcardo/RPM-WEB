@@ -4,6 +4,8 @@ export const dynamic = 'force-dynamic'
 
 import {
   Suspense,
+  memo,
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -37,6 +39,9 @@ type ServicioRaw = {
   categoria?: string | null
   descripcion?: string | null
   color?: string | null
+  comision_base?: number | null
+  comision_rpm?: number | null
+  comision_entrenador?: number | null
   [key: string]: any
 }
 
@@ -47,6 +52,9 @@ type Servicio = {
   duracion_min: number | null
   estado?: string | null
   color?: string | null
+  comision_base: number | null
+  comision_rpm: number | null
+  comision_entrenador: number | null
 }
 
 type Recurso = {
@@ -102,6 +110,17 @@ type ValidacionCita = {
     hora_inicio?: string | null
     hora_fin?: string | null
   } | null
+}
+
+type PagoMixtoItem = {
+  id_local: string
+  moneda_pago: 'USD' | 'BS'
+  metodo_pago_v2_id: string
+  monto_usd: string
+  monto_bs: number | null
+  tasa_bcv: number | null
+  referencia: string
+  notas: string
 }
 
 function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
@@ -272,6 +291,7 @@ function monedaMetodoEsBs(metodo: MetodoPago | null) {
   return (
     moneda === 'BS' ||
     moneda === 'VES' ||
+    moneda === 'BOLIVARES' ||
     nombre.includes('bs') ||
     nombre.includes('bolívar') ||
     nombre.includes('bolivar') ||
@@ -286,6 +306,23 @@ function monedaMetodoEsBs(metodo: MetodoPago | null) {
   )
 }
 
+function monedaMetodoEsUsd(metodo: MetodoPago | null) {
+  if (!metodo) return false
+
+  const moneda = (metodo.moneda || '').toUpperCase()
+  const nombre = (metodo.nombre || '').toLowerCase()
+  const carteraCodigo = (metodo.cartera?.codigo || '').toLowerCase()
+
+  return (
+    moneda === 'USD' ||
+    nombre.includes('usd') ||
+    nombre.includes('zelle') ||
+    nombre.includes('efectivo $') ||
+    nombre.includes('efectivo usd') ||
+    carteraCodigo.includes('usd')
+  )
+}
+
 function getPlanDisponible(plan: ClientePlan) {
   const total = Number(plan.sesiones_totales || 0)
   const usadas = Number(plan.sesiones_usadas || 0)
@@ -297,6 +334,45 @@ function getPlanLabel(plan: ClientePlan) {
   const disponibles = getPlanDisponible(plan)
   return `${nombre} · ${disponibles}/${plan.sesiones_totales} disponibles`
 }
+
+function makePagoItem(moneda: 'USD' | 'BS' = 'USD'): PagoMixtoItem {
+  return {
+    id_local: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    moneda_pago: moneda,
+    metodo_pago_v2_id: '',
+    monto_usd: '',
+    monto_bs: null,
+    tasa_bcv: null,
+    referencia: '',
+    notas: '',
+  }
+}
+
+const PagoBsSelector = memo(function PagoBsSelector({
+  fecha,
+  montoUsd,
+  montoBs,
+  onChangeTasa,
+  onChangeMontoBs,
+}: {
+  fecha: string
+  montoUsd: number
+  montoBs: number | null
+  onChangeTasa: (tasa: number | null) => void
+  onChangeMontoBs: (monto: number) => void
+}) {
+  return (
+    <SelectorTasaBCV
+      fecha={fecha}
+      monedaPago="BS"
+      monedaReferencia="EUR"
+      montoUSD={montoUsd}
+      montoBs={montoBs || undefined}
+      onTasaChange={onChangeTasa}
+      onMontoBsChange={onChangeMontoBs}
+    />
+  )
+})
 
 function NuevaCitaPageFallback() {
   return (
@@ -319,6 +395,7 @@ function NuevaCitaPageContent() {
   const [loadingData, setLoadingData] = useState(true)
   const [loadingPlanes, setLoadingPlanes] = useState(false)
   const [error, setError] = useState('')
+  const [empleadoActualId, setEmpleadoActualId] = useState<string>('')
 
   const [clientes, setClientes] = useState<Cliente[]>([])
   const [terapeutas, setTerapeutas] = useState<Terapeuta[]>([])
@@ -341,23 +418,14 @@ function NuevaCitaPageContent() {
     cliente_plan_id: '',
   })
 
-  const [cobrarAhora, setCobrarAhora] = useState(false)
-
-  const [metodoPagoId, setMetodoPagoId] = useState('')
   const [usarPrecioServicio, setUsarPrecioServicio] = useState(true)
   const [montoPersonalizado, setMontoPersonalizado] = useState('')
-  const [referenciaPago, setReferenciaPago] = useState('')
-  const [notasPago, setNotasPago] = useState('')
-
-  const [tasaCongelada, setTasaCongelada] = useState<number | null>(null)
-  const [montoBsPersonalizado, setMontoBsPersonalizado] = useState<number | null>(null)
-  const [esBs, setEsBs] = useState(false)
-
-  const [montoBaseComision, setMontoBaseComision] = useState('')
-  const [porcentajeRpm, setPorcentajeRpm] = useState(35)
+  const [notasPagoGenerales, setNotasPagoGenerales] = useState('')
+  const [pagosMixtos, setPagosMixtos] = useState<PagoMixtoItem[]>([makePagoItem('USD')])
 
   useEffect(() => {
     void loadData()
+    void loadEmpleadoActual()
   }, [])
 
   useEffect(() => {
@@ -388,16 +456,6 @@ function NuevaCitaPageContent() {
     [servicios, form.servicio_id]
   )
 
-  const terapeutaSeleccionado = useMemo(
-    () => terapeutas.find((t) => t.id === form.terapeuta_id) || null,
-    [terapeutas, form.terapeuta_id]
-  )
-
-  const metodoSeleccionado = useMemo(
-    () => metodosPago.find((m) => m.id === metodoPagoId) || null,
-    [metodosPago, metodoPagoId]
-  )
-
   const planSeleccionado = useMemo(
     () => planesCliente.find((p) => p.id === form.cliente_plan_id) || null,
     [planesCliente, form.cliente_plan_id]
@@ -418,23 +476,6 @@ function NuevaCitaPageContent() {
   }, [form.hora_inicio, servicioSeleccionado])
 
   useEffect(() => {
-    setEsBs(monedaMetodoEsBs(metodoSeleccionado))
-  }, [metodoSeleccionado])
-
-  useEffect(() => {
-    if (!esBs) {
-      setTasaCongelada(null)
-      setMontoBsPersonalizado(null)
-    }
-  }, [esBs])
-
-  useEffect(() => {
-    if (terapeutaSeleccionado?.comision_cita_porcentaje && !montoBaseComision) {
-      setPorcentajeRpm(r2(100 - terapeutaSeleccionado.comision_cita_porcentaje))
-    }
-  }, [terapeutaSeleccionado, montoBaseComision])
-
-  useEffect(() => {
     if (form.tipo_cita !== 'plan' && form.cliente_plan_id) {
       setForm((prev) => ({
         ...prev,
@@ -442,6 +483,49 @@ function NuevaCitaPageContent() {
       }))
     }
   }, [form.tipo_cita, form.cliente_plan_id])
+
+  async function resolveEmpleadoActualId(): Promise<string> {
+    try {
+      const { data, error } = await supabase.auth.getUser()
+
+      if (error) {
+        console.warn('No se pudo obtener el usuario auth:', error.message)
+        return ''
+      }
+
+      const authUserId = data.user?.id
+      if (!authUserId) return ''
+
+      const { data: empleadoPorAuth, error: errorPorAuth } = await supabase
+        .from('empleados')
+        .select('id, nombre, auth_user_id')
+        .eq('auth_user_id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorAuth && empleadoPorAuth?.id) {
+        return String(empleadoPorAuth.id)
+      }
+
+      const { data: empleadoPorId, error: errorPorId } = await supabase
+        .from('empleados')
+        .select('id, nombre')
+        .eq('id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorId && empleadoPorId?.id) {
+        return String(empleadoPorId.id)
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
+  async function loadEmpleadoActual() {
+    const empleadoId = await resolveEmpleadoActualId()
+    setEmpleadoActualId(empleadoId)
+  }
 
   async function loadData() {
     setLoadingData(true)
@@ -515,6 +599,9 @@ function NuevaCitaPageContent() {
           estado: s.estado ?? null,
           color: s.color ?? null,
           duracion_min: getServicioDuracion(s),
+          comision_base: s.comision_base ?? s.precio ?? 0,
+          comision_rpm: s.comision_rpm ?? 0,
+          comision_entrenador: s.comision_entrenador ?? 0,
         }))
 
       setClientes(clientesData)
@@ -588,89 +675,60 @@ function NuevaCitaPageContent() {
     }
   }
 
-  const montoCobroUSD = useMemo(() => {
-    if (esBs) {
-      if (montoBsPersonalizado && tasaCongelada && tasaCongelada > 0) {
-        return r2(montoBsPersonalizado / tasaCongelada)
-      }
+  const precioServicioUsd = useMemo(
+    () => r2(servicioSeleccionado?.precio || 0),
+    [servicioSeleccionado]
+  )
 
-      return usarPrecioServicio
-        ? r2(servicioSeleccionado?.precio || 0)
-        : r2(Number(montoPersonalizado || 0))
-    }
-
+  const montoObjetivoUsd = useMemo(() => {
     return usarPrecioServicio
-      ? r2(servicioSeleccionado?.precio || 0)
+      ? precioServicioUsd
       : r2(Number(montoPersonalizado || 0))
-  }, [
-    esBs,
-    montoBsPersonalizado,
-    tasaCongelada,
-    montoPersonalizado,
-    usarPrecioServicio,
-    servicioSeleccionado,
-  ])
+  }, [usarPrecioServicio, precioServicioUsd, montoPersonalizado])
 
-  const montoCobroBs = useMemo(() => {
-    if (esBs) {
-      if (montoBsPersonalizado) return r2(montoBsPersonalizado)
-      if (tasaCongelada && montoCobroUSD > 0) return r2(montoCobroUSD * tasaCongelada)
-      return 0
-    }
+  const baseComisionOriginal = useMemo(() => {
+    return r2(servicioSeleccionado?.comision_base ?? servicioSeleccionado?.precio ?? 0)
+  }, [servicioSeleccionado])
 
-    if (tasaCongelada && montoCobroUSD > 0) {
-      return r2(montoCobroUSD * tasaCongelada)
-    }
+  const porcentajeRpmServicio = useMemo(() => {
+    const base = Number(servicioSeleccionado?.comision_base ?? servicioSeleccionado?.precio ?? 0)
+    const rpm = Number(servicioSeleccionado?.comision_rpm ?? 0)
+    if (!base) return 0
+    return r2((rpm / base) * 100)
+  }, [servicioSeleccionado])
 
-    return 0
-  }, [esBs, montoBsPersonalizado, tasaCongelada, montoCobroUSD])
+  const porcentajeTerapeutaServicio = useMemo(() => {
+    const base = Number(servicioSeleccionado?.comision_base ?? servicioSeleccionado?.precio ?? 0)
+    const profesional = Number(servicioSeleccionado?.comision_entrenador ?? 0)
+    if (!base) return 0
+    return r2((profesional / base) * 100)
+  }, [servicioSeleccionado])
 
-  const monedaPago = esBs ? 'BS' : 'USD'
-  const montoPagoFinal = esBs ? montoCobroBs : montoCobroUSD
-
-  const baseComision = useMemo(() => {
-    if (Number(montoBaseComision) > 0) return r2(Number(montoBaseComision))
-    return r2(servicioSeleccionado?.precio || montoCobroUSD || 0)
-  }, [montoBaseComision, servicioSeleccionado, montoCobroUSD])
+  const baseComisionAplicada = useMemo(() => {
+    return usarPrecioServicio ? baseComisionOriginal : montoObjetivoUsd
+  }, [usarPrecioServicio, baseComisionOriginal, montoObjetivoUsd])
 
   const rpmMonto = useMemo(
-    () => r2((baseComision * porcentajeRpm) / 100),
-    [baseComision, porcentajeRpm]
+    () => r2((baseComisionAplicada * porcentajeRpmServicio) / 100),
+    [baseComisionAplicada, porcentajeRpmServicio]
   )
 
   const terapeutaMonto = useMemo(
-    () => r2(baseComision - rpmMonto),
-    [baseComision, rpmMonto]
+    () => r2((baseComisionAplicada * porcentajeTerapeutaServicio) / 100),
+    [baseComisionAplicada, porcentajeTerapeutaServicio]
   )
 
   const comisionBalanceOk = useMemo(() => {
-    return Math.abs(r2(rpmMonto + terapeutaMonto) - baseComision) < 0.01
-  }, [rpmMonto, terapeutaMonto, baseComision])
-
-  const equivalentesPago = useMemo(() => {
-    if (!montoPagoFinal || montoPagoFinal <= 0) return null
-
-    if (monedaPago === 'USD') {
-      return {
-        monto_equivalente_usd: montoPagoFinal,
-        monto_equivalente_bs: tasaCongelada
-          ? r2(montoPagoFinal * tasaCongelada)
-          : null,
-      }
-    }
-
-    return {
-      monto_equivalente_usd: tasaCongelada
-        ? r2(montoPagoFinal / tasaCongelada)
-        : null,
-      monto_equivalente_bs: montoPagoFinal,
-    }
-  }, [montoPagoFinal, monedaPago, tasaCongelada])
+    return Math.abs(r2(rpmMonto + terapeutaMonto) - baseComisionAplicada) < 0.01
+  }, [rpmMonto, terapeutaMonto, baseComisionAplicada])
 
   const comisionEquivalentes = useMemo(() => {
-    if (!tasaCongelada || tasaCongelada <= 0) {
+    const tasaReferenciaBs =
+      pagosMixtos.find((p) => p.moneda_pago === 'BS' && (p.tasa_bcv || 0) > 0)?.tasa_bcv || null
+
+    if (!tasaReferenciaBs || tasaReferenciaBs <= 0) {
       return {
-        monto_base_usd: baseComision,
+        monto_base_usd: baseComisionAplicada,
         monto_base_bs: null,
         monto_rpm_usd: rpmMonto,
         monto_rpm_bs: null,
@@ -680,14 +738,111 @@ function NuevaCitaPageContent() {
     }
 
     return {
-      monto_base_usd: baseComision,
-      monto_base_bs: r2(baseComision * tasaCongelada),
+      monto_base_usd: baseComisionAplicada,
+      monto_base_bs: r2(baseComisionAplicada * tasaReferenciaBs),
       monto_rpm_usd: rpmMonto,
-      monto_rpm_bs: r2(rpmMonto * tasaCongelada),
+      monto_rpm_bs: r2(rpmMonto * tasaReferenciaBs),
       monto_profesional_usd: terapeutaMonto,
-      monto_profesional_bs: r2(terapeutaMonto * tasaCongelada),
+      monto_profesional_bs: r2(terapeutaMonto * tasaReferenciaBs),
     }
-  }, [baseComision, rpmMonto, terapeutaMonto, tasaCongelada])
+  }, [baseComisionAplicada, rpmMonto, terapeutaMonto, pagosMixtos])
+
+  function getMetodosForMoneda(moneda: 'USD' | 'BS') {
+    return moneda === 'USD'
+      ? metodosPago.filter((m) => monedaMetodoEsUsd(m))
+      : metodosPago.filter((m) => monedaMetodoEsBs(m))
+  }
+
+  function updatePagoItem(idLocal: string, patch: Partial<PagoMixtoItem>) {
+    setPagosMixtos((prev) =>
+      prev.map((item) => (item.id_local === idLocal ? { ...item, ...patch } : item))
+    )
+  }
+
+  function addPagoItem(moneda: 'USD' | 'BS' = 'USD') {
+    setPagosMixtos((prev) => [...prev, makePagoItem(moneda)])
+  }
+
+  function removePagoItem(idLocal: string) {
+    setPagosMixtos((prev) => {
+      if (prev.length <= 1) return prev
+      return prev.filter((item) => item.id_local !== idLocal)
+    })
+  }
+
+  const handlePagoBsTasaChange = useCallback((idLocal: string, tasa: number | null) => {
+    setPagosMixtos((prev) =>
+      prev.map((item) =>
+        item.id_local === idLocal
+          ? {
+              ...item,
+              tasa_bcv: tasa,
+            }
+          : item
+      )
+    )
+  }, [])
+
+  const handlePagoBsMontoChange = useCallback((idLocal: string, monto: number) => {
+    setPagosMixtos((prev) =>
+      prev.map((item) =>
+        item.id_local === idLocal
+          ? {
+              ...item,
+              monto_bs: monto,
+            }
+          : item
+      )
+    )
+  }, [])
+
+  const resumenPagos = useMemo(() => {
+    const items = pagosMixtos.map((item) => {
+      const montoUsdEq =
+        item.moneda_pago === 'USD'
+          ? r2(Number(item.monto_usd || 0))
+          : r2(Number(item.monto_usd || 0))
+
+      const montoBs =
+        item.moneda_pago === 'BS'
+          ? r2(Number(item.monto_bs || 0))
+          : item.tasa_bcv && item.tasa_bcv > 0 && Number(item.monto_usd || 0) > 0
+            ? r2(Number(item.monto_usd || 0) * item.tasa_bcv)
+            : 0
+
+      return {
+        ...item,
+        monto_equivalente_usd: montoUsdEq,
+        monto_equivalente_bs: montoBs > 0 ? montoBs : null,
+        monto_insertar:
+          item.moneda_pago === 'BS'
+            ? r2(Number(item.monto_bs || 0))
+            : r2(Number(item.monto_usd || 0)),
+        valido:
+          !!item.metodo_pago_v2_id &&
+          (
+            item.moneda_pago === 'USD'
+              ? Number(item.monto_usd || 0) > 0
+              : Number(item.monto_usd || 0) > 0 &&
+                Number(item.monto_bs || 0) > 0 &&
+                Number(item.tasa_bcv || 0) > 0
+          ),
+      }
+    })
+
+    const totalUsd = r2(items.reduce((acc, item) => acc + Number(item.monto_equivalente_usd || 0), 0))
+    const totalBs = r2(items.reduce((acc, item) => acc + Number(item.monto_equivalente_bs || 0), 0))
+    const diferenciaUsd = r2(montoObjetivoUsd - totalUsd)
+
+    return {
+      items,
+      totalUsd,
+      totalBs,
+      diferenciaUsd,
+      cuadra: Math.abs(diferenciaUsd) < 0.01 && montoObjetivoUsd > 0,
+      todosValidos: items.every((item) => item.valido),
+    }
+  }, [pagosMixtos, montoObjetivoUsd])
 
   async function guardar() {
     if (
@@ -728,41 +883,38 @@ function NuevaCitaPageContent() {
       return
     }
 
-    if (cobrarAhora && form.estado === 'cancelada') {
+    if (form.estado === 'cancelada') {
       alert('No se puede cobrar una cita cancelada.')
       return
     }
 
-    if (cobrarAhora) {
-      if (!metodoPagoId) {
-        alert('Selecciona un método de pago.')
-        return
-      }
+    if (montoObjetivoUsd <= 0) {
+      alert('El monto objetivo de la cita debe ser mayor a 0.')
+      return
+    }
 
-      if (!montoPagoFinal || montoPagoFinal <= 0) {
-        alert('El monto debe ser mayor a 0.')
-        return
-      }
+    if (!resumenPagos.todosValidos) {
+      alert('Completa correctamente todos los fragmentos del pago mixto.')
+      return
+    }
 
-      if (esBs && (!tasaCongelada || tasaCongelada <= 0)) {
-        alert('Debes seleccionar una tasa BCV para pagos en Bolívares.')
-        return
-      }
+    if (!resumenPagos.cuadra) {
+      alert(
+        `La suma de pagos no cuadra. Objetivo: ${formatMoney(montoObjetivoUsd)} | Registrado: ${formatMoney(
+          resumenPagos.totalUsd
+        )} | Diferencia: ${formatMoney(resumenPagos.diferenciaUsd)}`
+      )
+      return
+    }
 
-      if (baseComision <= 0) {
-        alert('La base de comisión debe ser mayor a 0.')
-        return
-      }
+    if (baseComisionAplicada <= 0) {
+      alert('La base de comisión debe ser mayor a 0.')
+      return
+    }
 
-      if (porcentajeRpm < 0 || porcentajeRpm > 100) {
-        alert('El % RPM debe estar entre 0 y 100.')
-        return
-      }
-
-      if (!comisionBalanceOk) {
-        alert('La distribución de comisión no cuadra correctamente.')
-        return
-      }
+    if (!comisionBalanceOk) {
+      alert('La distribución de comisión no cuadra correctamente.')
+      return
     }
 
     setLoading(true)
@@ -798,6 +950,13 @@ function NuevaCitaPageContent() {
         return
       }
 
+      let auditorId = empleadoActualId || ''
+
+      if (!auditorId) {
+        auditorId = await resolveEmpleadoActualId()
+        setEmpleadoActualId(auditorId)
+      }
+
       const payload = {
         cliente_id: form.cliente_id,
         terapeuta_id: form.terapeuta_id,
@@ -809,6 +968,8 @@ function NuevaCitaPageContent() {
         estado: form.estado,
         notas: form.notas || null,
         cliente_plan_id: form.tipo_cita === 'plan' ? form.cliente_plan_id : null,
+        created_by: auditorId || null,
+        updated_by: auditorId || null,
       }
 
       const { data: citaData, error: citaError } = await supabase
@@ -825,56 +986,49 @@ function NuevaCitaPageContent() {
       }
 
       const citaId = citaData.id
-
-      if (cobrarAhora && servicioSeleccionado) {
-        const cliente = clientes.find((c) => c.id === form.cliente_id)
-
-        const conceptoBase = `${servicioSeleccionado.nombre} - ${cliente?.nombre || 'Cliente'}`
-        const conceptoTipo =
-          form.tipo_cita === 'plan'
-            ? `${conceptoBase} [Plan]`
-            : form.tipo_cita === 'recovery'
+      const cliente = clientes.find((c) => c.id === form.cliente_id)
+      const conceptoBase = `${servicioSeleccionado?.nombre || 'Servicio'} - ${cliente?.nombre || 'Cliente'}`
+      const conceptoTipo =
+        form.tipo_cita === 'plan'
+          ? `${conceptoBase} [Plan]`
+          : form.tipo_cita === 'recovery'
             ? `${conceptoBase} [Recovery]`
             : `${conceptoBase} [Independiente]`
 
-        const conceptoPago = esBs
-          ? `${conceptoTipo} (${formatMoney(
-              equivalentesPago?.monto_equivalente_usd || 0
-            )} × ${tasaCongelada} = ${formatBs(montoPagoFinal)})`
-          : conceptoTipo
+      const pagosRpcPayload = resumenPagos.items.map((item) => ({
+        metodo_pago_v2_id: item.metodo_pago_v2_id,
+        moneda_pago: item.moneda_pago,
+        monto: item.monto_insertar,
+        tasa_bcv: item.moneda_pago === 'BS' ? item.tasa_bcv : item.tasa_bcv || null,
+        referencia: item.referencia || null,
+        notas: item.notas || null,
+      }))
 
-        const pagoPayload = {
-          fecha: form.fecha,
-          tipo_origen: 'cita',
-          cliente_id: form.cliente_id,
-          cita_id: citaId,
-          concepto: conceptoPago,
-          categoria: 'cita',
-          monto: montoPagoFinal,
-          monto_pago: montoPagoFinal,
-          moneda_pago: monedaPago,
-          tasa_bcv: tasaCongelada,
-          monto_equivalente_usd: equivalentesPago?.monto_equivalente_usd || null,
-          monto_equivalente_bs: equivalentesPago?.monto_equivalente_bs || null,
-          metodo_pago_id: null,
-          metodo_pago_v2_id: metodoPagoId,
-          estado: 'pagado',
-          referencia: referenciaPago || null,
-          notas: notasPago || null,
-        }
+      const { error: pagosMixtosError } = await supabase.rpc('registrar_pagos_mixtos', {
+        p_fecha: form.fecha,
+        p_tipo_origen: 'cita',
+        p_categoria: 'cita',
+        p_concepto: conceptoTipo,
+        p_cliente_id: form.cliente_id,
+        p_cita_id: citaId,
+        p_cliente_plan_id: form.tipo_cita === 'plan' ? form.cliente_plan_id : null,
+        p_cuenta_cobrar_id: null,
+        p_inventario_id: null,
+        p_registrado_por: auditorId || null,
+        p_notas_generales: notasPagoGenerales || null,
+        p_pagos: pagosRpcPayload,
+      })
 
-        const { error: pagoError } = await supabase
-          .from('pagos')
-          .insert(pagoPayload)
+      if (pagosMixtosError) {
+        throw new Error(`Error creando pagos mixtos: ${pagosMixtosError.message}`)
+      }
 
-        if (pagoError) {
-          if (pagoError.code === '23505') {
-            throw new Error('Ya existe un pago registrado para esta cita.')
-          }
-          throw new Error(`Error creando pago: ${pagoError.message}`)
-        }
+      const tasaReferencia =
+        resumenPagos.items.find((item) => item.moneda_pago === 'BS' && (item.tasa_bcv || 0) > 0)?.tasa_bcv || null
 
-        const comisionPayload = {
+      const { error: comisionError } = await supabase
+        .from('comisiones_detalle')
+        .insert({
           empleado_id: form.terapeuta_id,
           cliente_id: form.cliente_id,
           cita_id: citaId,
@@ -883,30 +1037,25 @@ function NuevaCitaPageContent() {
           tipo: 'cita',
           estado: 'pendiente',
           pagado: false,
-          base: baseComision,
+          base: baseComisionAplicada,
           rpm: rpmMonto,
           profesional: terapeutaMonto,
-          moneda: monedaPago,
-          tasa_bcv: tasaCongelada,
-          porcentaje_rpm: porcentajeRpm,
+          moneda: tasaReferencia ? 'BS' : 'USD',
+          tasa_bcv: tasaReferencia,
+          porcentaje_rpm: porcentajeRpmServicio,
           monto_base_usd: comisionEquivalentes.monto_base_usd,
           monto_base_bs: comisionEquivalentes.monto_base_bs,
           monto_rpm_usd: comisionEquivalentes.monto_rpm_usd,
           monto_rpm_bs: comisionEquivalentes.monto_rpm_bs,
           monto_profesional_usd: comisionEquivalentes.monto_profesional_usd,
           monto_profesional_bs: comisionEquivalentes.monto_profesional_bs,
-        }
+        })
 
-        const { error: comisionError } = await supabase
-          .from('comisiones_detalle')
-          .insert(comisionPayload)
-
-        if (comisionError) {
-          if (comisionError.code === '23505') {
-            throw new Error('Ya existe una comisión registrada para esta cita.')
-          }
-          throw new Error(`Error creando comisión: ${comisionError.message}`)
+      if (comisionError) {
+        if (comisionError.code === '23505') {
+          throw new Error('Ya existe una comisión registrada para esta cita.')
         }
+        throw new Error(`Error creando comisión: ${comisionError.message}`)
       }
 
       router.push('/admin/operaciones/agenda')
@@ -927,7 +1076,7 @@ function NuevaCitaPageContent() {
             Nueva cita
           </h1>
           <p className="mt-2 text-sm text-white/55">
-            Crear una cita y registrar cobro/comisión en el mismo flujo.
+            Crear una cita y registrar el pago/comisión en el mismo flujo.
           </p>
         </div>
 
@@ -994,8 +1143,8 @@ function NuevaCitaPageContent() {
                   loadingPlanes
                     ? 'Cargando planes...'
                     : planesCliente.length === 0
-                    ? 'Este cliente no tiene planes activos con sesiones disponibles.'
-                    : 'Selecciona el plan exacto que debe consumir la sesión.'
+                      ? 'Este cliente no tiene planes activos con sesiones disponibles.'
+                      : 'Selecciona el plan exacto que debe consumir la sesión.'
                 }
               >
                 <select
@@ -1038,10 +1187,7 @@ function NuevaCitaPageContent() {
                 </option>
                 {terapeutas.map((t) => (
                   <option key={t.id} value={t.id} className="bg-[#11131a] text-white">
-                    {t.nombre}{' '}
-                    {t.comision_cita_porcentaje
-                      ? `(${t.comision_cita_porcentaje}% fisioterapeuta)`
-                      : ''}
+                    {t.nombre}
                   </option>
                 ))}
               </select>
@@ -1059,8 +1205,7 @@ function NuevaCitaPageContent() {
                 value={form.servicio_id}
                 onChange={(e) => {
                   const servicioId = e.target.value
-                  const servicio =
-                    servicios.find((s) => s.id === servicioId) || null
+                  const servicio = servicios.find((s) => s.id === servicioId) || null
 
                   setForm((prev) => ({
                     ...prev,
@@ -1071,10 +1216,6 @@ function NuevaCitaPageContent() {
 
                   if (servicio?.precio && usarPrecioServicio) {
                     setMontoPersonalizado(String(servicio.precio))
-                  }
-
-                  if (servicio?.precio && !montoBaseComision) {
-                    setMontoBaseComision(String(servicio.precio))
                   }
                 }}
                 className={inputClassName}
@@ -1231,442 +1372,352 @@ function NuevaCitaPageContent() {
       </Section>
 
       <Section
-        title="Cobro de cita"
-        description="Configura el pago de la cita si se realizará ahora."
+        title="Pago mixto de la cita"
+        description="Puedes registrar uno o varios métodos de pago para la misma cita."
       >
         <Card className="p-6">
-          <div className="space-y-4">
-            <Field label="Cobrar ahora">
-              <div className="flex gap-4">
-                <label className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    checked={!cobrarAhora}
-                    onChange={() => setCobrarAhora(false)}
-                    className="h-4 w-4"
-                  />
-                  <span className="text-white/75">No</span>
-                </label>
-                <label className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    checked={cobrarAhora}
-                    onChange={() => setCobrarAhora(true)}
-                    className="h-4 w-4"
-                  />
-                  <span className="text-white/75">Sí</span>
-                </label>
+          <div className="grid gap-4 md:grid-cols-3">
+            <Field label="Monto objetivo USD" helper={usarPrecioServicio ? 'Usando precio del servicio.' : 'Monto personalizado.'}>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={usarPrecioServicio ? (servicioSeleccionado?.precio ?? '') : montoPersonalizado}
+                  readOnly={usarPrecioServicio}
+                  onChange={(e) => setMontoPersonalizado(e.target.value)}
+                  className={`${inputClassName} ${usarPrecioServicio ? 'cursor-not-allowed opacity-60' : ''}`}
+                  placeholder="0.00"
+                />
+                <button
+                  type="button"
+                  onClick={() => setUsarPrecioServicio((p) => !p)}
+                  className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.03] px-3 text-xs text-white/60 hover:bg-white/[0.06]"
+                >
+                  {usarPrecioServicio ? 'Editar' : 'Servicio'}
+                </button>
               </div>
             </Field>
 
-            {cobrarAhora && (
-              <div className="grid gap-4 border-t border-white/10 pt-4 md:grid-cols-2">
-                <Field label="Método de pago">
-                  <select
-                    value={metodoPagoId}
-                    onChange={(e) => setMetodoPagoId(e.target.value)}
-                    className={inputClassName}
-                  >
-                    <option value="" className="bg-[#11131a] text-white">
-                      Seleccionar método
-                    </option>
-                    {metodosPago.map((mp) => (
-                      <option key={mp.id} value={mp.id} className="bg-[#11131a] text-white">
-                        {mp.nombre}
-                        {mp.moneda ? ` · ${mp.moneda}` : ''}
-                        {mp.tipo ? ` · ${mp.tipo}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+            <Field label="Total registrado USD">
+              <input
+                type="text"
+                value={formatMoney(resumenPagos.totalUsd)}
+                readOnly
+                className={`${inputClassName} cursor-not-allowed opacity-70`}
+              />
+            </Field>
 
-                <Field
-                  label={`Monto ${esBs ? '(USD base)' : ''}`}
-                  helper={
-                    esBs
-                      ? 'Para pagos en Bs, este monto base se convierte con la tasa BCV.'
-                      : usarPrecioServicio
-                      ? 'Precio del servicio'
-                      : 'Monto personalizado'
-                  }
+            <Field label="Diferencia USD">
+              <input
+                type="text"
+                value={formatMoney(resumenPagos.diferenciaUsd)}
+                readOnly
+                className={`${inputClassName} cursor-not-allowed opacity-70 ${
+                  resumenPagos.cuadra ? 'text-emerald-300' : 'text-amber-300'
+                }`}
+              />
+            </Field>
+
+            <div className="md:col-span-3">
+              <Field label="Notas generales del pago (opcional)">
+                <textarea
+                  value={notasPagoGenerales}
+                  onChange={(e) => setNotasPagoGenerales(e.target.value)}
+                  rows={3}
+                  className={`${inputClassName} resize-none`}
+                  placeholder="Notas generales que aplican a toda la operación..."
+                />
+              </Field>
+            </div>
+          </div>
+
+          <div className="mt-6 space-y-4">
+            {pagosMixtos.map((item, index) => {
+              const metodosDisponibles = getMetodosForMoneda(item.moneda_pago)
+              const montoUsdEq = r2(Number(item.monto_usd || 0))
+
+              return (
+                <div
+                  key={item.id_local}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"
                 >
-                  <div className="flex gap-2">
-                    <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={
-                        usarPrecioServicio
-                          ? (servicioSeleccionado?.precio ?? '')
-                          : montoPersonalizado
-                      }
-                      readOnly={usarPrecioServicio}
-                      onChange={(e) => setMontoPersonalizado(e.target.value)}
-                      className={`${inputClassName} ${
-                        usarPrecioServicio ? 'cursor-not-allowed opacity-60' : ''
-                      }`}
-                      placeholder="0.00"
-                    />
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-white">
+                        Fragmento #{index + 1}
+                      </p>
+                      <p className="text-xs text-white/45">
+                        Equivalente USD: {formatMoney(montoUsdEq)}
+                      </p>
+                    </div>
+
                     <button
                       type="button"
-                      onClick={() => setUsarPrecioServicio((p) => !p)}
-                      className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.03] px-3 text-xs text-white/60 hover:bg-white/[0.06]"
+                      onClick={() => removePagoItem(item.id_local)}
+                      disabled={pagosMixtos.length <= 1}
+                      className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/70 hover:bg-white/[0.06] disabled:opacity-40"
                     >
-                      {usarPrecioServicio ? 'Editar' : 'Servicio'}
+                      Quitar
                     </button>
                   </div>
-                </Field>
 
-                {esBs && (
-                  <div className="md:col-span-2">
-                    <SelectorTasaBCV
-                      fecha={form.fecha}
-                      monedaPago="BS"
-                      montoUSD={
-                        usarPrecioServicio
-                          ? Number(servicioSeleccionado?.precio || 0)
-                          : Number(montoPersonalizado || 0)
-                      }
-                      montoBs={montoBsPersonalizado || undefined}
-                      onTasaChange={setTasaCongelada}
-                      onMontoBsChange={(monto) => {
-                        setMontoBsPersonalizado(monto)
-
-                        if (monto > 0 && tasaCongelada) {
-                          setUsarPrecioServicio(false)
-                          setMontoPersonalizado(String(r2(monto / tasaCongelada)))
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <Field label="Moneda">
+                      <select
+                        value={item.moneda_pago}
+                        onChange={(e) =>
+                          updatePagoItem(item.id_local, {
+                            moneda_pago: e.target.value as 'USD' | 'BS',
+                            metodo_pago_v2_id: '',
+                            monto_usd: '',
+                            monto_bs: null,
+                            tasa_bcv: null,
+                          })
                         }
-                      }}
-                    />
+                        className={inputClassName}
+                      >
+                        <option value="USD" className="bg-[#11131a] text-white">
+                          USD
+                        </option>
+                        <option value="BS" className="bg-[#11131a] text-white">
+                          Bs
+                        </option>
+                      </select>
+                    </Field>
+
+                    <Field label={item.moneda_pago === 'USD' ? 'Método USD' : 'Método Bs'}>
+                      <select
+                        value={item.metodo_pago_v2_id}
+                        onChange={(e) =>
+                          updatePagoItem(item.id_local, {
+                            metodo_pago_v2_id: e.target.value,
+                          })
+                        }
+                        className={inputClassName}
+                      >
+                        <option value="" className="bg-[#11131a] text-white">
+                          Seleccionar método
+                        </option>
+                        {metodosDisponibles.map((mp) => (
+                          <option key={mp.id} value={mp.id} className="bg-[#11131a] text-white">
+                            {mp.nombre}
+                            {mp.moneda ? ` · ${mp.moneda}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+
+                    <Field label={item.moneda_pago === 'USD' ? 'Monto USD' : 'Equivalente USD'}>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={item.monto_usd}
+                        onChange={(e) =>
+                          updatePagoItem(item.id_local, {
+                            monto_usd: e.target.value,
+                          })
+                        }
+                        className={inputClassName}
+                        placeholder="0.00"
+                      />
+                    </Field>
+
+                    {item.moneda_pago === 'BS' && (
+                      <div className="md:col-span-3">
+                        <PagoBsSelector
+                          fecha={form.fecha}
+                          montoUsd={Number(item.monto_usd || 0)}
+                          montoBs={item.monto_bs}
+                          onChangeTasa={(tasa) => handlePagoBsTasaChange(item.id_local, tasa)}
+                          onChangeMontoBs={(monto) => handlePagoBsMontoChange(item.id_local, monto)}
+                        />
+                      </div>
+                    )}
+
+                    <Field label="Referencia (opcional)">
+                      <input
+                        type="text"
+                        value={item.referencia}
+                        onChange={(e) =>
+                          updatePagoItem(item.id_local, {
+                            referencia: e.target.value,
+                          })
+                        }
+                        className={inputClassName}
+                        placeholder="N° de referencia"
+                      />
+                    </Field>
+
+                    <div className="md:col-span-2">
+                      <Field label="Notas del fragmento (opcional)">
+                        <input
+                          type="text"
+                          value={item.notas}
+                          onChange={(e) =>
+                            updatePagoItem(item.id_local, {
+                              notas: e.target.value,
+                            })
+                          }
+                          className={inputClassName}
+                          placeholder="Notas del fragmento"
+                        />
+                      </Field>
+                    </div>
                   </div>
-                )}
-
-                <Field label="Referencia (opcional)">
-                  <input
-                    type="text"
-                    value={referenciaPago}
-                    onChange={(e) => setReferenciaPago(e.target.value)}
-                    className={inputClassName}
-                    placeholder="N° de referencia o comprobante"
-                  />
-                </Field>
-
-                <div className="md:col-span-2">
-                  <Field label="Notas de pago (opcional)">
-                    <textarea
-                      value={notasPago}
-                      onChange={(e) => setNotasPago(e.target.value)}
-                      rows={3}
-                      className={`${inputClassName} resize-none`}
-                      placeholder="Notas adicionales sobre el pago..."
-                    />
-                  </Field>
                 </div>
+              )
+            })}
+          </div>
 
-                <div className="md:col-span-2 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-                  <p className="text-sm font-medium text-white/75">Resumen de cobro</p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => addPagoItem('USD')}
+              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+            >
+              + Agregar pago USD
+            </button>
 
-                  <div className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
-                    <div>
-                      <p className="text-xs text-white/45">Método</p>
-                      <p className="text-white">{metodoSeleccionado?.nombre || '—'}</p>
-                    </div>
+            <button
+              type="button"
+              onClick={() => addPagoItem('BS')}
+              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+            >
+              + Agregar pago Bs
+            </button>
+          </div>
 
-                    <div>
-                      <p className="text-xs text-white/45">Moneda</p>
-                      <p className="text-white">{monedaPago}</p>
-                    </div>
-
-                    <div>
-                      <p className="text-xs text-white/45">Monto cobrado</p>
-                      <p className="text-white">
-                        {esBs ? formatBs(montoPagoFinal) : formatMoney(montoPagoFinal)}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-xs text-white/45">Equivalente USD</p>
-                      <p className="text-white">
-                        {formatMoney(equivalentesPago?.monto_equivalente_usd || 0)}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-xs text-white/45">Equivalente Bs</p>
-                      <p className="text-white">
-                        {formatBs(equivalentesPago?.monto_equivalente_bs || 0)}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-xs text-white/45">Cartera</p>
-                      <p className="text-white">{metodoSeleccionado?.cartera?.nombre || '—'}</p>
-                    </div>
-                  </div>
-                </div>
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-sm">
+            <div className="grid gap-2 md:grid-cols-3">
+              <div>
+                <span className="text-white/55">Objetivo USD: </span>
+                <span className="text-white">{formatMoney(montoObjetivoUsd)}</span>
               </div>
-            )}
+              <div>
+                <span className="text-white/55">Total USD: </span>
+                <span className="text-white">{formatMoney(resumenPagos.totalUsd)}</span>
+              </div>
+              <div>
+                <span className="text-white/55">Total Bs: </span>
+                <span className="text-white">{formatBs(resumenPagos.totalBs)}</span>
+              </div>
+            </div>
+
+            <p className={`mt-3 text-sm font-medium ${resumenPagos.cuadra ? 'text-emerald-400' : 'text-amber-400'}`}>
+              {resumenPagos.cuadra
+                ? 'La suma de pagos cuadra correctamente.'
+                : `La suma todavía no cuadra. Diferencia: ${formatMoney(resumenPagos.diferenciaUsd)}`}
+            </p>
           </div>
         </Card>
       </Section>
 
-      {cobrarAhora && (
-        <Section
-          title="Configuración de comisión"
-          description="Más alineado al flujo de Clientes nuevo."
-        >
-          <Card className="p-6">
-            <div className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field
-                  label="Precio oficial / base comisión"
-                  helper={`Servicio: ${
-                    servicioSeleccionado?.precio ? `$${servicioSeleccionado.precio}` : '$0.00'
-                  }`}
-                >
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={montoBaseComision || servicioSeleccionado?.precio || ''}
-                    onChange={(e) => setMontoBaseComision(e.target.value)}
-                    className={inputClassName}
-                    placeholder="0.00"
-                  />
-                </Field>
-
-                <Field label="% RPM sobre precio oficial">
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    step="1"
-                    value={porcentajeRpm}
-                    onChange={(e) => setPorcentajeRpm(Number(e.target.value))}
-                    className={inputClassName}
-                  />
-                </Field>
-              </div>
-
-              {(() => {
-                const advertencia =
-                  porcentajeRpm > 70
-                    ? `⚠️ El % RPM es muy alto (${porcentajeRpm}%). ¿Seguro?`
-                    : terapeutaMonto < 0
-                    ? '⚠️ El terapeuta quedaría en negativo. Revisa los valores.'
-                    : baseComision <= 0
-                    ? '⚠️ Ingresa una base de comisión válida.'
-                    : null
-
-                return (
-                  <div className="space-y-3">
-                    {advertencia && (
-                      <p className="text-xs font-medium text-amber-400">{advertencia}</p>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-3 rounded-xl bg-white/[0.03] p-3 text-sm">
-                      <div>
-                        <p className="text-xs text-white/35">RPM recibe</p>
-                        <p className="font-semibold text-violet-400">${rpmMonto.toFixed(2)}</p>
-                        <p className="text-xs text-white/25">
-                          {porcentajeRpm}% de ${baseComision.toFixed(2)}
-                        </p>
-                      </div>
-
-                      <div>
-                        <p className="text-xs text-white/35">Terapeuta recibe</p>
-                        <p
-                          className={`font-semibold ${
-                            terapeutaMonto < 0 ? 'text-rose-400' : 'text-emerald-400'
-                          }`}
-                        >
-                          ${terapeutaMonto.toFixed(2)}
-                        </p>
-                        <p className="text-xs text-white/25">
-                          {(100 - porcentajeRpm).toFixed(0)}% de ${baseComision.toFixed(2)}
-                        </p>
-                      </div>
-                    </div>
-
-                    {baseComision > 0 && (
-                      <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/10">
-                        <div
-                          className="bg-violet-500/70 transition-all"
-                          style={{ width: `${Math.min(porcentajeRpm, 100)}%` }}
-                        />
-                        <div className="flex-1 bg-emerald-500/70" />
-                      </div>
-                    )}
-
-                    {!comisionBalanceOk && (
-                      <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-3">
-                        <p className="text-sm text-rose-400">
-                          La suma de la comisión no coincide con la base.
-                        </p>
-                      </div>
-                    )}
-
-                    {tasaCongelada ? (
-                      <div className="grid gap-2 border-t border-white/10 pt-4 text-sm md:grid-cols-3">
-                        <div>
-                          <span className="text-white/55">Base en Bs: </span>
-                          <span className="text-white/75">
-                            {formatBs(comisionEquivalentes.monto_base_bs || 0)}
-                          </span>
-                        </div>
-
-                        <div>
-                          <span className="text-white/55">RPM en Bs: </span>
-                          <span className="text-white/75">
-                            {formatBs(comisionEquivalentes.monto_rpm_bs || 0)}
-                          </span>
-                        </div>
-
-                        <div>
-                          <span className="text-white/55">Terapeuta en Bs: </span>
-                          <span className="text-white/75">
-                            {formatBs(comisionEquivalentes.monto_profesional_bs || 0)}
-                          </span>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                )
-              })()}
-            </div>
-          </Card>
-        </Section>
-      )}
-
       <Section
-        title="Resumen"
-        description="Verifica los datos antes de guardar."
+        title="Configuración de comisión"
+        description="La comisión toma el porcentaje fijo del servicio. Si cambias el precio, cambian los montos, no los porcentajes."
       >
         <Card className="p-6">
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-white/55">Cliente:</span>
-              <span className="text-white/75">
-                {clientes.find((c) => c.id === form.cliente_id)?.nombre || 'No seleccionado'}
-              </span>
+          <div className="space-y-5">
+            <div className="grid gap-4 md:grid-cols-4">
+              <Field
+                label="Precio / base aplicada"
+                helper={usarPrecioServicio ? 'Usando base del servicio.' : 'Usando precio editado de la cita.'}
+              >
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={String(baseComisionAplicada || '')}
+                  readOnly
+                  className={`${inputClassName} cursor-not-allowed opacity-80`}
+                  placeholder="0.00"
+                />
+              </Field>
+
+              <Field label="Base original del servicio">
+                <input
+                  type="text"
+                  value={formatMoney(baseComisionOriginal)}
+                  readOnly
+                  className={`${inputClassName} cursor-not-allowed opacity-80`}
+                />
+              </Field>
+
+              <Field label="RPM recibe">
+                <input
+                  type="text"
+                  value={`${formatMoney(rpmMonto)} · ${porcentajeRpmServicio}%`}
+                  readOnly
+                  className={`${inputClassName} cursor-not-allowed opacity-80`}
+                />
+              </Field>
+
+              <Field label="Fisioterapeuta recibe">
+                <input
+                  type="text"
+                  value={`${formatMoney(terapeutaMonto)} · ${porcentajeTerapeutaServicio}%`}
+                  readOnly
+                  className={`${inputClassName} cursor-not-allowed opacity-80`}
+                />
+              </Field>
             </div>
 
-            {form.tipo_cita === 'plan' && (
-              <div className="flex justify-between">
-                <span className="text-white/55">Plan:</span>
-                <span className="text-white/75">
-                  {planSeleccionado ? getPlanLabel(planSeleccionado) : 'No seleccionado'}
-                </span>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="rounded-[28px] border border-white/10 bg-white/[0.05] p-5">
+                <p className="text-sm text-white/60">Base</p>
+                <p className="mt-2 text-3xl font-bold text-white">{formatMoney(baseComisionAplicada)}</p>
+                <p className="mt-2 text-xs text-white/40">
+                  Precio de la cita: {formatMoney(montoObjetivoUsd)}
+                </p>
+              </div>
+
+              <div className="rounded-[28px] border border-violet-400/15 bg-white/[0.05] p-5">
+                <p className="text-sm text-white/60">RPM recibe</p>
+                <p className="mt-2 text-3xl font-bold text-violet-400">{formatMoney(rpmMonto)}</p>
+                <p className="mt-2 text-sm text-white/50">{porcentajeRpmServicio}%</p>
+              </div>
+
+              <div className="rounded-[28px] border border-emerald-400/15 bg-white/[0.05] p-5">
+                <p className="text-sm text-white/60">Fisioterapeuta recibe</p>
+                <p className="mt-2 text-3xl font-bold text-emerald-400">{formatMoney(terapeutaMonto)}</p>
+                <p className="mt-2 text-sm text-white/50">{porcentajeTerapeutaServicio}%</p>
+              </div>
+            </div>
+
+            {!comisionBalanceOk && (
+              <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-3">
+                <p className="text-sm text-rose-400">
+                  La suma de la comisión no coincide con la base.
+                </p>
               </div>
             )}
 
-            <div className="flex justify-between">
-              <span className="text-white/55">Fisioterapeuta:</span>
-              <span className="text-white/75">
-                {terapeutas.find((t) => t.id === form.terapeuta_id)?.nombre || 'No seleccionado'}
-              </span>
-            </div>
+            {comisionEquivalentes.monto_base_bs ? (
+              <div className="grid gap-2 border-t border-white/10 pt-4 text-sm md:grid-cols-3">
+                <div>
+                  <span className="text-white/55">Base en Bs: </span>
+                  <span className="text-white/75">
+                    {formatBs(comisionEquivalentes.monto_base_bs || 0)}
+                  </span>
+                </div>
 
-            <div className="flex justify-between">
-              <span className="text-white/55">Servicio:</span>
-              <span className="text-white/75">
-                {servicioSeleccionado?.nombre || 'No seleccionado'}
-              </span>
-            </div>
+                <div>
+                  <span className="text-white/55">RPM en Bs: </span>
+                  <span className="text-white/75">
+                    {formatBs(comisionEquivalentes.monto_rpm_bs || 0)}
+                  </span>
+                </div>
 
-            <div className="flex justify-between">
-              <span className="text-white/55">Recurso:</span>
-              <span className="text-white/75">
-                {recursoSeleccionado?.nombre || 'Sin recurso'}
-              </span>
-            </div>
-
-            {servicioSeleccionado?.precio ? (
-              <div className="flex justify-between">
-                <span className="text-white/55">Precio base:</span>
-                <span className="text-white/75">${servicioSeleccionado.precio}</span>
+                <div>
+                  <span className="text-white/55">Fisioterapeuta en Bs: </span>
+                  <span className="text-white/75">
+                    {formatBs(comisionEquivalentes.monto_profesional_bs || 0)}
+                  </span>
+                </div>
               </div>
             ) : null}
-
-            <div className="flex justify-between">
-              <span className="text-white/55">Fecha:</span>
-              <span className="text-white/75">{form.fecha || 'No seleccionada'}</span>
-            </div>
-
-            <div className="flex justify-between">
-              <span className="text-white/55">Hora:</span>
-              <span className="text-white/75">
-                {form.hora_inicio
-                  ? `${form.hora_inicio.slice(0, 5)} - ${form.hora_fin?.slice(0, 5)}`
-                  : 'No seleccionada'}
-              </span>
-            </div>
-
-            <div className="flex justify-between">
-              <span className="text-white/55">Estado:</span>
-              <span className="text-white/75">{form.estado || 'No seleccionado'}</span>
-            </div>
-
-            {cobrarAhora && (
-              <>
-                <div className="my-2 border-t border-white/10" />
-
-                <div className="flex justify-between">
-                  <span className="text-white/55">Cobro:</span>
-                  <span className="text-white/75">Sí</span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span className="text-white/55">Método:</span>
-                  <span className="text-white/75">
-                    {metodoSeleccionado?.nombre || 'No seleccionado'}
-                  </span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span className="text-white/55">Moneda:</span>
-                  <span className="text-white/75">{monedaPago}</span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span className="text-white/55">Monto cobrado:</span>
-                  <span className="text-white/75">
-                    {esBs ? formatBs(montoPagoFinal) : formatMoney(montoPagoFinal)}
-                  </span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span className="text-white/55">Base comisión (USD):</span>
-                  <span className="text-white/75">${baseComision.toFixed(2)}</span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span className="text-white/55">RPM recibe (USD):</span>
-                  <span className="text-white/75">${rpmMonto.toFixed(2)}</span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span className="text-white/55">Terapeuta recibe (USD):</span>
-                  <span className="text-white/75">${terapeutaMonto.toFixed(2)}</span>
-                </div>
-
-                {tasaCongelada ? (
-                  <>
-                    <div className="flex justify-between text-xs text-white/45">
-                      <span className="text-white/55">Tasa BCV:</span>
-                      <span className="text-white/55">Bs. {tasaCongelada.toFixed(2)}</span>
-                    </div>
-
-                    <div className="flex justify-between text-xs text-white/45">
-                      <span className="text-white/55">Equivalente Bs base comisión:</span>
-                      <span className="text-white/55">
-                        {formatBs(comisionEquivalentes.monto_base_bs || 0)}
-                      </span>
-                    </div>
-                  </>
-                ) : null}
-              </>
-            )}
           </div>
         </Card>
       </Section>
@@ -1680,11 +1731,8 @@ function NuevaCitaPageContent() {
             servicios.length === 0 ||
             !form.hora_inicio ||
             (form.tipo_cita === 'plan' && !form.cliente_plan_id) ||
-            (cobrarAhora &&
-              (!comisionBalanceOk ||
-                baseComision <= 0 ||
-                porcentajeRpm < 0 ||
-                porcentajeRpm > 100))
+            !comisionBalanceOk ||
+            baseComisionAplicada <= 0
           }
           className="
             rounded-2xl border border-white/10 bg-white/[0.08]

@@ -18,6 +18,9 @@ type CitaRow = {
   estado: string
   notas: string | null
   created_at: string | null
+  updated_at: string | null
+  created_by: string | null
+  updated_by: string | null
   cliente_plan_id: string | null
   clientes: {
     id: string
@@ -34,6 +37,14 @@ type CitaRow = {
     id: string
     nombre: string | null
     duracion_minutos: number | null
+  } | null
+  creado_por: {
+    id: string
+    nombre: string | null
+  } | null
+  editado_por: {
+    id: string
+    nombre: string | null
   } | null
   clientes_planes: {
     id: string
@@ -60,6 +71,37 @@ function formatDateTime(fecha: string | null | undefined, hora?: string | null) 
   if (!fecha) return '—'
   const fechaStr = formatDate(fecha)
   return hora ? `${fechaStr} · ${hora.slice(0, 5)}` : fechaStr
+}
+
+function formatAuditDate(value: string | null | undefined) {
+  if (!value) return '—'
+  try {
+    return new Date(value).toLocaleString()
+  } catch {
+    return value
+  }
+}
+
+function getAuditLines(cita: CitaRow) {
+  const creador = cita.creado_por?.nombre || 'Sin registro'
+  const editor = cita.editado_por?.nombre || 'Sin registro'
+
+  const createdAt = formatAuditDate(cita.created_at)
+  const updatedAt = formatAuditDate(cita.updated_at)
+
+  const wasEdited =
+    !!cita.updated_at &&
+    cita.updated_at !== cita.created_at &&
+    !!cita.updated_by
+
+  if (!wasEdited) {
+    return [`Creó: ${creador} · ${createdAt}`]
+  }
+
+  return [
+    `Creó: ${creador} · ${createdAt}`,
+    `Editó: ${editor} · ${updatedAt}`,
+  ]
 }
 
 function estadoBadge(estado: string) {
@@ -161,10 +203,51 @@ export default function AgendaPage() {
   const [error, setError] = useState('')
   const [actionError, setActionError] = useState('')
   const [updatingId, setUpdatingId] = useState<string | null>(null)
+  const [empleadoActualId, setEmpleadoActualId] = useState<string>('')
 
   useEffect(() => {
     void loadAgenda()
+    void loadEmpleadoActual()
   }, [])
+
+  async function resolveEmpleadoActualId(): Promise<string> {
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError) return ''
+
+      const authUserId = authData.user?.id
+      if (!authUserId) return ''
+
+      const { data: empleadoPorAuth, error: errorPorAuth } = await supabase
+        .from('empleados')
+        .select('id, nombre, auth_user_id')
+        .eq('auth_user_id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorAuth && empleadoPorAuth?.id) {
+        return String(empleadoPorAuth.id)
+      }
+
+      const { data: empleadoPorId, error: errorPorId } = await supabase
+        .from('empleados')
+        .select('id, nombre')
+        .eq('id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorId && empleadoPorId?.id) {
+        return String(empleadoPorId.id)
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
+  async function loadEmpleadoActual() {
+    const empleadoId = await resolveEmpleadoActualId()
+    setEmpleadoActualId(empleadoId)
+  }
 
   async function loadAgenda() {
     setLoading(true)
@@ -181,10 +264,15 @@ export default function AgendaPage() {
           estado,
           notas,
           created_at,
+          updated_at,
+          created_by,
+          updated_by,
           cliente_plan_id,
           clientes:cliente_id ( id, nombre, telefono, email ),
           empleados:terapeuta_id ( id, nombre, rol ),
           servicios:servicio_id ( id, nombre, duracion_minutos ),
+          creado_por:created_by ( id, nombre ),
+          editado_por:updated_by ( id, nombre ),
           clientes_planes:cliente_plan_id (
             id,
             sesiones_totales,
@@ -215,7 +303,6 @@ export default function AgendaPage() {
     setActionError('')
 
     const estadoActual = (cita.estado || '').toLowerCase()
-
     if (estadoActual === nuevoEstado) return
 
     if (
@@ -243,16 +330,26 @@ export default function AgendaPage() {
     setUpdatingId(cita.id)
 
     try {
+      let auditorId = empleadoActualId || ''
+
+      if (!auditorId) {
+        auditorId = await resolveEmpleadoActualId()
+        setEmpleadoActualId(auditorId)
+      }
+
+      const payload = {
+        estado: nuevoEstado,
+        updated_by: auditorId || null,
+      }
+
       const { error: updateError } = await supabase
         .from('citas')
-        .update({ estado: nuevoEstado })
+        .update(payload)
         .eq('id', cita.id)
 
       if (updateError) throw new Error(updateError.message)
 
-      setCitas((prev) =>
-        prev.map((item) => (item.id === cita.id ? { ...item, estado: nuevoEstado } : item))
-      )
+      await loadAgenda()
     } catch (err: any) {
       console.error(err)
       setActionError(err?.message || 'No se pudo cambiar el estado de la cita.')
@@ -452,14 +549,21 @@ export default function AgendaPage() {
                         <div className="font-medium text-white">
                           {formatDateTime(cita.fecha, cita.hora_inicio)}
                         </div>
+
                         {cita.hora_fin ? (
                           <div className="mt-0.5 text-xs text-white/45">
                             hasta {cita.hora_fin.slice(0, 5)}
                           </div>
                         ) : null}
-                        <div className="mt-1 text-xs text-white/35">
-                          Registro: {cita.created_at ? new Date(cita.created_at).toLocaleDateString() : '—'}
+
+                        <div className="mt-1 space-y-1">
+                          {getAuditLines(cita).map((line, index) => (
+                            <div key={index} className="text-[11px] leading-4 text-white/35">
+                              {line}
+                            </div>
+                          ))}
                         </div>
+
                         {duracion > 0 ? (
                           <div className="mt-1 text-xs text-white/35">
                             {duracion} min
@@ -482,10 +586,10 @@ export default function AgendaPage() {
                         </div>
                         <div className="mt-1 text-xs text-white/45">
                           {cita.empleados?.rol === 'terapeuta'
-  ? 'Fisioterapeuta'
-  : cita.empleados?.rol === 'fisioterapeuta'
-  ? 'Fisioterapeuta'
-  : cita.empleados?.rol || 'Sin rol'}
+                            ? 'Fisioterapeuta'
+                            : cita.empleados?.rol === 'fisioterapeuta'
+                              ? 'Fisioterapeuta'
+                              : cita.empleados?.rol || 'Sin rol'}
                         </div>
                       </td>
 
@@ -546,9 +650,10 @@ export default function AgendaPage() {
                             href={`/admin/operaciones/agenda/${cita.id}/editar`}
                             className={`
                               rounded-xl border px-3 py-1.5 text-xs font-medium transition
-                              ${puedeEditar
-                                ? 'border-white/10 bg-white/[0.03] text-white/80 hover:bg-white/[0.06]'
-                                : 'cursor-not-allowed border-white/10 bg-white/[0.02] text-white/35 pointer-events-none'
+                              ${
+                                puedeEditar
+                                  ? 'border-white/10 bg-white/[0.03] text-white/80 hover:bg-white/[0.06]'
+                                  : 'cursor-not-allowed border-white/10 bg-white/[0.02] text-white/35 pointer-events-none'
                               }
                             `}
                           >
@@ -559,9 +664,10 @@ export default function AgendaPage() {
                             href={`/admin/operaciones/agenda/${cita.id}/reprogramar`}
                             className={`
                               rounded-xl border px-3 py-1.5 text-xs font-medium transition
-                              ${puedeReprogramar
-                                ? 'border-amber-400/20 bg-amber-400/10 text-amber-300 hover:bg-amber-400/15'
-                                : 'cursor-not-allowed border-white/10 bg-white/[0.02] text-white/35 pointer-events-none'
+                              ${
+                                puedeReprogramar
+                                  ? 'border-amber-400/20 bg-amber-400/10 text-amber-300 hover:bg-amber-400/15'
+                                  : 'cursor-not-allowed border-white/10 bg-white/[0.02] text-white/35 pointer-events-none'
                               }
                             `}
                           >

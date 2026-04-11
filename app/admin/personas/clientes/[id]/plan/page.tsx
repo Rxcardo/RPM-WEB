@@ -3,6 +3,7 @@
 export const dynamic = 'force-dynamic'
 
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -18,15 +19,23 @@ import ActionCard from '@/components/ui/ActionCard'
 import SelectorTasaBCV from '@/components/finanzas/SelectorTasaBCV'
 
 type Cliente = { id: string; nombre: string; estado: string }
+
+type VigenciaTipo = 'dias' | 'semanas' | 'meses'
+
 type Plan = {
   id: string
   nombre: string
   sesiones_totales: number
-  vigencia_dias: number
+  vigencia_valor: number
+  vigencia_tipo: VigenciaTipo
   precio: number
   estado: string
   descripcion: string | null
+  comision_base?: number | null
+  comision_rpm?: number | null
+  comision_entrenador?: number | null
 }
+
 type ClientePlan = {
   id: string
   cliente_id: string
@@ -42,6 +51,7 @@ type ClientePlan = {
   porcentaje_rpm: number
   monto_base_comision: number | null
 }
+
 type Empleado = {
   id: string
   nombre: string
@@ -50,7 +60,9 @@ type Empleado = {
   comision_plan_porcentaje: number
   comision_cita_porcentaje: number
 }
+
 type Recurso = { id: string; nombre: string; tipo: string | null }
+
 type MetodoPago = {
   id: string
   nombre: string
@@ -63,6 +75,7 @@ type MetodoPago = {
     codigo: string
   } | null
 }
+
 type EntrenamientoExistente = {
   id: string
   hora_inicio: string
@@ -78,6 +91,17 @@ type PlanificacionSesiones = {
   sesionesPosibles: number
   sesionesSolicitadas: number
   alcanzaVigencia: boolean
+}
+
+type PagoMixtoItem = {
+  id_local: string
+  moneda_pago: 'USD' | 'BS'
+  metodo_pago_v2_id: string
+  monto_usd: string
+  monto_bs: number | null
+  tasa_bcv: number | null
+  referencia: string
+  notas: string
 }
 
 const DIAS_SEMANA = [
@@ -113,6 +137,18 @@ function normalizeMetodoPago(row: any): MetodoPago {
   }
 }
 
+function normalizeEntrenamientoExistente(row: any): EntrenamientoExistente {
+  const cliente = firstOrNull(row?.clientes)
+  return {
+    id: String(row?.id ?? ''),
+    hora_inicio: String(row?.hora_inicio ?? ''),
+    hora_fin: String(row?.hora_fin ?? ''),
+    fecha: String(row?.fecha ?? ''),
+    estado: String(row?.estado ?? ''),
+    clientes: cliente ? { nombre: String(cliente?.nombre ?? '') } : null,
+  }
+}
+
 function getTodayLocal() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -124,8 +160,30 @@ function addDaysToDate(dateStr: string, days: number) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function getFechaFinByVigencia(fechaInicio: string, vigenciaDias: number) {
-  return addDaysToDate(fechaInicio, Math.max((vigenciaDias || 0) - 1, 0))
+function getVigenciaDias(vigenciaValor: number, vigenciaTipo: VigenciaTipo) {
+  const valor = Math.max(Number(vigenciaValor || 0), 0)
+  if (vigenciaTipo === 'semanas') return valor * 7
+  if (vigenciaTipo === 'meses') return valor * 30
+  return valor
+}
+
+function getFechaFinByVigencia(
+  fechaInicio: string,
+  vigenciaValor: number,
+  vigenciaTipo: VigenciaTipo
+) {
+  const vigenciaDias = getVigenciaDias(vigenciaValor, vigenciaTipo)
+  return addDaysToDate(fechaInicio, Math.max(vigenciaDias - 1, 0))
+}
+
+function formatVigencia(valor: number | null | undefined, tipo: VigenciaTipo | string | null | undefined) {
+  const n = Number(valor || 0)
+  const t = String(tipo || '').toLowerCase()
+  if (!n) return '—'
+  if (t === 'dias') return `${n} ${n === 1 ? 'día' : 'días'}`
+  if (t === 'semanas') return `${n} ${n === 1 ? 'semana' : 'semanas'}`
+  if (t === 'meses') return `${n} ${n === 1 ? 'mes' : 'meses'}`
+  return `${n}`
 }
 
 function formatDate(v: string | null) {
@@ -149,36 +207,6 @@ function formatBs(v: number) {
   }).format(v)
 }
 
-function normalizeDecimalInput(value: string) {
-  return value.replace(/\./g, '').replace(',', '.').replace(/\s+/g, '').trim()
-}
-
-function extractUsdRateFromBcvHtml(html: string) {
-  if (!html) return null
-
-  const normalized = html
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  const patterns = [
-    /USD\s*[:\-]?\s*([\d.,]+)/i,
-    /D[oó]lar(?:\s+estadounidense)?\s*[:\-]?\s*([\d.,]+)/i,
-    /<strong>\s*USD\s*<\/strong>[^\d]*([\d.,]+)/i,
-  ]
-
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern)
-    if (match?.[1]) {
-      const parsed = Number(normalizeDecimalInput(match[1]))
-      if (Number.isFinite(parsed) && parsed > 0) return parsed
-    }
-  }
-
-  return null
-}
-
-
 function timeToMinutes(t: string) {
   const [h, m] = t.slice(0, 5).split(':').map(Number)
   return h * 60 + m
@@ -192,12 +220,24 @@ function sumarMinutos(hora: string, minutos: number) {
   return `${minutesToTime(timeToMinutes(hora) + minutos)}:00`
 }
 
+function r2(v: number) {
+  return Math.round(v * 100) / 100
+}
+
+function nn(v: string) {
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 ? n : 0
+}
+
 function calcularPlanificacionSesiones(
   fechaInicio: string,
   diasSemana: number[],
   totalSesiones: number,
-  vigenciaDias: number
+  vigenciaValor: number,
+  vigenciaTipo: VigenciaTipo
 ): PlanificacionSesiones {
+  const vigenciaDias = getVigenciaDias(vigenciaValor, vigenciaTipo)
+
   if (!fechaInicio || !diasSemana.length || !totalSesiones || !vigenciaDias) {
     return {
       fechas: [],
@@ -208,7 +248,7 @@ function calcularPlanificacionSesiones(
     }
   }
 
-  const fechaFinPlan = getFechaFinByVigencia(fechaInicio, vigenciaDias)
+  const fechaFinPlan = getFechaFinByVigencia(fechaInicio, vigenciaValor, vigenciaTipo)
   const current = new Date(`${fechaInicio}T00:00:00`)
   const limite = new Date(`${fechaFinPlan}T23:59:59`)
   const fechas: string[] = []
@@ -245,6 +285,48 @@ function getRolLabel(rol: string | null | undefined) {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
+function detectarMetodoBs(metodo: MetodoPago | null) {
+  if (!metodo) return false
+  const moneda = (metodo.moneda || '').toUpperCase()
+  const nombre = (metodo.nombre || '').toLowerCase()
+  const tipo = (metodo.tipo || '').toLowerCase()
+  const carteraCodigo = (metodo.cartera?.codigo || '').toLowerCase()
+
+  return (
+    moneda === 'BS' ||
+    moneda === 'VES' ||
+    nombre.includes('bs') ||
+    nombre.includes('bolívar') ||
+    nombre.includes('bolivar') ||
+    nombre.includes('pago movil') ||
+    nombre.includes('pago móvil') ||
+    nombre.includes('movil') ||
+    nombre.includes('móvil') ||
+    tipo.includes('bs') ||
+    tipo.includes('bolívar') ||
+    tipo.includes('bolivar') ||
+    tipo.includes('pago_movil') ||
+    carteraCodigo.includes('bs') ||
+    carteraCodigo.includes('ves')
+  )
+}
+
+function detectarMetodoUsd(metodo: MetodoPago | null) {
+  if (!metodo) return false
+  const moneda = (metodo.moneda || '').toUpperCase()
+  const nombre = (metodo.nombre || '').toLowerCase()
+  const carteraCodigo = (metodo.cartera?.codigo || '').toLowerCase()
+
+  return (
+    moneda === 'USD' ||
+    nombre.includes('usd') ||
+    nombre.includes('zelle') ||
+    nombre.includes('efectivo $') ||
+    nombre.includes('efectivo usd') ||
+    carteraCodigo.includes('usd')
+  )
+}
+
 function Field({ label, children, helper }: { label: string; children: ReactNode; helper?: string }) {
   return (
     <div>
@@ -262,14 +344,12 @@ const inputCls = `
 `
 
 function CalendarioDisponibilidad({
-  empleadoId,
   fechaVista,
   horaInicio,
   horaFin,
   entrenamientosExistentes,
   onSelectHora,
 }: {
-  empleadoId: string
   fechaVista: string
   horaInicio: string
   horaFin: string
@@ -397,6 +477,45 @@ function CalendarioDisponibilidad({
 type Modo = 'asignar' | 'renovar' | 'cancelar' | null
 type OpcionArrastreSesiones = 'si' | 'no'
 
+function makePagoItem(moneda: 'USD' | 'BS' = 'USD'): PagoMixtoItem {
+  return {
+    id_local: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    moneda_pago: moneda,
+    metodo_pago_v2_id: '',
+    monto_usd: '',
+    monto_bs: null,
+    tasa_bcv: null,
+    referencia: '',
+    notas: '',
+  }
+}
+
+const PagoBsSelector = memo(function PagoBsSelector({
+  fecha,
+  montoUsd,
+  montoBs,
+  onChangeTasa,
+  onChangeMontoBs,
+}: {
+  fecha: string
+  montoUsd: number
+  montoBs: number | null
+  onChangeTasa: (tasa: number | null) => void
+  onChangeMontoBs: (monto: number) => void
+}) {
+  return (
+    <SelectorTasaBCV
+      fecha={fecha}
+      monedaPago="BS"
+      monedaReferencia="EUR"
+      montoUSD={montoUsd}
+      montoBs={montoBs || undefined}
+      onTasaChange={onChangeTasa}
+      onMontoBsChange={onChangeMontoBs}
+    />
+  )
+})
+
 export default function ClientePlanPage() {
   const params = useParams()
   const router = useRouter()
@@ -428,14 +547,11 @@ export default function ClientePlanPage() {
   const [horaInicio, setHoraInicio] = useState('')
   const [duracionMin, setDuracionMin] = useState(60)
 
-  const [metodoPagoId, setMetodoPagoId] = useState('')
+  const [registrarPago, setRegistrarPago] = useState(true)
   const [usarPrecioPlan, setUsarPrecioPlan] = useState(true)
   const [montoPersonalizado, setMontoPersonalizado] = useState('')
-  const [registrarPago, setRegistrarPago] = useState(true)
-  const [esBs, setEsBs] = useState(false)
-  const [tasaCongelada, setTasaCongelada] = useState<number | null>(null)
-  const [montoBsPersonalizado, setMontoBsPersonalizado] = useState<number | null>(null)
-  const [notasPago, setNotasPago] = useState('')
+  const [notasPagoGenerales, setNotasPagoGenerales] = useState('')
+  const [pagosMixtos, setPagosMixtos] = useState<PagoMixtoItem[]>([makePagoItem('USD')])
 
   const [motivoCancelacion, setMotivoCancelacion] = useState('')
   const [pagoAlCancelar, setPagoAlCancelar] = useState<'si' | 'no' | null>(null)
@@ -446,12 +562,9 @@ export default function ClientePlanPage() {
   const [nuevoPlanNombre, setNuevoPlanNombre] = useState('')
   const [nuevoPlanSesiones, setNuevoPlanSesiones] = useState(12)
   const [nuevoPlanVigencia, setNuevoPlanVigencia] = useState(30)
+  const [nuevoPlanVigenciaTipo, setNuevoPlanVigenciaTipo] = useState<VigenciaTipo>('dias')
   const [nuevoPlanPrecio, setNuevoPlanPrecio] = useState('')
   const [creandoPlan, setCreandoPlan] = useState(false)
-
-  const [montoBaseComision, setMontoBaseComision] = useState('')
-  const [montoRpm, setMontoRpm] = useState('')
-  const [montoEntrenador, setMontoEntrenador] = useState('')
 
   const [renovarConPendientes, setRenovarConPendientes] = useState<OpcionArrastreSesiones>('si')
 
@@ -463,7 +576,7 @@ export default function ClientePlanPage() {
       supabase.from('clientes').select('id, nombre, estado').eq('id', id).single(),
       supabase
         .from('planes')
-        .select('id, nombre, sesiones_totales, vigencia_dias, precio, estado, descripcion')
+        .select('id, nombre, sesiones_totales, vigencia_valor, vigencia_tipo, precio, estado, descripcion, comision_base, comision_rpm, comision_entrenador')
         .eq('estado', 'activo')
         .order('nombre'),
       supabase
@@ -473,7 +586,7 @@ export default function ClientePlanPage() {
           fecha_inicio, fecha_fin, estado, created_at, origen,
           porcentaje_rpm, monto_base_comision,
           planes:plan_id (
-            id, nombre, sesiones_totales, vigencia_dias, precio, estado, descripcion
+            id, nombre, sesiones_totales, vigencia_valor, vigencia_tipo, precio, estado, descripcion, comision_base, comision_rpm, comision_entrenador
           )
         `)
         .eq('cliente_id', id)
@@ -516,13 +629,16 @@ export default function ClientePlanPage() {
     setLoading(false)
   }, [id])
 
-  useEffect(() => { void fetchAll() }, [fetchAll])
+  useEffect(() => {
+    void fetchAll()
+  }, [fetchAll])
 
   useEffect(() => {
     if (!empleadoId || !fechaVistaCal) {
       setEntrenamientosEmpleado([])
       return
     }
+
     void supabase
       .from('entrenamientos')
       .select('id, hora_inicio, hora_fin, fecha, estado, clientes:cliente_id ( nombre )')
@@ -530,25 +646,8 @@ export default function ClientePlanPage() {
       .eq('fecha', fechaVistaCal)
       .neq('estado', 'cancelado')
       .order('hora_inicio')
-      .then(({ data }) => setEntrenamientosEmpleado((data || []) as unknown as EntrenamientoExistente[]))
+      .then(({ data }) => setEntrenamientosEmpleado(((data || []) as any[]).map(normalizeEntrenamientoExistente)))
   }, [empleadoId, fechaVistaCal])
-
-  useEffect(() => {
-    const m = metodosPago.find((x) => x.id === metodoPagoId)
-    const n = (m?.nombre || '').toLowerCase()
-    const moneda = (m?.moneda || '').toLowerCase()
-    const carteraCodigo = (m?.cartera?.codigo || '').toLowerCase()
-    setEsBs(
-      n.includes('bs') ||
-        n.includes('bolívar') ||
-        n.includes('bolivar') ||
-        n.includes('pago móvil') ||
-        moneda === 'ves' ||
-        moneda === 'bs' ||
-        carteraCodigo.includes('ves') ||
-        carteraCodigo.includes('bs')
-    )
-  }, [metodoPagoId, metodosPago])
 
   const selectedPlan = useMemo(
     () => planes.find((p) => p.id === selectedPlanId) || null,
@@ -560,26 +659,41 @@ export default function ClientePlanPage() {
     [horaInicio, duracionMin]
   )
 
-  const montoBase = usarPrecioPlan ? selectedPlan?.precio || 0 : Number(montoPersonalizado || 0)
-  const tasaBCVNum = Number(tasaCongelada || 0)
-  const montoCalculadoBs = esBs
-    ? montoBsPersonalizado && montoBsPersonalizado > 0
-      ? montoBsPersonalizado
-      : montoBase > 0 && tasaBCVNum > 0
-        ? montoBase * tasaBCVNum
-        : 0
-    : 0
+  const montoBase = useMemo(
+    () => (usarPrecioPlan ? selectedPlan?.precio || 0 : Number(montoPersonalizado || 0)),
+    [usarPrecioPlan, selectedPlan, montoPersonalizado]
+  )
+
+  const porcentajeRpmPlan = useMemo(() => {
+    const base = Number(selectedPlan?.comision_base ?? selectedPlan?.precio ?? 0)
+    const rpm = Number(selectedPlan?.comision_rpm ?? 0)
+    if (!base) return 0
+    return r2((rpm / base) * 100)
+  }, [selectedPlan])
+
+  const porcentajeEntrenadorPlan = useMemo(() => {
+    const base = Number(selectedPlan?.comision_base ?? selectedPlan?.precio ?? 0)
+    const entrenador = Number(selectedPlan?.comision_entrenador ?? 0)
+    if (!base) return 0
+    return r2((entrenador / base) * 100)
+  }, [selectedPlan])
+
+  const baseComisionAplicada = useMemo(() => {
+    return usarPrecioPlan ? Number(selectedPlan?.comision_base ?? selectedPlan?.precio ?? 0) : montoBase
+  }, [usarPrecioPlan, selectedPlan, montoBase])
+
+  const montoRpmAplicado = useMemo(() => {
+    return r2((baseComisionAplicada * porcentajeRpmPlan) / 100)
+  }, [baseComisionAplicada, porcentajeRpmPlan])
+
+  const montoEntrenadorAplicado = useMemo(() => {
+    return r2((baseComisionAplicada * porcentajeEntrenadorPlan) / 100)
+  }, [baseComisionAplicada, porcentajeEntrenadorPlan])
+
 
   const sesionesRestantes = planActivo
     ? Math.max(Number(planActivo.sesiones_totales) - Number(planActivo.sesiones_usadas), 0)
     : 0
-
-  const sesionesARenovar = useMemo(() => {
-    if (!selectedPlan) return 0
-    return renovarConPendientes === 'si'
-      ? selectedPlan.sesiones_totales + sesionesRestantes
-      : selectedPlan.sesiones_totales
-  }, [selectedPlan, renovarConPendientes, sesionesRestantes])
 
   const progresoUso = planActivo
     ? Math.min(
@@ -599,11 +713,12 @@ export default function ClientePlanPage() {
 
   const planificacionPreview = useMemo(() => {
     if (!selectedPlan || !fechaInicio || !diasSemana.length || !totalPreviewSesiones) return null
-    return calcularPlanificacionSesiones(fechaInicio, diasSemana, totalPreviewSesiones, selectedPlan.vigencia_dias)
+    return calcularPlanificacionSesiones(fechaInicio, diasSemana, totalPreviewSesiones, selectedPlan.vigencia_valor, selectedPlan.vigencia_tipo)
   }, [selectedPlan, fechaInicio, diasSemana, totalPreviewSesiones])
 
   const fechaFinPreview = useMemo(() => planificacionPreview?.fechaFinPlan || null, [planificacionPreview])
   const fechasPreview = useMemo(() => planificacionPreview?.fechas || [], [planificacionPreview])
+
   const faltanSesionesPreview = useMemo(() => {
     if (!planificacionPreview) return 0
     return Math.max(planificacionPreview.sesionesSolicitadas - planificacionPreview.fechas.length, 0)
@@ -611,35 +726,6 @@ export default function ClientePlanPage() {
 
   function toggleDia(dia: number) {
     setDiasSemana((prev) => (prev.includes(dia) ? prev.filter((d) => d !== dia) : [...prev, dia]))
-  }
-
-  function r2(v: number) { return Math.round(v * 100) / 100 }
-  function nn(v: string) {
-    const n = Number(v)
-    return Number.isFinite(n) && n >= 0 ? n : 0
-  }
-
-  function handleBaseComisionChange(value: string) {
-    setMontoBaseComision(value)
-    const base = r2(nn(value))
-    if (!base) { setMontoRpm(''); setMontoEntrenador(''); return }
-    const rpm = Math.min(r2(nn(montoRpm)), base)
-    setMontoRpm(String(rpm))
-    setMontoEntrenador(String(r2(base - rpm)))
-  }
-
-  function handleMontoRpmChange(value: string) {
-    setMontoRpm(value)
-    const base = r2(nn(montoBaseComision || String(selectedPlan?.precio || 0)))
-    const rpm = Math.min(r2(nn(value)), base)
-    setMontoEntrenador(String(r2(Math.max(base - rpm, 0))))
-  }
-
-  function handleMontoEntrenadorChange(value: string) {
-    setMontoEntrenador(value)
-    const base = r2(nn(montoBaseComision || String(selectedPlan?.precio || 0)))
-    const ent = Math.min(r2(nn(value)), base)
-    setMontoRpm(String(r2(Math.max(base - ent, 0))))
   }
 
   function resetForm() {
@@ -650,29 +736,29 @@ export default function ClientePlanPage() {
     setDiasSemana([])
     setHoraInicio('')
     setDuracionMin(60)
-    setMetodoPagoId('')
+    setRegistrarPago(true)
     setUsarPrecioPlan(true)
     setMontoPersonalizado('')
-    setRegistrarPago(true)
-    setEsBs(false)
-    setTasaCongelada(null)
-    setMontoBsPersonalizado(null)
-    setNotasPago('')
+    setNotasPagoGenerales('')
+    setPagosMixtos([makePagoItem('USD')])
     setMotivoCancelacion('')
     setPagoAlCancelar(null)
     setFechaVistaCal(getTodayLocal())
     setErrorMsg('')
     setSuccessMsg('')
-    setMontoBaseComision('')
-    setMontoRpm('')
-    setMontoEntrenador('')
     setRenovarConPendientes('si')
   }
 
-
   async function crearPlanInline() {
-    if (!nuevoPlanNombre.trim()) { alert('Ingresa el nombre del plan.'); return }
-    if (!nuevoPlanPrecio || Number(nuevoPlanPrecio) <= 0) { alert('Ingresa un precio válido.'); return }
+    if (!nuevoPlanNombre.trim()) {
+      alert('Ingresa el nombre del plan.')
+      return
+    }
+    if (!nuevoPlanPrecio || Number(nuevoPlanPrecio) <= 0) {
+      alert('Ingresa un precio válido.')
+      return
+    }
+
     setCreandoPlan(true)
     try {
       const { data: plan, error } = await supabase
@@ -680,24 +766,27 @@ export default function ClientePlanPage() {
         .insert({
           nombre: nuevoPlanNombre.trim(),
           sesiones_totales: nuevoPlanSesiones,
-          vigencia_dias: nuevoPlanVigencia,
+          vigencia_valor: nuevoPlanVigencia,
+          vigencia_tipo: nuevoPlanVigenciaTipo,
           precio: Number(nuevoPlanPrecio),
+          comision_base: Number(nuevoPlanPrecio),
+          comision_rpm: r2(Number(nuevoPlanPrecio) * 0.35),
+          comision_entrenador: r2(Number(nuevoPlanPrecio) * 0.65),
           estado: 'activo',
         })
-        .select('id, nombre, sesiones_totales, vigencia_dias, precio, estado, descripcion')
+        .select('id, nombre, sesiones_totales, vigencia_valor, vigencia_tipo, precio, estado, descripcion, comision_base, comision_rpm, comision_entrenador')
         .single()
+
       if (error) throw new Error(error.message)
+
       setPlanes((prev) => [...prev, plan as Plan].sort((a, b) => a.nombre.localeCompare(b.nombre)))
       setSelectedPlanId(plan.id)
-      const base = r2(Number(plan.precio))
-      const rpmI = r2(base * 0.35)
-      setMontoBaseComision(String(base))
-      setMontoRpm(String(rpmI))
-      setMontoEntrenador(String(r2(base - rpmI)))
+
       setMostrarCrearPlan(false)
       setNuevoPlanNombre('')
       setNuevoPlanSesiones(12)
       setNuevoPlanVigencia(30)
+      setNuevoPlanVigenciaTipo('dias')
       setNuevoPlanPrecio('')
     } catch (err: any) {
       alert(err?.message || 'Error al crear el plan.')
@@ -707,8 +796,13 @@ export default function ClientePlanPage() {
   }
 
   async function registrarComision(
-    clientePlanId: string, empId: string, clienteIdValue: string,
-    base: number, fecha: string, rpm: number, profesional: number
+    clientePlanId: string,
+    empId: string,
+    clienteIdValue: string,
+    base: number,
+    fecha: string,
+    rpm: number,
+    profesional: number
   ) {
     try {
       const { data: existente } = await supabase
@@ -719,42 +813,77 @@ export default function ClientePlanPage() {
         .eq('tipo', 'plan')
         .limit(1)
         .maybeSingle()
+
       if (existente?.id) return
+
       const { error } = await supabase.from('comisiones_detalle').insert({
-        empleado_id: empId, cliente_id: clienteIdValue, cliente_plan_id: clientePlanId,
-        fecha, base, profesional, rpm, tipo: 'plan', estado: 'pendiente',
+        empleado_id: empId,
+        cliente_id: clienteIdValue,
+        cliente_plan_id: clientePlanId,
+        fecha,
+        base,
+        profesional,
+        rpm,
+        tipo: 'plan',
+        estado: 'pendiente',
       })
+
       if (error) console.error('❌ Error comisión:', error.message)
-    } catch (err) { console.error('❌', err) }
+    } catch (err) {
+      console.error('❌', err)
+    }
   }
 
   async function cancelarPlanAnterior(planId: string, detalle: string) {
     await supabase.from('clientes_planes').update({ estado: 'cancelado' }).eq('id', planId)
+
     await supabase.from('entrenamientos').update({ estado: 'cancelado' })
-      .eq('cliente_plan_id', planId).eq('estado', 'programado')
+      .eq('cliente_plan_id', planId)
+      .eq('estado', 'programado')
+
     const { data: eventoExistente } = await supabase
-      .from('clientes_planes_eventos').select('id')
-      .eq('cliente_plan_id', planId).eq('cliente_id', id)
-      .eq('tipo', 'cancelado').eq('detalle', detalle)
-      .limit(1).maybeSingle()
+      .from('clientes_planes_eventos')
+      .select('id')
+      .eq('cliente_plan_id', planId)
+      .eq('cliente_id', id)
+      .eq('tipo', 'cancelado')
+      .eq('detalle', detalle)
+      .limit(1)
+      .maybeSingle()
+
     if (!eventoExistente?.id) {
       await supabase.from('clientes_planes_eventos').insert({
-        cliente_plan_id: planId, cliente_id: id, tipo: 'cancelado', detalle,
+        cliente_plan_id: planId,
+        cliente_id: id,
+        tipo: 'cancelado',
+        detalle,
       })
     }
   }
 
   function buildEntrenamientosPayload(
-    fechas: string[], clientePlanId: string, empleadoIdValue: string,
-    horaInicioValue: string, horaFinValue: string, recursoIdValue: string
+    fechas: string[],
+    clientePlanId: string,
+    empleadoIdValue: string,
+    horaInicioValue: string,
+    horaFinValue: string,
+    recursoIdValue: string
   ) {
     return fechas.map((f) => ({
-      cliente_plan_id: clientePlanId, cliente_id: id, empleado_id: empleadoIdValue,
-      recurso_id: recursoIdValue || null, fecha: f,
-      hora_inicio: horaInicioValue, hora_fin: horaFinValue,
-      estado: 'programado', asistencia_estado: 'pendiente',
-      aviso_previo: false, consume_sesion: false, reprogramable: false,
-      motivo_asistencia: null, reprogramado_de_entrenamiento_id: null,
+      cliente_plan_id: clientePlanId,
+      cliente_id: id,
+      empleado_id: empleadoIdValue,
+      recurso_id: recursoIdValue || null,
+      fecha: f,
+      hora_inicio: horaInicioValue,
+      hora_fin: horaFinValue,
+      estado: 'programado',
+      asistencia_estado: 'pendiente',
+      aviso_previo: false,
+      consume_sesion: false,
+      reprogramable: false,
+      motivo_asistencia: null,
+      reprogramado_de_entrenamiento_id: null,
     }))
   }
 
@@ -763,93 +892,239 @@ export default function ClientePlanPage() {
   }
 
   async function ensureEntrenamientos(
-    clientePlanId: string, fechas: string[], empleadoIdValue: string,
-    horaInicioValue: string, horaFinValue: string, recursoIdValue: string
+    clientePlanId: string,
+    fechas: string[],
+    empleadoIdValue: string,
+    horaInicioValue: string,
+    horaFinValue: string,
+    recursoIdValue: string
   ) {
     const { data: existentes, error: existentesError } = await supabase
-      .from('entrenamientos').select('id, fecha, hora_inicio, hora_fin, empleado_id')
+      .from('entrenamientos')
+      .select('id, fecha, hora_inicio, hora_fin, empleado_id')
       .eq('cliente_plan_id', clientePlanId)
+
     if (existentesError) throw new Error(`Entrenamientos: ${existentesError.message}`)
+
     const existentesSet = new Set(
       ((existentes || []) as any[]).map((row) =>
-        buildEntrenamientoKey(String(row.fecha || ''), String(row.hora_inicio || ''), String(row.hora_fin || ''), String(row.empleado_id || ''))
+        buildEntrenamientoKey(
+          String(row.fecha || ''),
+          String(row.hora_inicio || ''),
+          String(row.hora_fin || ''),
+          String(row.empleado_id || '')
+        )
       )
     )
-    const payload = buildEntrenamientosPayload(fechas, clientePlanId, empleadoIdValue, horaInicioValue, horaFinValue, recursoIdValue)
-      .filter((item) => !existentesSet.has(buildEntrenamientoKey(item.fecha, item.hora_inicio, item.hora_fin, item.empleado_id)))
+
+    const payload = buildEntrenamientosPayload(
+      fechas,
+      clientePlanId,
+      empleadoIdValue,
+      horaInicioValue,
+      horaFinValue,
+      recursoIdValue
+    ).filter((item) => !existentesSet.has(buildEntrenamientoKey(item.fecha, item.hora_inicio, item.hora_fin, item.empleado_id)))
+
     if (!payload.length) return
+
     const { error } = await supabase.from('entrenamientos').insert(payload)
     if (error) throw new Error(`Entrenamientos: ${error.message}`)
   }
 
-  async function ensurePagoPlan(params: {
-    fecha: string; clientePlanId: string; concepto: string
-    monto: number; metodoPagoIdValue: string; notas: string
-    tasaBCV?: number | null; montoEquivalenteUsd?: number | null; montoEquivalenteBs?: number | null; monedaPago?: 'USD' | 'BS'
-  }) {
-    const {
-      fecha,
-      clientePlanId,
-      concepto,
-      monto,
-      metodoPagoIdValue,
-      notas,
-      tasaBCV,
-      montoEquivalenteUsd,
-      montoEquivalenteBs,
-      monedaPago,
-    } = params
-    const { data: existente, error: existenteError } = await supabase
-      .from('pagos').select('id')
-      .eq('tipo_origen', 'plan').eq('cliente_id', id).eq('cliente_plan_id', clientePlanId)
-      .eq('metodo_pago_id', metodoPagoIdValue).eq('monto', monto).eq('fecha', fecha)
-      .limit(1).maybeSingle()
-    if (existenteError) throw new Error(`Pago: ${existenteError.message}`)
-    if (existente?.id) return
-    const { error } = await supabase.from('pagos').insert({
-      fecha,
-      tipo_origen: 'plan',
-      cliente_id: id,
-      cliente_plan_id: clientePlanId,
-      concepto,
-      categoria: 'plan',
-      monto,
-      monto_pago: monto,
-      moneda_pago: monedaPago || (tasaBCV ? 'BS' : 'USD'),
-      tasa_bcv: tasaBCV ?? null,
-      monto_equivalente_usd: montoEquivalenteUsd ?? null,
-      monto_equivalente_bs: montoEquivalenteBs ?? null,
-      metodo_pago_id: metodoPagoIdValue,
-      estado: 'pagado',
-      notas: notas || null,
+  function getMetodosForMoneda(moneda: 'USD' | 'BS') {
+    return moneda === 'USD'
+      ? metodosPago.filter((m) => detectarMetodoUsd(m))
+      : metodosPago.filter((m) => detectarMetodoBs(m))
+  }
+
+  function updatePagoItem(idLocal: string, patch: Partial<PagoMixtoItem>) {
+    setPagosMixtos((prev) =>
+      prev.map((item) => (item.id_local === idLocal ? { ...item, ...patch } : item))
+    )
+  }
+
+  function addPagoItem(moneda: 'USD' | 'BS' = 'USD') {
+    setPagosMixtos((prev) => [...prev, makePagoItem(moneda)])
+  }
+
+  function removePagoItem(idLocal: string) {
+    setPagosMixtos((prev) => {
+      if (prev.length <= 1) return prev
+      return prev.filter((item) => item.id_local !== idLocal)
     })
+  }
+
+  const handlePagoBsTasaChange = useCallback((idLocal: string, tasa: number | null) => {
+    setPagosMixtos((prev) =>
+      prev.map((item) =>
+        item.id_local === idLocal
+          ? { ...item, tasa_bcv: tasa }
+          : item
+      )
+    )
+  }, [])
+
+  const handlePagoBsMontoChange = useCallback((idLocal: string, monto: number) => {
+    setPagosMixtos((prev) =>
+      prev.map((item) =>
+        item.id_local === idLocal
+          ? { ...item, monto_bs: monto }
+          : item
+      )
+    )
+  }, [])
+
+  const resumenPagos = useMemo(() => {
+    const items = pagosMixtos.map((item) => {
+      const montoUsdEq =
+        item.moneda_pago === 'USD'
+          ? r2(Number(item.monto_usd || 0))
+          : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+            ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+            : 0
+
+      const montoBs =
+        item.moneda_pago === 'BS'
+          ? r2(Number(item.monto_bs || 0))
+          : Number(item.tasa_bcv || 0) > 0 && Number(item.monto_usd || 0) > 0
+            ? r2(Number(item.monto_usd || 0) * Number(item.tasa_bcv || 0))
+            : 0
+
+      return {
+        ...item,
+        monto_equivalente_usd: montoUsdEq,
+        monto_equivalente_bs: montoBs > 0 ? montoBs : null,
+        monto_insertar:
+          item.moneda_pago === 'BS'
+            ? r2(Number(item.monto_bs || 0))
+            : r2(Number(item.monto_usd || 0)),
+        valido:
+          !!item.metodo_pago_v2_id &&
+          (
+            item.moneda_pago === 'USD'
+              ? Number(item.monto_usd || 0) > 0
+              : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+          ),
+      }
+    })
+
+    const totalUsd = r2(
+      items.reduce((acc, item) => acc + Number(item.monto_equivalente_usd || 0), 0)
+    )
+    const totalBs = r2(
+      items.reduce((acc, item) => acc + Number(item.monto_equivalente_bs || 0), 0)
+    )
+    const faltanteUsd = r2(Math.max(montoBase - totalUsd, 0))
+    const excedenteUsd = r2(Math.max(totalUsd - montoBase, 0))
+    const diferenciaUsd = r2(montoBase - totalUsd)
+
+    return {
+      items,
+      totalUsd,
+      totalBs,
+      faltanteUsd,
+      excedenteUsd,
+      diferenciaUsd,
+      cuadra: Math.abs(diferenciaUsd) < 0.01 && montoBase > 0,
+      todosValidos: items.every((item) => item.valido),
+    }
+  }, [pagosMixtos, montoBase])
+
+  async function registrarPagoMixtoPlan(params: {
+    fecha: string
+    clientePlanId: string
+    concepto: string
+    notasGenerales: string
+  }) {
+    const { fecha, clientePlanId, concepto, notasGenerales } = params
+
+    const pagosRpcPayload = resumenPagos.items.map((item) => ({
+      metodo_pago_v2_id: item.metodo_pago_v2_id,
+      moneda_pago: item.moneda_pago,
+      monto: item.monto_insertar,
+      tasa_bcv: item.moneda_pago === 'BS' ? item.tasa_bcv : item.tasa_bcv || null,
+      referencia: item.referencia || null,
+      notas: item.notas || null,
+    }))
+
+    const { error } = await supabase.rpc('registrar_pagos_mixtos', {
+      p_fecha: fecha,
+      p_tipo_origen: 'plan',
+      p_categoria: 'plan',
+      p_concepto: concepto,
+      p_cliente_id: id,
+      p_cita_id: null,
+      p_cliente_plan_id: clientePlanId,
+      p_cuenta_cobrar_id: null,
+      p_inventario_id: null,
+      p_registrado_por: null,
+      p_notas_generales: notasGenerales || null,
+      p_pagos: pagosRpcPayload,
+    })
+
     if (error) throw new Error(`Pago: ${error.message}`)
   }
 
   async function handleAsignar(e: React.FormEvent) {
     e.preventDefault()
     if (assigningRef.current || saving) return
-    setErrorMsg(''); setSuccessMsg('')
 
-    if (!selectedPlanId) { setErrorMsg('Selecciona un plan.'); return }
-    if (!fechaInicio) { setErrorMsg('Selecciona fecha de inicio.'); return }
-    if (!empleadoId) { setErrorMsg('Selecciona un fisioterapeuta.'); return }
-    if (!diasSemana.length) { setErrorMsg('Selecciona al menos un día.'); return }
-    if (!horaInicio) { setErrorMsg('Selecciona la hora.'); return }
-    if (registrarPago && !metodoPagoId) { setErrorMsg('Selecciona método de pago.'); return }
-    if (registrarPago && esBs && tasaBCVNum <= 0) { setErrorMsg('Selecciona una tasa BCV válida.'); return }
+    setErrorMsg('')
+    setSuccessMsg('')
 
-    const plan = selectedPlan!
-    const baseC = r2(nn(montoBaseComision || String(plan.precio || 0)))
-    const rpmV = r2(nn(montoRpm))
-    const entV = r2(nn(montoEntrenador))
-
-    if (baseC > 0 && r2(rpmV + entV) !== baseC) {
-      setErrorMsg(`La suma RPM (${formatMoney(rpmV)}) + Entrenador (${formatMoney(entV)}) debe ser igual a la base (${formatMoney(baseC)}). Ajusta los valores.`)
+    if (!selectedPlanId) {
+      setErrorMsg('Selecciona un plan.')
+      return
+    }
+    if (!fechaInicio) {
+      setErrorMsg('Selecciona fecha de inicio.')
+      return
+    }
+    if (!empleadoId) {
+      setErrorMsg('Selecciona un fisioterapeuta.')
+      return
+    }
+    if (!diasSemana.length) {
+      setErrorMsg('Selecciona al menos un día.')
+      return
+    }
+    if (!horaInicio) {
+      setErrorMsg('Selecciona la hora.')
       return
     }
 
-    const planificacion = calcularPlanificacionSesiones(fechaInicio, diasSemana, plan.sesiones_totales, plan.vigencia_dias)
+    if (registrarPago) {
+      if (montoBase <= 0) {
+        setErrorMsg('El monto del plan debe ser mayor a 0.')
+        return
+      }
+      if (!resumenPagos.todosValidos) {
+        setErrorMsg('Completa correctamente todos los fragmentos del pago mixto.')
+        return
+      }
+      if (!resumenPagos.cuadra) {
+        setErrorMsg(
+          `La suma de pagos no cuadra. Objetivo: ${formatMoney(montoBase)} | Registrado: ${formatMoney(
+            resumenPagos.totalUsd
+          )} | Faltante: ${formatMoney(resumenPagos.faltanteUsd)}`
+        )
+        return
+      }
+    }
+
+    const plan = selectedPlan!
+    const baseC = baseComisionAplicada
+    const rpmV = montoRpmAplicado
+    const entV = montoEntrenadorAplicado
+
+    const planificacion = calcularPlanificacionSesiones(
+      fechaInicio,
+      diasSemana,
+      plan.sesiones_totales,
+      plan.vigencia_valor,
+      plan.vigencia_tipo
+    )
     if (!planificacion.alcanzaVigencia) {
       setErrorMsg(`No caben ${plan.sesiones_totales} sesiones dentro de la vigencia del plan. Solo se pudieron ubicar ${planificacion.sesionesPosibles} entre ${formatDate(fechaInicio)} y ${formatDate(planificacion.fechaFinPlan)}.`)
       return
@@ -857,77 +1132,126 @@ export default function ClientePlanPage() {
 
     assigningRef.current = true
     setSaving(true)
+
     try {
-      if (planActivo) await cancelarPlanAnterior(planActivo.id, 'Reemplazado manualmente por asignación de un nuevo plan')
+      if (planActivo) {
+        await cancelarPlanAnterior(planActivo.id, 'Reemplazado manualmente por asignación de un nuevo plan')
+      }
 
       const { data: np, error: cpE } = await supabase.from('clientes_planes').insert({
-        cliente_id: id, plan_id: plan.id, sesiones_totales: plan.sesiones_totales,
-        sesiones_usadas: 0, fecha_inicio: fechaInicio, fecha_fin: planificacion.fechaFinPlan, estado: 'activo',
+        cliente_id: id,
+        plan_id: plan.id,
+        sesiones_totales: plan.sesiones_totales,
+        sesiones_usadas: 0,
+        fecha_inicio: fechaInicio,
+        fecha_fin: planificacion.fechaFinPlan,
+        estado: 'activo',
       }).select('id').single()
+
       if (cpE) throw new Error(cpE.message)
 
       const hiN = horaInicio.length === 5 ? `${horaInicio}:00` : horaInicio
       const hfN = horaFin.length === 5 ? `${horaFin}:00` : horaFin
+
       await ensureEntrenamientos(np.id, planificacion.fechas, empleadoId, hiN, hfN, recursoId)
 
       if (registrarPago && montoBase > 0) {
-        const mF = esBs ? montoCalculadoBs : montoBase
-        const concepto = esBs
-          ? `Plan: ${plan.nombre} — ${cliente?.nombre} (${formatMoney(montoBase)} × ${tasaCongelada} = ${formatBs(montoCalculadoBs)})`
-          : `Plan: ${plan.nombre} — ${cliente?.nombre}`
-        await ensurePagoPlan({
+        const concepto = `Plan: ${plan.nombre} — ${cliente?.nombre || 'Cliente'}`
+        await registrarPagoMixtoPlan({
           fecha: fechaInicio,
           clientePlanId: np.id,
           concepto,
-          monto: mF,
-          metodoPagoIdValue: metodoPagoId,
-          notas: notasPago,
-          tasaBCV: esBs ? tasaCongelada : null,
-          montoEquivalenteUsd: esBs ? montoBase : mF,
-          montoEquivalenteBs: esBs ? mF : null,
-          monedaPago: esBs ? 'BS' : 'USD',
+          notasGenerales: notasPagoGenerales,
         })
       }
 
-      if (baseC > 0) await registrarComision(np.id, empleadoId, id, baseC, fechaInicio, rpmV, entV)
+      if (baseC > 0) {
+        await registrarComision(np.id, empleadoId, id, baseC, fechaInicio, rpmV, entV)
+      }
 
       const porcRpm = baseC > 0 ? r2((rpmV / baseC) * 100) : 0
-      await supabase.from('clientes_planes').update({ origen: 'manual', porcentaje_rpm: porcRpm, monto_base_comision: baseC }).eq('id', np.id)
+
+      await supabase
+        .from('clientes_planes')
+        .update({
+          origen: 'manual',
+          porcentaje_rpm: porcRpm,
+          monto_base_comision: baseC,
+        })
+        .eq('id', np.id)
 
       setSuccessMsg(`Plan "${plan.nombre}" asignado. ${planificacion.fechas.length} entrenamientos generados.`)
-      resetForm(); setModo(null); await fetchAll()
+      resetForm()
+      setModo(null)
+      await fetchAll()
     } catch (err: any) {
       setErrorMsg(err?.message || 'Error al asignar el plan.')
     } finally {
-      setSaving(false); assigningRef.current = false
+      setSaving(false)
+      assigningRef.current = false
     }
   }
 
   async function handleRenovar(e: React.FormEvent) {
     e.preventDefault()
     if (renewingRef.current || saving) return
-    setErrorMsg(''); setSuccessMsg('')
 
-    if (!selectedPlanId) { setErrorMsg('Selecciona un plan.'); return }
-    if (!fechaInicio) { setErrorMsg('Selecciona fecha de inicio.'); return }
-    if (!empleadoId) { setErrorMsg('Selecciona un fisioterapeuta.'); return }
-    if (!diasSemana.length) { setErrorMsg('Selecciona al menos un día.'); return }
-    if (!horaInicio) { setErrorMsg('Selecciona la hora.'); return }
-    if (registrarPago && !metodoPagoId) { setErrorMsg('Selecciona método de pago.'); return }
-    if (registrarPago && esBs && tasaBCVNum <= 0) { setErrorMsg('Selecciona una tasa BCV válida.'); return }
+    setErrorMsg('')
+    setSuccessMsg('')
 
-    const plan = selectedPlan!
-    const sesN = renovarConPendientes === 'si' ? plan.sesiones_totales + sesionesRestantes : plan.sesiones_totales
-    const baseC = r2(nn(montoBaseComision || String(plan.precio || 0)))
-    const rpmV = r2(nn(montoRpm))
-    const entV = r2(nn(montoEntrenador))
-
-    if (baseC > 0 && r2(rpmV + entV) !== baseC) {
-      setErrorMsg(`La suma RPM (${formatMoney(rpmV)}) + Entrenador (${formatMoney(entV)}) debe ser igual a la base (${formatMoney(baseC)}).`)
+    if (!selectedPlanId) {
+      setErrorMsg('Selecciona un plan.')
+      return
+    }
+    if (!fechaInicio) {
+      setErrorMsg('Selecciona fecha de inicio.')
+      return
+    }
+    if (!empleadoId) {
+      setErrorMsg('Selecciona un fisioterapeuta.')
+      return
+    }
+    if (!diasSemana.length) {
+      setErrorMsg('Selecciona al menos un día.')
+      return
+    }
+    if (!horaInicio) {
+      setErrorMsg('Selecciona la hora.')
       return
     }
 
-    const planificacion = calcularPlanificacionSesiones(fechaInicio, diasSemana, sesN, plan.vigencia_dias)
+    if (registrarPago) {
+      if (montoBase <= 0) {
+        setErrorMsg('El monto del plan debe ser mayor a 0.')
+        return
+      }
+      if (!resumenPagos.todosValidos) {
+        setErrorMsg('Completa correctamente todos los fragmentos del pago mixto.')
+        return
+      }
+      if (!resumenPagos.cuadra) {
+        setErrorMsg(
+          `La suma de pagos no cuadra. Objetivo: ${formatMoney(montoBase)} | Registrado: ${formatMoney(
+            resumenPagos.totalUsd
+          )} | Faltante: ${formatMoney(resumenPagos.faltanteUsd)}`
+        )
+        return
+      }
+    }
+
+    const plan = selectedPlan!
+    const sesN = renovarConPendientes === 'si' ? plan.sesiones_totales + sesionesRestantes : plan.sesiones_totales
+    const baseC = baseComisionAplicada
+    const rpmV = montoRpmAplicado
+    const entV = montoEntrenadorAplicado
+
+    const planificacion = calcularPlanificacionSesiones(
+      fechaInicio,
+      diasSemana,
+      sesN,
+      plan.vigencia_valor,
+      plan.vigencia_tipo
+    )
     if (!planificacion.alcanzaVigencia) {
       setErrorMsg(`No caben ${sesN} sesiones dentro de la vigencia del plan. Solo se pudieron ubicar ${planificacion.sesionesPosibles} entre ${formatDate(fechaInicio)} y ${formatDate(planificacion.fechaFinPlan)}.`)
       return
@@ -935,6 +1259,7 @@ export default function ClientePlanPage() {
 
     renewingRef.current = true
     setSaving(true)
+
     try {
       if (planActivo) {
         const detalleRenovacion = renovarConPendientes === 'si'
@@ -944,88 +1269,131 @@ export default function ClientePlanPage() {
       }
 
       const { data: np, error: cpE } = await supabase.from('clientes_planes').insert({
-        cliente_id: id, plan_id: plan.id, sesiones_totales: sesN,
-        sesiones_usadas: 0, fecha_inicio: fechaInicio, fecha_fin: planificacion.fechaFinPlan, estado: 'activo',
+        cliente_id: id,
+        plan_id: plan.id,
+        sesiones_totales: sesN,
+        sesiones_usadas: 0,
+        fecha_inicio: fechaInicio,
+        fecha_fin: planificacion.fechaFinPlan,
+        estado: 'activo',
       }).select('id').single()
+
       if (cpE) throw new Error(cpE.message)
 
       const hiN = horaInicio.length === 5 ? `${horaInicio}:00` : horaInicio
       const hfN = horaFin.length === 5 ? `${horaFin}:00` : horaFin
+
       await ensureEntrenamientos(np.id, planificacion.fechas, empleadoId, hiN, hfN, recursoId)
 
       if (registrarPago && montoBase > 0) {
-        const mF = esBs ? montoCalculadoBs : montoBase
-        const sesionesTxt = renovarConPendientes === 'si'
-          ? `Renovación: ${plan.nombre} — ${cliente?.nombre} (+${sesionesRestantes} pendientes)`
-          : `Renovación: ${plan.nombre} — ${cliente?.nombre} (sin pendientes)`
-        const concepto = esBs
-          ? `${sesionesTxt} (${formatMoney(montoBase)} × ${tasaCongelada} = ${formatBs(montoCalculadoBs)})`
-          : sesionesTxt
-        await ensurePagoPlan({
+        const concepto =
+          renovarConPendientes === 'si'
+            ? `Renovación: ${plan.nombre} — ${cliente?.nombre || 'Cliente'} (+${sesionesRestantes} pendientes)`
+            : `Renovación: ${plan.nombre} — ${cliente?.nombre || 'Cliente'} (sin pendientes)`
+
+        await registrarPagoMixtoPlan({
           fecha: fechaInicio,
           clientePlanId: np.id,
           concepto,
-          monto: mF,
-          metodoPagoIdValue: metodoPagoId,
-          notas: notasPago,
-          tasaBCV: esBs ? tasaCongelada : null,
-          montoEquivalenteUsd: esBs ? montoBase : mF,
-          montoEquivalenteBs: esBs ? mF : null,
-          monedaPago: esBs ? 'BS' : 'USD',
+          notasGenerales: notasPagoGenerales,
         })
       }
 
-      if (baseC > 0) await registrarComision(np.id, empleadoId, id, baseC, fechaInicio, rpmV, entV)
+      if (baseC > 0) {
+        await registrarComision(np.id, empleadoId, id, baseC, fechaInicio, rpmV, entV)
+      }
 
       const porcRpm = baseC > 0 ? r2((rpmV / baseC) * 100) : 0
-      await supabase.from('clientes_planes').update({ origen: 'manual', porcentaje_rpm: porcRpm, monto_base_comision: baseC }).eq('id', np.id)
+
+      await supabase
+        .from('clientes_planes')
+        .update({
+          origen: 'manual',
+          porcentaje_rpm: porcRpm,
+          monto_base_comision: baseC,
+        })
+        .eq('id', np.id)
 
       setSuccessMsg(
         renovarConPendientes === 'si'
           ? `Plan renovado. Se conservaron ${sesionesRestantes} sesiones pendientes. Total nuevo: ${sesN} sesiones.`
           : `Plan renovado sin arrastrar sesiones pendientes. Total nuevo: ${sesN} sesiones.`
       )
-      resetForm(); setModo(null); await fetchAll()
+
+      resetForm()
+      setModo(null)
+      await fetchAll()
     } catch (err: any) {
       setErrorMsg(err?.message || 'Error al renovar.')
     } finally {
-      setSaving(false); renewingRef.current = false
+      setSaving(false)
+      renewingRef.current = false
     }
   }
 
   async function handleCancelar(e: React.FormEvent) {
     e.preventDefault()
     if (cancellingRef.current || saving) return
-    setErrorMsg(''); setSuccessMsg('')
 
-    if (!motivoCancelacion) { setErrorMsg('Selecciona el motivo.'); return }
-    if (pagoAlCancelar === null) { setErrorMsg('Indica si el cliente realizó el pago.'); return }
-    if (!planActivo) { setErrorMsg('No hay plan activo.'); return }
+    setErrorMsg('')
+    setSuccessMsg('')
+
+    if (!motivoCancelacion) {
+      setErrorMsg('Selecciona el motivo.')
+      return
+    }
+    if (pagoAlCancelar === null) {
+      setErrorMsg('Indica si el cliente realizó el pago.')
+      return
+    }
+    if (!planActivo) {
+      setErrorMsg('No hay plan activo.')
+      return
+    }
 
     cancellingRef.current = true
     setSaving(true)
+
     try {
       await supabase.from('clientes_planes').update({ estado: 'cancelado' }).eq('id', planActivo.id)
+
       await supabase.from('entrenamientos').update({ estado: 'cancelado' })
-        .eq('cliente_plan_id', planActivo.id).eq('estado', 'programado')
+        .eq('cliente_plan_id', planActivo.id)
+        .eq('estado', 'programado')
 
       const detalle = `${motivoCancelacion} | pago:${pagoAlCancelar}`
+
       const { data: eventoExistente } = await supabase
-        .from('clientes_planes_eventos').select('id')
-        .eq('cliente_plan_id', planActivo.id).eq('cliente_id', id)
-        .eq('tipo', 'cancelado').eq('detalle', detalle)
-        .limit(1).maybeSingle()
+        .from('clientes_planes_eventos')
+        .select('id')
+        .eq('cliente_plan_id', planActivo.id)
+        .eq('cliente_id', id)
+        .eq('tipo', 'cancelado')
+        .eq('detalle', detalle)
+        .limit(1)
+        .maybeSingle()
+
       if (!eventoExistente?.id) {
         await supabase.from('clientes_planes_eventos').insert({
-          cliente_plan_id: planActivo.id, cliente_id: id, tipo: 'cancelado', detalle,
+          cliente_plan_id: planActivo.id,
+          cliente_id: id,
+          tipo: 'cancelado',
+          detalle,
         })
       }
 
       if (pagoAlCancelar === 'no') {
-        await supabase.from('pagos').update({ estado: 'anulado', notas: 'Anulado por cancelación de plan sin pago confirmado' })
-          .eq('cliente_plan_id', planActivo.id).eq('estado', 'pagado')
-        await supabase.from('comisiones_detalle').delete()
-          .eq('cliente_plan_id', planActivo.id).eq('estado', 'pendiente')
+        await supabase
+          .from('pagos')
+          .update({ estado: 'anulado', notas: 'Anulado por cancelación de plan sin pago confirmado' })
+          .eq('cliente_plan_id', planActivo.id)
+          .eq('estado', 'pagado')
+
+        await supabase
+          .from('comisiones_detalle')
+          .delete()
+          .eq('cliente_plan_id', planActivo.id)
+          .eq('estado', 'pendiente')
       }
 
       setSuccessMsg(
@@ -1033,20 +1401,328 @@ export default function ClientePlanPage() {
           ? 'Plan cancelado. No se arrastrará a futuras renovaciones y quedó sin efecto económico.'
           : 'Plan cancelado. No se arrastrará a futuras renovaciones y el pago/comisión se mantienen.'
       )
-      resetForm(); setModo(null); await fetchAll()
+
+      resetForm()
+      setModo(null)
+      await fetchAll()
     } catch (err: any) {
       setErrorMsg(err?.message || 'Error al cancelar.')
     } finally {
-      setSaving(false); cancellingRef.current = false
+      setSaving(false)
+      cancellingRef.current = false
     }
   }
 
+  function renderPagoMixtoSection() {
+    return (
+      <div className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setRegistrarPago((p) => !p)}
+            className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors ${registrarPago ? 'bg-emerald-500' : 'bg-white/10'}`}
+          >
+            <span
+              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${registrarPago ? 'translate-x-5' : 'translate-x-0'}`}
+            />
+          </button>
+          <span className="text-sm text-white/75">Registrar pago en finanzas</span>
+        </div>
+
+        {registrarPago && (
+          <>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Monto objetivo USD" helper={usarPrecioPlan ? 'Precio del plan' : 'Monto personalizado'}>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={usarPrecioPlan ? (selectedPlan?.precio ?? '') : montoPersonalizado}
+                    readOnly={usarPrecioPlan}
+                    onChange={(e) => setMontoPersonalizado(e.target.value)}
+                    className={`${inputCls} ${usarPrecioPlan ? 'cursor-not-allowed opacity-60' : ''}`}
+                    placeholder="0.00"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setUsarPrecioPlan((p) => !p)}
+                    className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.03] px-3 text-xs text-white/60 hover:bg-white/[0.06]"
+                  >
+                    {usarPrecioPlan ? 'Editar' : 'Plan'}
+                  </button>
+                </div>
+              </Field>
+
+              <Field label="Total registrado USD">
+                <input
+                  type="text"
+                  value={formatMoney(resumenPagos.totalUsd)}
+                  readOnly
+                  className={`${inputCls} cursor-not-allowed opacity-70`}
+                />
+              </Field>
+
+              <div className="md:col-span-2">
+                <Field label="Notas generales del pago (opcional)">
+                  <textarea
+                    value={notasPagoGenerales}
+                    onChange={(e) => setNotasPagoGenerales(e.target.value)}
+                    rows={3}
+                    className={`${inputCls} resize-none`}
+                    placeholder="Notas generales que aplican a toda la operación..."
+                  />
+                </Field>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {pagosMixtos.map((item, index) => {
+                const metodosDisponibles = getMetodosForMoneda(item.moneda_pago)
+                const montoUsdEq =
+                  item.moneda_pago === 'USD'
+                    ? r2(Number(item.monto_usd || 0))
+                    : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+                      ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+                      : 0
+
+                return (
+                  <div
+                    key={item.id_local}
+                    className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"
+                  >
+                    <div className="mb-4 flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-white">Fragmento #{index + 1}</p>
+                        <p className="text-xs text-white/45">
+                          {item.moneda_pago === 'BS'
+                            ? `Equivalente USD calculado: ${formatMoney(montoUsdEq)}`
+                            : `Monto del fragmento: ${formatMoney(montoUsdEq)}`}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => removePagoItem(item.id_local)}
+                        disabled={pagosMixtos.length <= 1}
+                        className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/70 hover:bg-white/[0.06] disabled:opacity-40"
+                      >
+                        Quitar
+                      </button>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <Field label="Moneda">
+                        <select
+                          value={item.moneda_pago}
+                          onChange={(e) =>
+                            updatePagoItem(item.id_local, {
+                              moneda_pago: e.target.value as 'USD' | 'BS',
+                              metodo_pago_v2_id: '',
+                              monto_usd: '',
+                              monto_bs: null,
+                              tasa_bcv: null,
+                            })
+                          }
+                          className={inputCls}
+                        >
+                          <option value="USD" className="bg-[#11131a]">USD</option>
+                          <option value="BS" className="bg-[#11131a]">Bs</option>
+                        </select>
+                      </Field>
+
+                      <Field label={item.moneda_pago === 'USD' ? 'Método USD' : 'Método Bs'}>
+                        <select
+                          value={item.metodo_pago_v2_id}
+                          onChange={(e) =>
+                            updatePagoItem(item.id_local, {
+                              metodo_pago_v2_id: e.target.value,
+                            })
+                          }
+                          className={inputCls}
+                        >
+                          <option value="" className="bg-[#11131a]">Seleccionar</option>
+                          {metodosDisponibles.map((m) => (
+                            <option key={m.id} value={m.id} className="bg-[#11131a]">
+                              {m.nombre}
+                              {m.moneda ? ` · ${m.moneda}` : ''}
+                              {m.tipo ? ` · ${m.tipo}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+
+                      {item.moneda_pago === 'USD' ? (
+                        <Field label="Monto USD">
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={item.monto_usd}
+                            onChange={(e) =>
+                              updatePagoItem(item.id_local, {
+                                monto_usd: e.target.value,
+                              })
+                            }
+                            className={inputCls}
+                            placeholder="0.00"
+                          />
+                        </Field>
+                      ) : (
+                        <Field label="Monto Bs">
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={item.monto_bs ?? ''}
+                            onChange={(e) =>
+                              updatePagoItem(item.id_local, {
+                                monto_bs: e.target.value ? Number(e.target.value) : null,
+                              })
+                            }
+                            className={inputCls}
+                            placeholder="0.00"
+                          />
+                        </Field>
+                      )}
+
+                      {item.moneda_pago === 'BS' && (
+                        <div className="md:col-span-3">
+                          <PagoBsSelector
+                            fecha={fechaInicio}
+                            montoUsd={
+                              Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+                                ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+                                : 0
+                            }
+                            montoBs={item.monto_bs}
+                            onChangeTasa={(tasa) => handlePagoBsTasaChange(item.id_local, tasa)}
+                            onChangeMontoBs={(monto) => handlePagoBsMontoChange(item.id_local, monto)}
+                          />
+                        </div>
+                      )}
+
+                      {item.moneda_pago === 'BS' && (
+                        <div className="md:col-span-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-white/55">Equivalente USD calculado:</span>
+                            <span className="text-white">
+                              {formatMoney(
+                                Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+                                  ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+                                  : 0
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      <Field label="Referencia">
+                        <input
+                          value={item.referencia}
+                          onChange={(e) =>
+                            updatePagoItem(item.id_local, {
+                              referencia: e.target.value,
+                            })
+                          }
+                          className={inputCls}
+                          placeholder="Referencia o comprobante"
+                        />
+                      </Field>
+
+                      <div className="md:col-span-2">
+                        <Field label="Notas del fragmento">
+                          <input
+                            value={item.notas}
+                            onChange={(e) =>
+                              updatePagoItem(item.id_local, {
+                                notas: e.target.value,
+                              })
+                            }
+                            className={inputCls}
+                            placeholder="Notas opcionales..."
+                          />
+                        </Field>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => addPagoItem('USD')}
+                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+              >
+                + Agregar pago USD
+              </button>
+
+              <button
+                type="button"
+                onClick={() => addPagoItem('BS')}
+                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+              >
+                + Agregar pago Bs
+              </button>
+            </div>
+
+            <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
+              <p className="text-sm font-medium text-emerald-300">Resumen del pago</p>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <p className="text-xs text-white/45">Objetivo</p>
+                  <p className="font-semibold text-emerald-400">{formatMoney(montoBase)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-white/45">Total USD</p>
+                  <p className="text-white">{formatMoney(resumenPagos.totalUsd)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-white/45">Total Bs</p>
+                  <p className="text-white">{formatBs(resumenPagos.totalBs)}</p>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                {!resumenPagos.cuadra ? (
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-white/55">Faltante USD:</span>
+                      <span className="font-semibold text-amber-300">
+                        {formatMoney(resumenPagos.faltanteUsd)}
+                      </span>
+                    </div>
+
+                    {resumenPagos.excedenteUsd > 0 && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-white/55">Excedente USD:</span>
+                        <span className="font-semibold text-rose-300">
+                          {formatMoney(resumenPagos.excedenteUsd)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-white/55">Estado:</span>
+                    <span className="font-semibold text-emerald-300">Pago completo</span>
+                  </div>
+                )}
+              </div>
+            </Card>
+          </>
+        )}
+      </div>
+    )
+  }
+
   function renderPlanForm(submitLabel: string, onSubmit: (e: React.FormEvent) => Promise<void>) {
-    const baseV = r2(nn(montoBaseComision || String(selectedPlan?.precio || 0)))
-    const rpmV = r2(nn(montoRpm))
-    const entV = r2(nn(montoEntrenador))
-    const sumaV = r2(rpmV + entV)
-    const desbal = baseV > 0 && sumaV !== baseV
+    const baseV = baseComisionAplicada
+    const rpmV = montoRpmAplicado
+    const entV = montoEntrenadorAplicado
 
     return (
       <form onSubmit={onSubmit} className="space-y-6">
@@ -1057,21 +1733,13 @@ export default function ClientePlanPage() {
                 value={selectedPlanId}
                 onChange={(e) => {
                   setSelectedPlanId(e.target.value)
-                  const p = planes.find((x) => x.id === e.target.value)
-                  if (p) {
-                    const base = r2(Number(p.precio || 0))
-                    const rpmI = r2(base * 0.35)
-                    setMontoBaseComision(String(base))
-                    setMontoRpm(String(rpmI))
-                    setMontoEntrenador(String(r2(base - rpmI)))
-                  }
                 }}
                 className={inputCls}
               >
                 <option value="" className="bg-[#11131a]">Seleccionar plan</option>
                 {planes.map((p) => (
                   <option key={p.id} value={p.id} className="bg-[#11131a]">
-                    {p.nombre} · {p.sesiones_totales} ses. · {formatMoney(p.precio)}
+                    {p.nombre} · {p.sesiones_totales} ses. · {formatVigencia(p.vigencia_valor, p.vigencia_tipo)} · {formatMoney(p.precio)}
                   </option>
                 ))}
               </select>
@@ -1091,28 +1759,60 @@ export default function ClientePlanPage() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="mb-1 block text-xs text-white/55">Nombre</label>
-                    <input value={nuevoPlanNombre} onChange={(e) => setNuevoPlanNombre(e.target.value)} placeholder="Ej: Plan Básico" className={inputCls} />
+                    <input
+                      value={nuevoPlanNombre}
+                      onChange={(e) => setNuevoPlanNombre(e.target.value)}
+                      placeholder="Ej: Plan Básico"
+                      className={inputCls}
+                    />
                   </div>
                   <div>
                     <label className="mb-1 block text-xs text-white/55">Precio ($)</label>
-                    <input type="number" min={0} step="0.01" value={nuevoPlanPrecio} onChange={(e) => setNuevoPlanPrecio(e.target.value)} placeholder="0.00" className={inputCls} />
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={nuevoPlanPrecio}
+                      onChange={(e) => setNuevoPlanPrecio(e.target.value)}
+                      placeholder="0.00"
+                      className={inputCls}
+                    />
                   </div>
                   <div>
                     <label className="mb-1 block text-xs text-white/55">Sesiones</label>
-                    <input type="number" min={1} value={nuevoPlanSesiones} onChange={(e) => setNuevoPlanSesiones(Number(e.target.value))} className={inputCls} />
+                    <input
+                      type="number"
+                      min={1}
+                      value={nuevoPlanSesiones}
+                      onChange={(e) => setNuevoPlanSesiones(Number(e.target.value))}
+                      className={inputCls}
+                    />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs text-white/55">Vigencia (días)</label>
-                    <input type="number" min={1} value={nuevoPlanVigencia} onChange={(e) => setNuevoPlanVigencia(Number(e.target.value))} className={inputCls} />
+                    <label className="mb-1 block text-xs text-white/55">Vigencia</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={nuevoPlanVigencia}
+                      onChange={(e) => setNuevoPlanVigencia(Number(e.target.value))}
+                      className={inputCls}
+                    />
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button type="button" onClick={crearPlanInline} disabled={creandoPlan}
-                    className="rounded-2xl border border-violet-400/20 bg-violet-400/15 px-4 py-2 text-xs font-semibold text-violet-300 transition hover:bg-violet-400/25 disabled:opacity-60">
+                  <button
+                    type="button"
+                    onClick={crearPlanInline}
+                    disabled={creandoPlan}
+                    className="rounded-2xl border border-violet-400/20 bg-violet-400/15 px-4 py-2 text-xs font-semibold text-violet-300 transition hover:bg-violet-400/25 disabled:opacity-60"
+                  >
                     {creandoPlan ? 'Creando...' : 'Crear y seleccionar'}
                   </button>
-                  <button type="button" onClick={() => setMostrarCrearPlan(false)}
-                    className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-medium text-white/60 hover:bg-white/[0.06]">
+                  <button
+                    type="button"
+                    onClick={() => setMostrarCrearPlan(false)}
+                    className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-medium text-white/60 hover:bg-white/[0.06]"
+                  >
                     Cancelar
                   </button>
                 </div>
@@ -1121,7 +1821,12 @@ export default function ClientePlanPage() {
           </Field>
 
           <Field label="Fecha de inicio">
-            <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} className={inputCls} />
+            <input
+              type="date"
+              value={fechaInicio}
+              onChange={(e) => setFechaInicio(e.target.value)}
+              className={inputCls}
+            />
           </Field>
         </div>
 
@@ -1141,13 +1846,22 @@ export default function ClientePlanPage() {
               )}
               <div>
                 <p className="text-xs text-white/45">Total</p>
-                <p className="font-medium text-white">{modo === 'renovar' ? sesionesARenovar : selectedPlan.sesiones_totales}</p>
+                <p className="font-medium text-white">
+                  {modo === 'renovar'
+                    ? (renovarConPendientes === 'si'
+                        ? selectedPlan.sesiones_totales + sesionesRestantes
+                        : selectedPlan.sesiones_totales)
+                    : selectedPlan.sesiones_totales}
+                </p>
               </div>
               <div>
                 <p className="text-xs text-white/45">Vence</p>
-                <p className="font-medium text-white">{formatDate(getFechaFinByVigencia(fechaInicio, selectedPlan.vigencia_dias))}</p>
+                <p className="font-medium text-white">
+                  {formatDate(getFechaFinByVigencia(fechaInicio, selectedPlan.vigencia_valor, selectedPlan.vigencia_tipo))}
+                </p>
               </div>
             </div>
+
             {faltanSesionesPreview > 0 && (
               <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-3">
                 <p className="text-sm text-amber-300">
@@ -1162,13 +1876,19 @@ export default function ClientePlanPage() {
           <div className="space-y-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4">
             <p className="text-sm font-medium text-emerald-300">Sesiones pendientes del plan actual</p>
             <div className="grid gap-3 sm:grid-cols-2">
-              <button type="button" onClick={() => setRenovarConPendientes('si')}
-                className={`rounded-2xl border p-4 text-left transition ${renovarConPendientes === 'si' ? 'border-emerald-400/30 bg-emerald-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'}`}>
+              <button
+                type="button"
+                onClick={() => setRenovarConPendientes('si')}
+                className={`rounded-2xl border p-4 text-left transition ${renovarConPendientes === 'si' ? 'border-emerald-400/30 bg-emerald-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'}`}
+              >
                 <p className="text-sm font-semibold text-white">Sí, conservar pendientes</p>
                 <p className="mt-1 text-xs text-white/45">Se suman {sesionesRestantes} sesiones pendientes al nuevo plan.</p>
               </button>
-              <button type="button" onClick={() => setRenovarConPendientes('no')}
-                className={`rounded-2xl border p-4 text-left transition ${renovarConPendientes === 'no' ? 'border-rose-400/30 bg-rose-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'}`}>
+              <button
+                type="button"
+                onClick={() => setRenovarConPendientes('no')}
+                className={`rounded-2xl border p-4 text-left transition ${renovarConPendientes === 'no' ? 'border-rose-400/30 bg-rose-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'}`}
+              >
                 <p className="text-sm font-semibold text-white">No, empezar limpio</p>
                 <p className="mt-1 text-xs text-white/45">No se suman pendientes. El nuevo plan empieza solo con sus sesiones propias.</p>
               </button>
@@ -1178,11 +1898,20 @@ export default function ClientePlanPage() {
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Fisioterapeuta">
-            <select value={empleadoId} onChange={(e) => { setEmpleadoId(e.target.value); setFechaVistaCal(fechaInicio) }} className={inputCls}>
+            <select
+              value={empleadoId}
+              onChange={(e) => {
+                setEmpleadoId(e.target.value)
+                setFechaVistaCal(fechaInicio)
+              }}
+              className={inputCls}
+            >
               <option value="" className="bg-[#11131a]">Seleccionar fisioterapeuta</option>
               {empleados.map((e) => (
                 <option key={e.id} value={e.id} className="bg-[#11131a]">
-                  {e.nombre}{e.rol ? ` · ${getRolLabel(e.rol)}` : ''}{e.especialidad ? ` · ${e.especialidad}` : ''}
+                  {e.nombre}
+                  {e.rol ? ` · ${getRolLabel(e.rol)}` : ''}
+                  {e.especialidad ? ` · ${e.especialidad}` : ''}
                 </option>
               ))}
             </select>
@@ -1201,12 +1930,16 @@ export default function ClientePlanPage() {
         <Field label="Días de entrenamiento">
           <div className="mt-1 flex flex-wrap gap-2">
             {DIAS_SEMANA.map((dia) => (
-              <button key={dia.key} type="button" onClick={() => toggleDia(dia.key)}
+              <button
+                key={dia.key}
+                type="button"
+                onClick={() => toggleDia(dia.key)}
                 className={`flex h-10 w-10 items-center justify-center rounded-2xl border text-sm font-semibold transition ${
                   diasSemana.includes(dia.key)
                     ? 'border-violet-400/40 bg-violet-500/20 text-violet-300'
                     : 'border-white/10 bg-white/[0.03] text-white/55 hover:bg-white/[0.06]'
-                }`}>
+                }`}
+              >
                 {dia.label}
               </button>
             ))}
@@ -1236,21 +1969,40 @@ export default function ClientePlanPage() {
             <div className="flex items-center justify-between">
               <p className="text-sm font-medium text-white/75">Disponibilidad del fisioterapeuta</p>
               <div className="flex items-center gap-2">
-                <button type="button" onClick={() => {
-                  const d = new Date(`${fechaVistaCal}T00:00:00`); d.setDate(d.getDate() - 1)
-                  setFechaVistaCal(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
-                }} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 hover:bg-white/[0.06]">←</button>
-                <input type="date" value={fechaVistaCal} onChange={(e) => setFechaVistaCal(e.target.value)}
-                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white outline-none" />
-                <button type="button" onClick={() => {
-                  const d = new Date(`${fechaVistaCal}T00:00:00`); d.setDate(d.getDate() + 1)
-                  setFechaVistaCal(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
-                }} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 hover:bg-white/[0.06]">→</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date(`${fechaVistaCal}T00:00:00`)
+                    d.setDate(d.getDate() - 1)
+                    setFechaVistaCal(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
+                  }}
+                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 hover:bg-white/[0.06]"
+                >
+                  ←
+                </button>
+                <input
+                  type="date"
+                  value={fechaVistaCal}
+                  onChange={(e) => setFechaVistaCal(e.target.value)}
+                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date(`${fechaVistaCal}T00:00:00`)
+                    d.setDate(d.getDate() + 1)
+                    setFechaVistaCal(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
+                  }}
+                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 hover:bg-white/[0.06]"
+                >
+                  →
+                </button>
               </div>
             </div>
             <CalendarioDisponibilidad
-              empleadoId={empleadoId} fechaVista={fechaVistaCal}
-              horaInicio={horaInicio} horaFin={horaFin}
+              fechaVista={fechaVistaCal}
+              horaInicio={horaInicio}
+              horaFin={horaFin}
               entrenamientosExistentes={entrenamientosEmpleado}
               onSelectHora={(hora) => setHoraInicio(hora)}
             />
@@ -1279,20 +2031,54 @@ export default function ClientePlanPage() {
 
         <div className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
           <p className="text-sm font-medium text-white/75">Configuración de comisión</p>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Field label="Base comisión" helper={selectedPlan ? `Precio del plan: ${formatMoney(selectedPlan.precio)}` : 'Monto base a repartir'}>
-              <input type="number" min={0} step="0.01"
-                value={montoBaseComision || (selectedPlan?.precio ?? '')}
-                onChange={(e) => handleBaseComisionChange(e.target.value)}
-                className={inputCls} placeholder="0.00" />
+          <div className="grid gap-4 sm:grid-cols-4">
+            <Field label="Precio (USD)" helper={usarPrecioPlan ? 'Tomando el precio del plan.' : 'Precio editable para este plan.'}>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={usarPrecioPlan ? String(selectedPlan?.precio ?? '') : montoPersonalizado}
+                  readOnly={usarPrecioPlan}
+                  onChange={(e) => setMontoPersonalizado(e.target.value)}
+                  className={`${inputCls} ${usarPrecioPlan ? 'cursor-not-allowed opacity-70' : ''}`}
+                  placeholder="0.00"
+                />
+                <button
+                  type="button"
+                  onClick={() => setUsarPrecioPlan((p) => !p)}
+                  className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.03] px-3 text-xs text-white/60 hover:bg-white/[0.06]"
+                >
+                  {usarPrecioPlan ? 'Editar' : 'Plan'}
+                </button>
+              </div>
             </Field>
-            <Field label="RPM recibe" helper="Al editar, ajusta el del entrenador">
-              <input type="number" min={0} step="0.01" value={montoRpm}
-                onChange={(e) => handleMontoRpmChange(e.target.value)} className={inputCls} placeholder="0.00" />
+
+            <Field label="Base comisión">
+              <input
+                type="number"
+                value={String(baseV)}
+                readOnly
+                className={`${inputCls} cursor-not-allowed opacity-80`}
+              />
             </Field>
-            <Field label="Entrenador recibe" helper="Al editar, ajusta el de RPM">
-              <input type="number" min={0} step="0.01" value={montoEntrenador}
-                onChange={(e) => handleMontoEntrenadorChange(e.target.value)} className={inputCls} placeholder="0.00" />
+
+            <Field label="RPM recibe">
+              <input
+                type="text"
+                value={`${formatMoney(rpmV)} · ${porcentajeRpmPlan}%`}
+                readOnly
+                className={`${inputCls} cursor-not-allowed opacity-80`}
+              />
+            </Field>
+
+            <Field label="Entrenador recibe">
+              <input
+                type="text"
+                value={`${formatMoney(entV)} · ${porcentajeEntrenadorPlan}%`}
+                readOnly
+                className={`${inputCls} cursor-not-allowed opacity-80`}
+              />
             </Field>
           </div>
 
@@ -1304,105 +2090,37 @@ export default function ClientePlanPage() {
             <Card className="border-violet-400/20 bg-violet-400/5 p-4">
               <p className="text-xs text-white/45">RPM recibe</p>
               <p className="mt-1 text-lg font-semibold text-violet-400">{formatMoney(rpmV)}</p>
-              <p className="text-xs text-white/25">{baseV > 0 ? r2((rpmV / baseV) * 100) : 0}%</p>
+              <p className="text-xs text-white/25">{porcentajeRpmPlan}%</p>
             </Card>
             <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
               <p className="text-xs text-white/45">Entrenador recibe</p>
               <p className="mt-1 text-lg font-semibold text-emerald-400">{formatMoney(entV)}</p>
-              <p className="text-xs text-white/25">{baseV > 0 ? r2((entV / baseV) * 100) : 0}%</p>
+              <p className="text-xs text-white/25">{porcentajeEntrenadorPlan}%</p>
             </Card>
           </div>
-
-          {baseV > 0 && !desbal && (
-            <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/10">
-              <div className="bg-violet-500/70 transition-all" style={{ width: `${(rpmV / baseV) * 100}%` }} />
-              <div className="flex-1 bg-emerald-500/70" />
-            </div>
-          )}
-
-          {desbal && (
-            <Card className="border-amber-400/20 bg-amber-400/5 p-4">
-              <p className="text-sm text-amber-300">
-                ⚠️ RPM ({formatMoney(rpmV)}) + Entrenador ({formatMoney(entV)}) = {formatMoney(sumaV)}, pero la base es {formatMoney(baseV)}. Ajusta los valores.
-              </p>
-            </Card>
-          )}
         </div>
 
-        <div className="space-y-1">
-          <div className="flex items-center gap-3">
-            <button type="button" onClick={() => setRegistrarPago((p) => !p)}
-              className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors ${registrarPago ? 'bg-emerald-500' : 'bg-white/10'}`}>
-              <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${registrarPago ? 'translate-x-5' : 'translate-x-0'}`} />
-            </button>
-            <span className="text-sm text-white/75">Registrar pago en finanzas</span>
-          </div>
-
-          {registrarPago && (
-            <div className="mt-4 space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Método de pago">
-                  <select value={metodoPagoId} onChange={(e) => setMetodoPagoId(e.target.value)} className={inputCls}>
-                    <option value="" className="bg-[#11131a]">Seleccionar</option>
-                    {metodosPago.map((m) => (
-                      <option key={m.id} value={m.id} className="bg-[#11131a]">
-                        {m.nombre}{m.moneda ? ` · ${m.moneda}` : ''}{m.tipo ? ` · ${m.tipo}` : ''}{m.cartera?.nombre ? ` · ${m.cartera.nombre}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-
-                <Field label="Monto">
-                  <div className="flex gap-2">
-                    <input type="number" min={0} step="0.01"
-                      value={usarPrecioPlan ? selectedPlan?.precio ?? '' : montoPersonalizado}
-                      readOnly={usarPrecioPlan}
-                      onChange={(e) => setMontoPersonalizado(e.target.value)}
-                      className={`${inputCls} ${usarPrecioPlan ? 'cursor-not-allowed opacity-60' : ''}`}
-                      placeholder="0.00" />
-                    <button type="button" onClick={() => setUsarPrecioPlan((p) => !p)}
-                      className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.03] px-3 text-xs text-white/60 hover:bg-white/[0.06]">
-                      {usarPrecioPlan ? 'Editar' : 'Plan'}
-                    </button>
-                  </div>
-                </Field>
-              </div>
-
-              {esBs && (
-                <SelectorTasaBCV
-                  fecha={fechaInicio}
-                  monedaPago="BS"
-                  montoUSD={montoBase}
-                  montoBs={montoBsPersonalizado || undefined}
-                  onTasaChange={setTasaCongelada}
-                  onMontoBsChange={(monto) => {
-                    setMontoBsPersonalizado(monto)
-                    if (monto > 0 && tasaBCVNum > 0) {
-                      setUsarPrecioPlan(false)
-                      setMontoPersonalizado(String(r2(monto / tasaBCVNum)))
-                    }
-                  }}
-                />
-              )}
-
-              <Field label="Notas del pago">
-                <textarea value={notasPago} onChange={(e) => setNotasPago(e.target.value)}
-                  rows={2} className={`${inputCls} resize-none`} placeholder="Notas opcionales..." />
-              </Field>
-            </div>
-          )}
-        </div>
+        {renderPagoMixtoSection()}
 
         {errorMsg && <Card className="p-4"><p className="text-sm text-rose-400">{errorMsg}</p></Card>}
         {successMsg && <Card className="p-4"><p className="text-sm text-emerald-400">{successMsg}</p></Card>}
 
         <div className="flex flex-wrap gap-3">
-          <button type="submit" disabled={saving || faltanSesionesPreview > 0}
-            className="rounded-2xl border border-white/10 bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.12] disabled:opacity-60">
+          <button
+            type="submit"
+            disabled={saving || faltanSesionesPreview > 0}
+            className="rounded-2xl border border-white/10 bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.12] disabled:opacity-60"
+          >
             {saving ? 'Guardando...' : submitLabel}
           </button>
-          <button type="button" onClick={() => { setModo(null); resetForm() }}
-            className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]">
+          <button
+            type="button"
+            onClick={() => {
+              setModo(null)
+              resetForm()
+            }}
+            className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+          >
             Cancelar
           </button>
         </div>
@@ -1453,18 +2171,38 @@ export default function ClientePlanPage() {
           {!modo && (
             <Section title="Gestión del plan" description="Acciones disponibles.">
               <div className="grid gap-3 sm:grid-cols-3">
-                <button type="button" onClick={() => { setModo('asignar'); resetForm() }}
-                  className="rounded-2xl border border-white/10 bg-white/[0.05] p-4 text-left transition hover:bg-white/[0.08]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModo('asignar')
+                    resetForm()
+                  }}
+                  className="rounded-2xl border border-white/10 bg-white/[0.05] p-4 text-left transition hover:bg-white/[0.08]"
+                >
                   <p className="font-semibold text-white">Asignar plan</p>
                   <p className="mt-1 text-xs text-white/45">{planActivo ? 'Reemplazar plan actual' : 'Asignar primer plan'}</p>
                 </button>
-                <button type="button" disabled={!planActivo} onClick={() => { setModo('renovar'); resetForm() }}
-                  className="rounded-2xl border border-white/10 bg-white/[0.05] p-4 text-left transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40">
+                <button
+                  type="button"
+                  disabled={!planActivo}
+                  onClick={() => {
+                    setModo('renovar')
+                    resetForm()
+                  }}
+                  className="rounded-2xl border border-white/10 bg-white/[0.05] p-4 text-left transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40"
+                >
                   <p className="font-semibold text-white">Renovar plan</p>
                   <p className="mt-1 text-xs text-white/45">{planActivo ? `${sesionesRestantes} ses. pendientes disponibles` : 'Sin plan activo'}</p>
                 </button>
-                <button type="button" disabled={!planActivo} onClick={() => { setModo('cancelar'); resetForm() }}
-                  className="rounded-2xl border border-rose-400/20 bg-rose-400/5 p-4 text-left transition hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:opacity-40">
+                <button
+                  type="button"
+                  disabled={!planActivo}
+                  onClick={() => {
+                    setModo('cancelar')
+                    resetForm()
+                  }}
+                  className="rounded-2xl border border-rose-400/20 bg-rose-400/5 p-4 text-left transition hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+                >
                   <p className="font-semibold text-rose-300">Cancelar plan</p>
                   <p className="mt-1 text-xs text-rose-400/60">{planActivo ? 'Cancela plan y entrenamientos futuros' : 'Sin plan activo'}</p>
                 </button>
@@ -1509,14 +2247,20 @@ export default function ClientePlanPage() {
                       { value: 'plan_vencido', label: 'Plan vencido', desc: 'Llegó la fecha de vencimiento' },
                       { value: 'sesiones_agotadas', label: 'Sesiones agotadas', desc: 'Se completaron todas las sesiones' },
                     ].map((op) => (
-                      <label key={op.value}
+                      <label
+                        key={op.value}
                         className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition ${
                           motivoCancelacion === op.value ? 'border-rose-400/30 bg-rose-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'
-                        }`}>
-                        <input type="radio" name="motivo" value={op.value}
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="motivo"
+                          value={op.value}
                           checked={motivoCancelacion === op.value}
                           onChange={(e) => setMotivoCancelacion(e.target.value)}
-                          className="mt-0.5 accent-rose-400" />
+                          className="mt-0.5 accent-rose-400"
+                        />
                         <div>
                           <p className="text-sm font-medium text-white">{op.label}</p>
                           <p className="text-xs text-white/45">{op.desc}</p>
@@ -1528,13 +2272,19 @@ export default function ClientePlanPage() {
 
                 <Field label="¿El cliente realizó el pago?">
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <button type="button" onClick={() => setPagoAlCancelar('si')}
-                      className={`rounded-2xl border p-3 text-left transition ${pagoAlCancelar === 'si' ? 'border-emerald-400/30 bg-emerald-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'}`}>
+                    <button
+                      type="button"
+                      onClick={() => setPagoAlCancelar('si')}
+                      className={`rounded-2xl border p-3 text-left transition ${pagoAlCancelar === 'si' ? 'border-emerald-400/30 bg-emerald-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'}`}
+                    >
                       <p className="text-sm font-medium text-white">✓ Sí pagó</p>
                       <p className="mt-1 text-xs text-white/45">Se cancela el plan, pero el pago y la comisión se mantienen.</p>
                     </button>
-                    <button type="button" onClick={() => setPagoAlCancelar('no')}
-                      className={`rounded-2xl border p-3 text-left transition ${pagoAlCancelar === 'no' ? 'border-rose-400/30 bg-rose-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'}`}>
+                    <button
+                      type="button"
+                      onClick={() => setPagoAlCancelar('no')}
+                      className={`rounded-2xl border p-3 text-left transition ${pagoAlCancelar === 'no' ? 'border-rose-400/30 bg-rose-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'}`}
+                    >
                       <p className="text-sm font-medium text-white">✗ No pagó</p>
                       <p className="mt-1 text-xs text-white/45">El plan queda cancelado sin efecto económico, como si nunca se hubiera acreditado.</p>
                     </button>
@@ -1544,12 +2294,21 @@ export default function ClientePlanPage() {
                 {errorMsg && <Card className="p-4"><p className="text-sm text-rose-400">{errorMsg}</p></Card>}
 
                 <div className="flex gap-3">
-                  <button type="submit" disabled={saving}
-                    className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-5 py-3 text-sm font-semibold text-rose-300 transition hover:bg-rose-400/15 disabled:opacity-60">
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-5 py-3 text-sm font-semibold text-rose-300 transition hover:bg-rose-400/15 disabled:opacity-60"
+                  >
                     {saving ? 'Cancelando...' : 'Confirmar cancelación'}
                   </button>
-                  <button type="button" onClick={() => { setModo(null); resetForm() }}
-                    className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModo(null)
+                      resetForm()
+                    }}
+                    className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                  >
                     Volver
                   </button>
                 </div>
@@ -1569,14 +2328,16 @@ export default function ClientePlanPage() {
                   <p className="mt-1 font-medium text-white">{planActivo.planes?.nombre}</p>
                   <p className="text-sm text-emerald-400">{formatMoney(planActivo.planes?.precio)}</p>
                 </div>
+
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div><p className="text-xs text-white/45">Total</p><p className="font-medium text-white">{planActivo.sesiones_totales}</p></div>
                   <div><p className="text-xs text-white/45">Usadas</p><p className="font-medium text-white">{planActivo.sesiones_usadas}</p></div>
                   <div><p className="text-xs text-white/45">Restantes</p><p className="font-medium text-emerald-400">{sesionesRestantes}</p></div>
                   <div><p className="text-xs text-white/45">Estado</p><p className="font-medium capitalize text-white">{planActivo.estado}</p></div>
-                  <div><p className="text-xs text-white/45">Inicio</p><p className="font-medium text-white">{formatDate(planActivo.fecha_inicio)}</p></div>
+                  <div><p className="text-xs text-white/45">Vigencia</p><p className="font-medium text-white">{formatVigencia(planActivo.planes?.vigencia_valor, planActivo.planes?.vigencia_tipo)}</p></div>
                   <div><p className="text-xs text-white/45">Vence</p><p className="font-medium text-white">{formatDate(planActivo.fecha_fin)}</p></div>
                 </div>
+
                 <div>
                   <div className="mb-1 flex justify-between text-xs text-white/45">
                     <span>Progreso</span><span>{progresoUso}%</span>
@@ -1585,6 +2346,7 @@ export default function ClientePlanPage() {
                     <div className="h-full rounded-full bg-violet-500/70 transition-all" style={{ width: `${progresoUso}%` }} />
                   </div>
                 </div>
+
                 {(planActivo.porcentaje_rpm || planActivo.monto_base_comision) && (
                   <div className="space-y-2 rounded-2xl border border-white/10 bg-white/[0.02] p-3">
                     <p className="text-xs font-medium text-white/55">Comisión registrada</p>

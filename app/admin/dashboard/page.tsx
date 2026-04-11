@@ -9,7 +9,6 @@ import Section from '@/components/ui/Section'
 import StatCard from '@/components/ui/StatCard'
 import ActionCard from '@/components/ui/ActionCard'
 
-
 type Cliente = {
   id: string
   estado?: string | null
@@ -63,6 +62,11 @@ type EntrenamientoPlanRow = {
   motivo_asistencia: string | null
   fecha_asistencia: string | null
   reprogramado_de_entrenamiento_id: string | null
+  marcado_por?: string | null
+  actualizado_por?: {
+    id: string
+    nombre: string | null
+  } | null
   clientes?: { nombre: string } | { nombre: string }[] | null
   empleados?: { nombre: string; rol?: string | null } | { nombre: string; rol?: string | null }[] | null
   clientes_planes?: {
@@ -84,7 +88,12 @@ type EmpleadoAsistenciaRow = {
   fecha: string
   estado: 'asistio' | 'no_asistio' | 'permiso' | 'reposo' | 'vacaciones'
   observaciones: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  created_by?: string | null
+  updated_by?: string | null
   empleados?: { nombre: string; rol?: string | null } | { nombre: string; rol?: string | null }[] | null
+  actualizado_por?: { id: string; nombre: string | null } | { id: string; nombre: string | null }[] | null
 }
 
 type AlertType = 'error' | 'success' | 'warning' | 'info'
@@ -231,6 +240,15 @@ function roleLabel(rol: string | null | undefined) {
   return r.charAt(0).toUpperCase() + r.slice(1)
 }
 
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return '—'
+  try {
+    return new Date(value).toLocaleString()
+  } catch {
+    return value
+  }
+}
+
 const inputClassName = `
   w-full rounded-2xl border border-white/10 bg-white/[0.03]
   px-4 py-3 text-sm text-white outline-none transition
@@ -251,6 +269,8 @@ export default function DashboardPage() {
   const [entrenamientosPlan, setEntrenamientosPlan] = useState<EntrenamientoPlanRow[]>([])
   const [empleadosAsistencia, setEmpleadosAsistencia] = useState<EmpleadoAsistenciaRow[]>([])
 
+  const [empleadoActualId, setEmpleadoActualId] = useState<string>('')
+
   const [asistenciaFilterFecha, setAsistenciaFilterFecha] = useState(getDateKey(new Date()))
   const [savingAsistenciaId, setSavingAsistenciaId] = useState<string | null>(null)
   const [openReprogramacionId, setOpenReprogramacionId] = useState<string | null>(null)
@@ -260,7 +280,47 @@ export default function DashboardPage() {
 
   useEffect(() => {
     void loadDashboard()
+    void loadEmpleadoActual()
   }, [])
+
+  async function resolveEmpleadoActualId(): Promise<string> {
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError) return ''
+
+      const authUserId = authData.user?.id
+      if (!authUserId) return ''
+
+      const { data: empleadoPorAuth, error: errorPorAuth } = await supabase
+        .from('empleados')
+        .select('id, nombre, auth_user_id')
+        .eq('auth_user_id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorAuth && empleadoPorAuth?.id) {
+        return String(empleadoPorAuth.id)
+      }
+
+      const { data: empleadoPorId, error: errorPorId } = await supabase
+        .from('empleados')
+        .select('id, nombre')
+        .eq('id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorId && empleadoPorId?.id) {
+        return String(empleadoPorId.id)
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
+  async function loadEmpleadoActual() {
+    const empleadoId = await resolveEmpleadoActualId()
+    setEmpleadoActualId(empleadoId)
+  }
 
   function showAlert(type: AlertType, title: string, message: string) {
     setAlert({ type, title, message })
@@ -304,6 +364,8 @@ export default function DashboardPage() {
             motivo_asistencia,
             fecha_asistencia,
             reprogramado_de_entrenamiento_id,
+            marcado_por,
+            actualizado_por:marcado_por ( id, nombre ),
             clientes:cliente_id ( nombre ),
             empleados:empleado_id ( nombre, rol ),
             clientes_planes:cliente_plan_id (
@@ -325,7 +387,12 @@ export default function DashboardPage() {
             fecha,
             estado,
             observaciones,
-            empleados:empleado_id ( nombre, rol )
+            created_at,
+            updated_at,
+            created_by,
+            updated_by,
+            empleados:empleado_id ( nombre, rol ),
+            actualizado_por:updated_by ( id, nombre )
           `)
           .order('fecha', { ascending: false }),
       ])
@@ -461,7 +528,6 @@ export default function DashboardPage() {
       .slice(0, 5)
   }, [citas, empleados, today])
 
-  // ✅ CORRECCIÓN: filtra entrenamientos con plan cancelado
   const sesionesPlanHoyCompactas = useMemo(() => {
     return entrenamientosPlan
       .filter((row) => {
@@ -541,11 +607,17 @@ export default function DashboardPage() {
       setSavingAsistenciaId(entrenamientoId)
       setAlert(null)
 
+      let auditorId = empleadoActualId || ''
+      if (!auditorId) {
+        auditorId = await resolveEmpleadoActualId()
+        setEmpleadoActualId(auditorId)
+      }
+
       const { data, error } = await supabase.rpc('marcar_asistencia_entrenamiento_plan', {
         p_entrenamiento_id: entrenamientoId,
         p_asistencia_estado: estado,
         p_motivo: null,
-        p_marcado_por: null,
+        p_marcado_por: auditorId || null,
       })
 
       if (error) throw new Error(error.message)
@@ -595,6 +667,12 @@ export default function DashboardPage() {
       setReprogramandoId(row.id)
       setAlert(null)
 
+      let auditorId = empleadoActualId || ''
+      if (!auditorId) {
+        auditorId = await resolveEmpleadoActualId()
+        setEmpleadoActualId(auditorId)
+      }
+
       const horaInicioNormalizada =
         draft.hora_inicio.length === 5 ? `${draft.hora_inicio}:00` : draft.hora_inicio
       const horaFinNormalizada =
@@ -606,7 +684,7 @@ export default function DashboardPage() {
         p_nueva_hora_inicio: horaInicioNormalizada,
         p_nueva_hora_fin: horaFinNormalizada,
         p_motivo: draft.motivo || null,
-        p_marcado_por: null,
+        p_marcado_por: auditorId || null,
       })
 
       if (error) throw new Error(error.message)
@@ -630,6 +708,12 @@ export default function DashboardPage() {
       setSavingEmpleadoAsistenciaId(empleadoId)
       setAlert(null)
 
+      let auditorId = empleadoActualId || ''
+      if (!auditorId) {
+        auditorId = await resolveEmpleadoActualId()
+        setEmpleadoActualId(auditorId)
+      }
+
       const existente = empleadosAsistencia.find(
         (a) => a.empleado_id === empleadoId && a.fecha === asistenciaFilterFecha
       )
@@ -637,7 +721,11 @@ export default function DashboardPage() {
       if (existente) {
         const { error } = await supabase
           .from('empleados_asistencia')
-          .update({ estado, observaciones: null })
+          .update({
+            estado,
+            observaciones: null,
+            updated_by: auditorId || null,
+          })
           .eq('id', existente.id)
 
         if (error) throw new Error(error.message)
@@ -647,6 +735,8 @@ export default function DashboardPage() {
           fecha: asistenciaFilterFecha,
           estado,
           observaciones: null,
+          created_by: auditorId || null,
+          updated_by: auditorId || null,
         })
 
         if (error) throw new Error(error.message)
@@ -828,6 +918,7 @@ export default function DashboardPage() {
                   const empleado = firstOrNull(row.empleados)
                   const clientePlan = firstOrNull(row.clientes_planes)
                   const plan = firstOrNull(clientePlan?.planes)
+                  const actor = firstOrNull(row.actualizado_por)
                   const reprogramacionAbierta = openReprogramacionId === row.id
                   const draft = reprogramacionDrafts[row.id] || initReprogramacionDraft(row)
 
@@ -851,6 +942,13 @@ export default function DashboardPage() {
                           <p className="mt-1 text-xs text-white/45">
                             Estado: {asistenciaLabel(row.asistencia_estado)}
                           </p>
+
+                          {actor?.nombre ? (
+                            <p className="mt-1 text-[11px] text-white/35">
+                              Último registro: {actor.nombre}
+                              {row.fecha_asistencia ? ` · ${formatDateTime(row.fecha_asistencia)}` : ''}
+                            </p>
+                          ) : null}
                         </div>
 
                         <div className="flex flex-col gap-2">
@@ -1005,6 +1103,7 @@ export default function DashboardPage() {
               ) : (
                 empleadosActivosNoAdmin.slice(0, 5).map((empleado) => {
                   const registro = mapaAsistenciaPersonalHoy.get(empleado.id)
+                  const actor = firstOrNull(registro?.actualizado_por)
 
                   return (
                     <Card key={empleado.id} className="p-4">
@@ -1026,6 +1125,15 @@ export default function DashboardPage() {
                           <p className="mt-1 text-xs text-white/45">
                             {asistenciaPersonalLabel(registro?.estado)}
                           </p>
+
+                          {actor?.nombre ? (
+                            <p className="mt-1 text-[11px] text-white/35">
+                              Último registro: {actor.nombre}
+                              {registro?.updated_at || registro?.created_at
+                                ? ` · ${formatDateTime(registro?.updated_at || registro?.created_at)}`
+                                : ''}
+                            </p>
+                          ) : null}
                         </div>
 
                         <div className="grid grid-cols-3 gap-2">

@@ -8,13 +8,19 @@ import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import StatCard from '@/components/ui/StatCard'
 
+type VigenciaTipo = 'dias' | 'semanas' | 'meses'
+
 type Plan = {
   id: string
   nombre: string
   descripcion: string | null
   sesiones_totales: number | null
-  vigencia_dias: number | null
+  vigencia_valor: number | null
+  vigencia_tipo: VigenciaTipo | null
   precio: number | null
+  comision_base: number | null
+  comision_rpm: number | null
+  comision_entrenador: number | null
   estado: string
   created_at: string
 }
@@ -22,8 +28,12 @@ type Plan = {
 type FormState = {
   nombre: string
   sesiones_totales: string
-  vigencia_dias: string
+  vigencia_valor: string
+  vigencia_tipo: VigenciaTipo
   precio: string
+  comision_base: string
+  comision_rpm_pct: string
+  comision_entrenador_pct: string
   estado: 'activo' | 'inactivo'
   descripcion: string
 }
@@ -33,8 +43,12 @@ type ViewMode = 'list' | 'create' | 'edit' | 'detail'
 const INITIAL_FORM: FormState = {
   nombre: '',
   sesiones_totales: '',
-  vigencia_dias: '',
+  vigencia_valor: '',
+  vigencia_tipo: 'dias',
   precio: '',
+  comision_base: '',
+  comision_rpm_pct: '50',
+  comision_entrenador_pct: '50',
   estado: 'activo',
   descripcion: '',
 }
@@ -96,6 +110,32 @@ function Field({
   )
 }
 
+function formatVigencia(valor: number | null | undefined, tipo: VigenciaTipo | null | undefined) {
+  const safeValor = Number(valor || 0)
+  const safeTipo = tipo || 'dias'
+
+  if (!safeValor) return '—'
+
+  if (safeValor === 1) {
+    if (safeTipo === 'dias') return '1 día'
+    if (safeTipo === 'semanas') return '1 semana'
+    return '1 mes'
+  }
+
+  if (safeTipo === 'dias') return `${safeValor} días`
+  if (safeTipo === 'semanas') return `${safeValor} semanas`
+  return `${safeValor} meses`
+}
+
+function clampPercent(value: number) {
+  if (Number.isNaN(value)) return 0
+  return Math.max(0, Math.min(100, value))
+}
+
+function round2(value: number) {
+  return Number(value.toFixed(2))
+}
+
 export default function PlanesPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [loading, setLoading] = useState(true)
@@ -103,8 +143,7 @@ export default function PlanesPage() {
   const [search, setSearch] = useState('')
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
   const [error, setError] = useState('')
-  
-  // Form state
+
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
   const [saving, setSaving] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -142,14 +181,21 @@ export default function PlanesPage() {
     const q = search.trim().toLowerCase()
 
     return planes.filter((plan) => {
+      const vigenciaTexto = formatVigencia(plan.vigencia_valor, plan.vigencia_tipo).toLowerCase()
+
       const matchSearch =
         !q ||
         plan.nombre.toLowerCase().includes(q) ||
         plan.descripcion?.toLowerCase().includes(q) ||
         plan.estado?.toLowerCase().includes(q) ||
         String(plan.sesiones_totales || '').includes(q) ||
-        String(plan.vigencia_dias || '').includes(q) ||
-        String(plan.precio || '').includes(q)
+        String(plan.vigencia_valor || '').includes(q) ||
+        String(plan.vigencia_tipo || '').includes(q) ||
+        vigenciaTexto.includes(q) ||
+        String(plan.precio || '').includes(q) ||
+        String(plan.comision_base || '').includes(q) ||
+        String(plan.comision_rpm || '').includes(q) ||
+        String(plan.comision_entrenador || '').includes(q)
 
       const matchEstado =
         estadoFiltro === 'todos' || plan.estado?.toLowerCase() === estadoFiltro.toLowerCase()
@@ -180,11 +226,72 @@ export default function PlanesPage() {
     }
   }, [planes])
 
+  const precioNum = Number(form.precio || 0)
+  const comisionBaseNum = Number(form.comision_base || 0)
+  const porcentajeRpm = clampPercent(Number(form.comision_rpm_pct || 0))
+  const porcentajeEntrenador = clampPercent(Number(form.comision_entrenador_pct || 0))
+
+  const comisionRpmNum = round2((comisionBaseNum * porcentajeRpm) / 100)
+  const comisionEntrenadorNum = round2((comisionBaseNum * porcentajeEntrenador) / 100)
+  const porcentajeTotal = round2(porcentajeRpm + porcentajeEntrenador)
+  const porcentajeRestante = round2(Math.max(100 - porcentajeTotal, 0))
+  const comisionRestante = round2(Math.max(comisionBaseNum - comisionRpmNum - comisionEntrenadorNum, 0))
+
   const handleChange = (
     e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
     const { name, value } = e.target
+
+    if (name === 'precio') {
+      setForm((prev) => ({
+        ...prev,
+        precio: value,
+        comision_base: value,
+      }))
+      return
+    }
+
     setForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  const handleRpmPercentChange = (value: string) => {
+    if (value === '') {
+      setForm((prev) => ({
+        ...prev,
+        comision_rpm_pct: '',
+        comision_entrenador_pct: '100',
+      }))
+      return
+    }
+
+    const rpmPct = clampPercent(Number(value))
+    const entrenadorPct = round2(100 - rpmPct)
+
+    setForm((prev) => ({
+      ...prev,
+      comision_rpm_pct: String(rpmPct),
+      comision_entrenador_pct: String(entrenadorPct),
+    }))
+  }
+
+  const handleEntrenadorPercentChange = (value: string) => {
+    if (value === '') {
+      setForm((prev) => ({
+        ...prev,
+        comision_entrenador_pct: '',
+        comision_rpm_pct: '100',
+      }))
+      return
+    }
+
+    const entrenadorPct = clampPercent(Number(value))
+    const rpmPct = round2(100 - entrenadorPct)
+
+    setForm((prev) => ({
+      ...prev,
+      comision_entrenador_pct: String(entrenadorPct),
+      comision_rpm_pct: String(rpmPct),
+    }))
   }
 
   const validateForm = () => {
@@ -192,11 +299,23 @@ export default function PlanesPage() {
     if (!form.sesiones_totales || Number(form.sesiones_totales) <= 0) {
       return 'Las sesiones totales deben ser mayores que 0.'
     }
-    if (!form.vigencia_dias || Number(form.vigencia_dias) <= 0) {
+    if (!form.vigencia_valor || Number(form.vigencia_valor) <= 0) {
       return 'La vigencia debe ser mayor que 0.'
     }
     if (form.precio === '' || Number(form.precio) < 0) {
       return 'El precio no es válido.'
+    }
+    if (form.comision_base === '' || Number(form.comision_base) < 0) {
+      return 'La base de comisión no es válida.'
+    }
+    if (Number(form.comision_rpm_pct || 0) < 0 || Number(form.comision_rpm_pct || 0) > 100) {
+      return 'El porcentaje de RPM no es válido.'
+    }
+    if (Number(form.comision_entrenador_pct || 0) < 0 || Number(form.comision_entrenador_pct || 0) > 100) {
+      return 'El porcentaje del entrenador no es válido.'
+    }
+    if (round2(Number(form.comision_rpm_pct || 0) + Number(form.comision_entrenador_pct || 0)) !== 100) {
+      return 'RPM y entrenador deben sumar 100%.'
     }
     return ''
   }
@@ -213,11 +332,19 @@ export default function PlanesPage() {
 
     setSaving(true)
 
+    const base = Number(form.comision_base || 0)
+    const rpmPct = clampPercent(Number(form.comision_rpm_pct || 0))
+    const entrenadorPct = clampPercent(Number(form.comision_entrenador_pct || 0))
+
     const payload = {
       nombre: form.nombre.trim(),
       sesiones_totales: Number(form.sesiones_totales),
-      vigencia_dias: Number(form.vigencia_dias),
+      vigencia_valor: Number(form.vigencia_valor),
+      vigencia_tipo: form.vigencia_tipo,
       precio: Number(form.precio),
+      comision_base: base,
+      comision_rpm: round2((base * rpmPct) / 100),
+      comision_entrenador: round2((base * entrenadorPct) / 100),
       estado: form.estado,
       descripcion: form.descripcion.trim() || null,
     }
@@ -259,12 +386,23 @@ export default function PlanesPage() {
   }
 
   function handleEdit(plan: Plan) {
+    const base = Number(plan.comision_base ?? plan.precio ?? 0)
+    const rpm = Number(plan.comision_rpm ?? 0)
+    const entrenador = Number(plan.comision_entrenador ?? 0)
+
+    const rpmPct = base > 0 ? round2((rpm / base) * 100) : 50
+    const entrenadorPct = base > 0 ? round2((entrenador / base) * 100) : 50
+
     setEditingId(plan.id)
     setForm({
       nombre: plan.nombre || '',
       sesiones_totales: String(plan.sesiones_totales ?? ''),
-      vigencia_dias: String(plan.vigencia_dias ?? ''),
+      vigencia_valor: String(plan.vigencia_valor ?? ''),
+      vigencia_tipo: (plan.vigencia_tipo as VigenciaTipo) || 'dias',
       precio: String(plan.precio ?? ''),
+      comision_base: String(plan.comision_base ?? plan.precio ?? ''),
+      comision_rpm_pct: String(rpmPct),
+      comision_entrenador_pct: String(entrenadorPct),
       estado: (plan.estado as 'activo' | 'inactivo') || 'activo',
       descripcion: plan.descripcion || '',
     })
@@ -287,7 +425,7 @@ export default function PlanesPage() {
     const confirmed = window.confirm(
       `¿Estás seguro de eliminar el plan "${plan.nombre}"?\n\nEsta acción no se puede deshacer.`
     )
-    
+
     if (!confirmed) return
 
     try {
@@ -299,8 +437,7 @@ export default function PlanesPage() {
       if (error) throw error
 
       await loadPlanes()
-      
-      // Si estamos viendo el detalle del plan eliminado, volver al listado
+
       if (viewMode === 'detail' && selectedPlan?.id === plan.id) {
         setViewMode('list')
       }
@@ -310,7 +447,6 @@ export default function PlanesPage() {
     }
   }
 
-  // Lista de planes
   if (viewMode === 'list') {
     return (
       <div className="space-y-6">
@@ -324,7 +460,7 @@ export default function PlanesPage() {
                 Planes
               </h1>
               <p className="mt-2 text-sm text-white/60">
-                Catálogo de planes, sesiones, vigencia y precio.
+                Catálogo de planes, sesiones, vigencia, precio y comisión.
               </p>
             </div>
 
@@ -332,8 +468,8 @@ export default function PlanesPage() {
               type="button"
               onClick={handleCreate}
               className="
-                flex items-center gap-2 rounded-2xl border border-white/10 
-                bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white 
+                flex items-center gap-2 rounded-2xl border border-white/10
+                bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white
                 transition-all hover:bg-white/[0.12] hover:border-white/20
               "
             >
@@ -377,7 +513,7 @@ export default function PlanesPage() {
 
         <Section
           title="Filtros"
-          description="Busca por nombre, descripción, estado o precio."
+          description="Busca por nombre, descripción, estado, vigencia, precio o comisión."
         >
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div className="md:col-span-2">
@@ -446,82 +582,105 @@ export default function PlanesPage() {
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/40">Sesiones</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/40">Vigencia</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/40">Precio</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/40">Comisión</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/40">Estado</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-white/40">Acciones</th>
                   </tr>
                 </thead>
 
                 <tbody className="divide-y divide-white/10">
-                  {planesFiltrados.map((plan) => (
-                    <tr key={plan.id} className="transition hover:bg-white/[0.03]">
-                      <td className="px-4 py-4">
-                        <div>
-                          <p className="font-semibold text-white">{plan.nombre}</p>
-                          <p className="mt-0.5 text-xs text-white/45 line-clamp-1">
-                            {plan.descripcion || 'Sin descripción'}
-                          </p>
-                        </div>
-                      </td>
+                  {planesFiltrados.map((plan) => {
+                    const base = Number(plan.comision_base || 0)
+                    const rpm = Number(plan.comision_rpm || 0)
+                    const entrenador = Number(plan.comision_entrenador || 0)
+                    const rpmPct = base > 0 ? round2((rpm / base) * 100) : 0
+                    const entrenadorPct = base > 0 ? round2((entrenador / base) * 100) : 0
 
-                      <td className="px-4 py-4">
-                        <span className="font-medium text-white">{plan.sesiones_totales || 0}</span>
-                      </td>
+                    return (
+                      <tr key={plan.id} className="transition hover:bg-white/[0.03]">
+                        <td className="px-4 py-4">
+                          <div>
+                            <p className="font-semibold text-white">{plan.nombre}</p>
+                            <p className="mt-0.5 text-xs text-white/45 line-clamp-1">
+                              {plan.descripcion || 'Sin descripción'}
+                            </p>
+                          </div>
+                        </td>
 
-                      <td className="px-4 py-4">
-                        <span className="text-white/75">{plan.vigencia_dias || 0} días</span>
-                      </td>
+                        <td className="px-4 py-4">
+                          <span className="font-medium text-white">{plan.sesiones_totales || 0}</span>
+                        </td>
 
-                      <td className="px-4 py-4">
-                        <span className="font-semibold text-white">{money(plan.precio)}</span>
-                      </td>
+                        <td className="px-4 py-4">
+                          <span className="text-white/75">
+                            {formatVigencia(plan.vigencia_valor, plan.vigencia_tipo)}
+                          </span>
+                        </td>
 
-                      <td className="px-4 py-4">
-                        <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${estadoBadge(plan.estado)}`}>
-                          {plan.estado}
-                        </span>
-                      </td>
+                        <td className="px-4 py-4">
+                          <span className="font-semibold text-white">{money(plan.precio)}</span>
+                        </td>
 
-                      <td className="px-4 py-4">
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleViewDetail(plan)}
-                            className="
-                              rounded-xl border border-white/10 bg-white/[0.03]
-                              px-3 py-2 text-xs font-medium text-white/80 transition
-                              hover:bg-white/[0.08] hover:border-white/20
-                            "
-                          >
-                            Ver
-                          </button>
+                        <td className="px-4 py-4">
+                          <div className="space-y-1">
+                            <p className="text-xs text-white/45">Base: {money(plan.comision_base)}</p>
+                            <p className="text-xs text-violet-300">
+                              RPM: {money(plan.comision_rpm)} · {rpmPct}%
+                            </p>
+                            <p className="text-xs text-emerald-300">
+                              Entrenador: {money(plan.comision_entrenador)} · {entrenadorPct}%
+                            </p>
+                          </div>
+                        </td>
 
-                          <button
-                            type="button"
-                            onClick={() => handleEdit(plan)}
-                            className="
-                              rounded-xl border border-white/10 bg-white/[0.03]
-                              px-3 py-2 text-xs font-medium text-white/80 transition
-                              hover:bg-white/[0.08] hover:border-white/20
-                            "
-                          >
-                            Editar
-                          </button>
+                        <td className="px-4 py-4">
+                          <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${estadoBadge(plan.estado)}`}>
+                            {plan.estado}
+                          </span>
+                        </td>
 
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(plan)}
-                            className="
-                              rounded-xl border border-rose-400/20 bg-rose-400/10
-                              px-3 py-2 text-xs font-medium text-rose-300 transition
-                              hover:bg-rose-400/20 hover:border-rose-400/30
-                            "
-                          >
-                            Eliminar
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        <td className="px-4 py-4">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleViewDetail(plan)}
+                              className="
+                                rounded-xl border border-white/10 bg-white/[0.03]
+                                px-3 py-2 text-xs font-medium text-white/80 transition
+                                hover:bg-white/[0.08] hover:border-white/20
+                              "
+                            >
+                              Ver
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleEdit(plan)}
+                              className="
+                                rounded-xl border border-white/10 bg-white/[0.03]
+                                px-3 py-2 text-xs font-medium text-white/80 transition
+                                hover:bg-white/[0.08] hover:border-white/20
+                              "
+                            >
+                              Editar
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(plan)}
+                              className="
+                                rounded-xl border border-rose-400/20 bg-rose-400/10
+                                px-3 py-2 text-xs font-medium text-rose-300 transition
+                                hover:bg-rose-400/20 hover:border-rose-400/30
+                              "
+                            >
+                              Eliminar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -531,7 +690,6 @@ export default function PlanesPage() {
     )
   }
 
-  // Formulario (crear o editar)
   if (viewMode === 'create' || viewMode === 'edit') {
     return (
       <div className="space-y-6">
@@ -553,8 +711,8 @@ export default function PlanesPage() {
               type="button"
               onClick={handleCancel}
               className="
-                flex items-center gap-2 rounded-2xl border border-white/10 
-                bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 
+                flex items-center gap-2 rounded-2xl border border-white/10
+                bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80
                 transition-all hover:bg-white/[0.06]
               "
             >
@@ -597,6 +755,7 @@ export default function PlanesPage() {
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/40">
                 Información básica
               </h3>
+
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="md:col-span-2">
                   <Field label="Nombre del plan">
@@ -622,18 +781,33 @@ export default function PlanesPage() {
                   />
                 </Field>
 
-                <Field label="Vigencia en días">
-                  <input
-                    type="number"
-                    name="vigencia_dias"
-                    value={form.vigencia_dias}
-                    onChange={handleChange}
-                    min="1"
-                    className={inputClassName}
-                  />
-                </Field>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_180px]">
+                  <Field label="Vigencia">
+                    <input
+                      type="number"
+                      name="vigencia_valor"
+                      value={form.vigencia_valor}
+                      onChange={handleChange}
+                      min="1"
+                      className={inputClassName}
+                    />
+                  </Field>
 
-                <Field label="Precio (USD)">
+                  <Field label="Tipo de vigencia">
+                    <select
+                      name="vigencia_tipo"
+                      value={form.vigencia_tipo}
+                      onChange={handleChange}
+                      className={inputClassName}
+                    >
+                      <option value="dias" className="bg-[#11131a] text-white">Días</option>
+                      <option value="semanas" className="bg-[#11131a] text-white">Semanas</option>
+                      <option value="meses" className="bg-[#11131a] text-white">Meses</option>
+                    </select>
+                  </Field>
+                </div>
+
+                <Field label="Precio (USD)" helper="Al cambiarlo, actualiza automáticamente la base de comisión.">
                   <input
                     type="number"
                     step="0.01"
@@ -660,6 +834,112 @@ export default function PlanesPage() {
             </div>
 
             <div>
+              <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/40">
+                Configuración de comisión
+              </h3>
+
+              <div className="rounded-[28px] border border-white/10 bg-white/[0.03] p-5 md:p-6">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <Field
+                    label="Base comisión"
+                    helper="Se toma automáticamente del precio."
+                  >
+                    <input
+                      type="number"
+                      step="0.01"
+                      name="comision_base"
+                      value={form.comision_base}
+                      readOnly
+                      className={`${inputClassName} cursor-not-allowed opacity-80`}
+                      placeholder="0.00"
+                    />
+                  </Field>
+
+                  <Field
+                    label="RPM recibe"
+                    helper="Al editar, ajusta el del entrenador."
+                  >
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.01"
+                        name="comision_rpm_pct"
+                        value={form.comision_rpm_pct}
+                        onChange={(e) => handleRpmPercentChange(e.target.value)}
+                        min="0"
+                        max="100"
+                        className={`${inputClassName} pr-10`}
+                        placeholder="0"
+                      />
+                      <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm text-white/45">
+                        %
+                      </span>
+                    </div>
+                  </Field>
+
+                  <Field
+                    label="Entrenador recibe"
+                    helper="Al editar, ajusta el de RPM."
+                  >
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.01"
+                        name="comision_entrenador_pct"
+                        value={form.comision_entrenador_pct}
+                        onChange={(e) => handleEntrenadorPercentChange(e.target.value)}
+                        min="0"
+                        max="100"
+                        className={`${inputClassName} pr-10`}
+                        placeholder="0"
+                      />
+                      <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm text-white/45">
+                        %
+                      </span>
+                    </div>
+                  </Field>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <div className="rounded-[28px] border border-white/10 bg-white/[0.05] p-5">
+                    <p className="text-sm text-white/60">Base</p>
+                    <p className="mt-2 text-3xl font-bold text-white">{money(comisionBaseNum)}</p>
+                    <p className="mt-2 text-xs text-white/40">
+                      Precio del plan: {money(precioNum)}
+                    </p>
+                  </div>
+
+                  <div className="rounded-[28px] border border-violet-400/15 bg-white/[0.05] p-5">
+                    <p className="text-sm text-white/60">RPM recibe</p>
+                    <p className="mt-2 text-3xl font-bold text-violet-400">{money(comisionRpmNum)}</p>
+                    <p className="mt-2 text-sm text-white/50">{porcentajeRpm}%</p>
+                  </div>
+
+                  <div className="rounded-[28px] border border-emerald-400/15 bg-white/[0.05] p-5">
+                    <p className="text-sm text-white/60">Entrenador recibe</p>
+                    <p className="mt-2 text-3xl font-bold text-emerald-400">{money(comisionEntrenadorNum)}</p>
+                    <p className="mt-2 text-sm text-white/50">{porcentajeEntrenador}%</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-white/40">Resumen</p>
+                    <p className="mt-1 text-sm text-white/70">
+                      RPM y entrenador deben sumar 100% del total de comisión.
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-white/40">Restante</p>
+                    <p className="text-sm font-semibold text-white">
+                      {porcentajeRestante}% · {money(comisionRestante)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div>
               <Field label="Descripción">
                 <textarea
                   name="descripcion"
@@ -677,10 +957,9 @@ export default function PlanesPage() {
                 type="submit"
                 disabled={saving}
                 className="
-                  flex items-center gap-2 rounded-2xl border border-white/10 
-                  bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white 
-                  transition-all hover:bg-white/[0.12] disabled:opacity-60 
-                  disabled:cursor-not-allowed
+                  flex items-center gap-2 rounded-2xl border border-white/10
+                  bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white
+                  transition-all hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-60
                 "
               >
                 {saving ? (
@@ -705,8 +984,8 @@ export default function PlanesPage() {
                 type="button"
                 onClick={handleCancel}
                 className="
-                  flex items-center gap-2 rounded-2xl border border-white/10 
-                  bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 
+                  flex items-center gap-2 rounded-2xl border border-white/10
+                  bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80
                   transition-all hover:bg-white/[0.06]
                 "
               >
@@ -722,8 +1001,13 @@ export default function PlanesPage() {
     )
   }
 
-  // Vista de detalle
   if (viewMode === 'detail' && selectedPlan) {
+    const base = Number(selectedPlan.comision_base || 0)
+    const rpm = Number(selectedPlan.comision_rpm || 0)
+    const entrenador = Number(selectedPlan.comision_entrenador || 0)
+    const rpmPct = base > 0 ? round2((rpm / base) * 100) : 0
+    const entrenadorPct = base > 0 ? round2((entrenador / base) * 100) : 0
+
     return (
       <div className="space-y-6">
         <div>
@@ -742,8 +1026,8 @@ export default function PlanesPage() {
                 type="button"
                 onClick={() => handleEdit(selectedPlan)}
                 className="
-                  flex items-center gap-2 rounded-2xl border border-white/10 
-                  bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white 
+                  flex items-center gap-2 rounded-2xl border border-white/10
+                  bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white
                   transition-all hover:bg-white/[0.12] hover:border-white/20
                 "
               >
@@ -757,8 +1041,8 @@ export default function PlanesPage() {
                 type="button"
                 onClick={() => handleDelete(selectedPlan)}
                 className="
-                  flex items-center gap-2 rounded-2xl border border-rose-400/20 
-                  bg-rose-400/10 px-5 py-3 text-sm font-semibold text-rose-300 
+                  flex items-center gap-2 rounded-2xl border border-rose-400/20
+                  bg-rose-400/10 px-5 py-3 text-sm font-semibold text-rose-300
                   transition-all hover:bg-rose-400/20 hover:border-rose-400/30
                 "
               >
@@ -772,8 +1056,8 @@ export default function PlanesPage() {
                 type="button"
                 onClick={() => setViewMode('list')}
                 className="
-                  flex items-center gap-2 rounded-2xl border border-white/10 
-                  bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 
+                  flex items-center gap-2 rounded-2xl border border-white/10
+                  bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80
                   transition-all hover:bg-white/[0.06]
                 "
               >
@@ -788,7 +1072,7 @@ export default function PlanesPage() {
 
         <div className="grid gap-4 md:grid-cols-4">
           <StatCard title="Sesiones" value={selectedPlan.sesiones_totales || 0} />
-          <StatCard title="Vigencia" value={`${selectedPlan.vigencia_dias || 0} días`} />
+          <StatCard title="Vigencia" value={formatVigencia(selectedPlan.vigencia_valor, selectedPlan.vigencia_tipo)} />
           <StatCard title="Precio" value={money(selectedPlan.precio)} color="text-emerald-400" />
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
             <p className="text-xs font-medium text-white/55">Estado</p>
@@ -799,6 +1083,27 @@ export default function PlanesPage() {
             </div>
           </div>
         </div>
+
+        <Section title="Comisión" description="Distribución configurada para este plan.">
+          <div className="grid gap-4 md:grid-cols-3">
+            <Card className="p-5">
+              <p className="text-sm text-white/55">Base</p>
+              <p className="mt-2 text-3xl font-bold text-white">{money(selectedPlan.comision_base)}</p>
+            </Card>
+
+            <Card className="p-5">
+              <p className="text-sm text-white/55">RPM recibe</p>
+              <p className="mt-2 text-3xl font-bold text-violet-400">{money(selectedPlan.comision_rpm)}</p>
+              <p className="mt-2 text-sm text-white/45">{rpmPct}% de la base</p>
+            </Card>
+
+            <Card className="p-5">
+              <p className="text-sm text-white/55">Entrenador recibe</p>
+              <p className="mt-2 text-3xl font-bold text-emerald-400">{money(selectedPlan.comision_entrenador)}</p>
+              <p className="mt-2 text-sm text-white/45">{entrenadorPct}% de la base</p>
+            </Card>
+          </div>
+        </Section>
 
         <Section title="Descripción" description="Detalle general del plan.">
           <Card className="p-5">

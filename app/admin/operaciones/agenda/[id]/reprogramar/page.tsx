@@ -130,6 +130,7 @@ export default function ReprogramarCitaPage() {
   const [loadingData, setLoadingData] = useState(true)
   const [saving, setSaving] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
+  const [empleadoActualId, setEmpleadoActualId] = useState('')
 
   const [citaActual, setCitaActual] = useState<CitaDetalle | null>(null)
 
@@ -154,8 +155,48 @@ export default function ReprogramarCitaPage() {
   useEffect(() => {
     if (!id) return
     void loadData()
+    void loadEmpleadoActual()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
+
+  async function resolveEmpleadoActualId(): Promise<string> {
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError) return ''
+
+      const authUserId = authData.user?.id
+      if (!authUserId) return ''
+
+      const { data: empleadoPorAuth, error: errorPorAuth } = await supabase
+        .from('empleados')
+        .select('id, nombre, auth_user_id')
+        .eq('auth_user_id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorAuth && empleadoPorAuth?.id) {
+        return String(empleadoPorAuth.id)
+      }
+
+      const { data: empleadoPorId, error: errorPorId } = await supabase
+        .from('empleados')
+        .select('id, nombre')
+        .eq('id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorId && empleadoPorId?.id) {
+        return String(empleadoPorId.id)
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
+  async function loadEmpleadoActual() {
+    const empleadoId = await resolveEmpleadoActualId()
+    setEmpleadoActualId(empleadoId)
+  }
 
   async function loadData() {
     setLoadingData(true)
@@ -268,11 +309,18 @@ export default function ReprogramarCitaPage() {
         return
       }
 
+      let auditorId = empleadoActualId || ''
+      if (!auditorId) {
+        auditorId = await resolveEmpleadoActualId()
+        setEmpleadoActualId(auditorId)
+      }
+
       const payload = {
         fecha: form.fecha,
         hora_inicio: horaInicioNormalizada,
         hora_fin: horaFinNormalizada,
         estado: 'reprogramada',
+        updated_by: auditorId || null,
       }
 
       const { error } = await supabase.from('citas').update(payload).eq('id', id)

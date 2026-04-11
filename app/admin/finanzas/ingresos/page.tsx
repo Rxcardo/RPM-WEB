@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase/client'
 import {
   ArrowLeft,
@@ -13,8 +13,8 @@ import {
   User2,
 } from 'lucide-react'
 import Link from 'next/link'
-import SelectorMetodoPago from '@/components/finanzas/SelectorMetodoPago'
-import { calcularEquivalentes, formatearMoneda } from '@/lib/finanzas/tasas'
+import SelectorTasaBCV from '@/components/finanzas/SelectorTasaBCV'
+import { formatearMoneda } from '@/lib/finanzas/tasas'
 
 interface Cartera {
   nombre: string
@@ -55,23 +55,52 @@ interface TipoCambioRow {
   precio?: number | string | null
 }
 
-interface Pago {
+interface PagoItem {
   id: string
+  operacion_pago_id: string | null
+  pago_item_no: number | null
+  pago_items_total: number | null
+  es_pago_mixto: boolean
   fecha: string
   concepto: string
   categoria: string
   tipo_origen: string
+  monto: number | null
+  monto_pago: number | null
   monto_equivalente_usd: number | null
   monto_equivalente_bs: number | null
   moneda_pago: string
+  tasa_bcv: number | null
   estado: string
   cliente_id?: string | null
+  inventario_id?: string | null
+  cantidad_producto?: number | null
   metodo_pago_id?: string | null
   metodo_pago_v2_id?: string | null
   notas?: string | null
   referencia?: string | null
   metodos_pago_v2?: { nombre: string } | null
   clientes?: { nombre: string } | null
+}
+
+interface PagoOperacion {
+  key: string
+  id_representativo: string
+  operacion_pago_id: string | null
+  fecha: string
+  concepto: string
+  categoria: string
+  tipo_origen: string
+  estado: string
+  cliente_id: string | null
+  cliente_nombre: string | null
+  inventario_id: string | null
+  cantidad_producto: number | null
+  total_usd: number
+  total_bs: number
+  es_pago_mixto: boolean
+  items_total: number
+  items: PagoItem[]
 }
 
 type EstadoUI = 'pagado' | 'pendiente'
@@ -99,15 +128,24 @@ type RawMetodoPago = {
 
 type RawPago = {
   id?: unknown
+  operacion_pago_id?: unknown
+  pago_item_no?: unknown
+  pago_items_total?: unknown
+  es_pago_mixto?: unknown
   fecha?: unknown
   concepto?: unknown
   categoria?: unknown
   tipo_origen?: unknown
   estado?: unknown
   moneda_pago?: unknown
+  tasa_bcv?: unknown
+  monto?: unknown
+  monto_pago?: unknown
   monto_equivalente_usd?: unknown
   monto_equivalente_bs?: unknown
   cliente_id?: unknown
+  inventario_id?: unknown
+  cantidad_producto?: unknown
   metodo_pago_id?: unknown
   metodo_pago_v2_id?: unknown
   notas?: unknown
@@ -124,6 +162,17 @@ type RawPago = {
     | undefined
 }
 
+type PagoMixtoItem = {
+  id_local: string
+  moneda_pago: 'USD' | 'BS'
+  metodo_pago_v2_id: string
+  monto_usd: string
+  monto_bs: number | null
+  tasa_bcv: number | null
+  referencia: string
+  notas: string
+}
+
 const inputCls =
   'w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-white/20 focus:bg-white/[0.05]'
 
@@ -134,6 +183,10 @@ const panelCls =
 
 const softButtonCls =
   'rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]'
+
+function r2(v: number) {
+  return Math.round(Number(v || 0) * 100) / 100
+}
 
 function formatQty(v: number | null | undefined) {
   return new Intl.NumberFormat('es-VE', {
@@ -157,7 +210,7 @@ function toStringSafe(value: unknown, fallback = ''): string {
 }
 
 function toStringOrNull(value: unknown): string | null {
-  if (value === null || value === undefined) return null
+  if (value === null || value === undefined || value === '') return null
   return String(value)
 }
 
@@ -189,21 +242,30 @@ function normalizeMetodoPago(raw: RawMetodoPago): MetodoPago {
   }
 }
 
-function normalizePago(raw: RawPago): Pago {
+function normalizePago(raw: RawPago): PagoItem {
   const metodo = firstItem(raw.metodos_pago_v2)
   const cliente = firstItem(raw.clientes)
 
   return {
     id: toStringSafe(raw.id),
+    operacion_pago_id: toStringOrNull(raw.operacion_pago_id),
+    pago_item_no: toNumberOrNull(raw.pago_item_no),
+    pago_items_total: toNumberOrNull(raw.pago_items_total),
+    es_pago_mixto: Boolean(raw.es_pago_mixto),
     fecha: toStringSafe(raw.fecha),
     concepto: toStringSafe(raw.concepto),
     categoria: toStringSafe(raw.categoria),
     tipo_origen: toStringSafe(raw.tipo_origen),
+    monto: toNumberOrNull(raw.monto),
+    monto_pago: toNumberOrNull(raw.monto_pago),
     monto_equivalente_usd: toNumberOrNull(raw.monto_equivalente_usd),
     monto_equivalente_bs: toNumberOrNull(raw.monto_equivalente_bs),
     moneda_pago: toStringSafe(raw.moneda_pago),
+    tasa_bcv: toNumberOrNull(raw.tasa_bcv),
     estado: toStringSafe(raw.estado),
     cliente_id: toStringOrNull(raw.cliente_id),
+    inventario_id: toStringOrNull(raw.inventario_id),
+    cantidad_producto: toNumberOrNull(raw.cantidad_producto),
     metodo_pago_id: toStringOrNull(raw.metodo_pago_id),
     metodo_pago_v2_id: toStringOrNull(raw.metodo_pago_v2_id),
     notas: toStringOrNull(raw.notas),
@@ -217,11 +279,137 @@ function normalizePago(raw: RawPago): Pago {
   }
 }
 
+function detectarMetodoBs(metodo: MetodoPago | null) {
+  if (!metodo) return false
+
+  const moneda = (metodo.moneda || '').toUpperCase()
+  const nombre = (metodo.nombre || '').toLowerCase()
+  const tipo = (metodo.tipo || '').toLowerCase()
+  const carteraCodigo = (metodo.cartera?.codigo || '').toLowerCase()
+
+  return (
+    moneda === 'BS' ||
+    moneda === 'VES' ||
+    nombre.includes('bs') ||
+    nombre.includes('bolívar') ||
+    nombre.includes('bolivar') ||
+    nombre.includes('pago movil') ||
+    nombre.includes('pago móvil') ||
+    nombre.includes('movil') ||
+    nombre.includes('móvil') ||
+    tipo.includes('bs') ||
+    tipo.includes('bolívar') ||
+    tipo.includes('bolivar') ||
+    tipo.includes('pago_movil') ||
+    carteraCodigo.includes('bs') ||
+    carteraCodigo.includes('ves')
+  )
+}
+
+function detectarMetodoUsd(metodo: MetodoPago | null) {
+  if (!metodo) return false
+
+  const moneda = (metodo.moneda || '').toUpperCase()
+  const nombre = (metodo.nombre || '').toLowerCase()
+  const carteraCodigo = (metodo.cartera?.codigo || '').toLowerCase()
+
+  return (
+    moneda === 'USD' ||
+    nombre.includes('usd') ||
+    nombre.includes('zelle') ||
+    nombre.includes('efectivo $') ||
+    nombre.includes('efectivo usd') ||
+    carteraCodigo.includes('usd')
+  )
+}
+
+function agruparPagosPorOperacion(items: PagoItem[]): PagoOperacion[] {
+  const map = new Map<string, PagoOperacion>()
+
+  for (const item of items) {
+    const key = item.operacion_pago_id || item.id
+
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        id_representativo: item.id,
+        operacion_pago_id: item.operacion_pago_id,
+        fecha: item.fecha,
+        concepto: item.concepto,
+        categoria: item.categoria,
+        tipo_origen: item.tipo_origen,
+        estado: item.estado,
+        cliente_id: item.cliente_id || null,
+        cliente_nombre: item.clientes?.nombre || null,
+        inventario_id: item.inventario_id || null,
+        cantidad_producto: item.cantidad_producto ?? null,
+        total_usd: 0,
+        total_bs: 0,
+        es_pago_mixto: Boolean(item.es_pago_mixto),
+        items_total: Number(item.pago_items_total || 1),
+        items: [],
+      })
+    }
+
+    const group = map.get(key)!
+    group.items.push(item)
+    group.total_usd = r2(group.total_usd + Number(item.monto_equivalente_usd || 0))
+    group.total_bs = r2(group.total_bs + Number(item.monto_equivalente_bs || 0))
+    group.es_pago_mixto = group.es_pago_mixto || Boolean(item.es_pago_mixto)
+    group.items_total = Math.max(group.items_total, Number(item.pago_items_total || 1))
+  }
+
+  return Array.from(map.values()).sort((a, b) => {
+    const fa = new Date(a.fecha).getTime()
+    const fb = new Date(b.fecha).getTime()
+    return fb - fa
+  })
+}
+
+function makePagoItem(moneda: 'USD' | 'BS' = 'USD'): PagoMixtoItem {
+  return {
+    id_local: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    moneda_pago: moneda,
+    metodo_pago_v2_id: '',
+    monto_usd: '',
+    monto_bs: null,
+    tasa_bcv: null,
+    referencia: '',
+    notas: '',
+  }
+}
+
+const PagoBsSelector = memo(function PagoBsSelector({
+  fecha,
+  montoUsd,
+  montoBs,
+  onChangeTasa,
+  onChangeMontoBs,
+}: {
+  fecha: string
+  montoUsd: number
+  montoBs: number | null
+  onChangeTasa: (tasa: number | null) => void
+  onChangeMontoBs: (monto: number) => void
+}) {
+  return (
+    <SelectorTasaBCV
+      fecha={fecha}
+      monedaPago="BS"
+      monedaReferencia="EUR"
+      montoUSD={montoUsd}
+      montoBs={montoBs || undefined}
+      onTasaChange={onChangeTasa}
+      onMontoBsChange={onChangeMontoBs}
+    />
+  )
+})
+
 export default function IngresosPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
-  const [pagos, setPagos] = useState<Pago[]>([])
+  const [pagos, setPagos] = useState<PagoItem[]>([])
   const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([])
   const [productos, setProductos] = useState<Producto[]>([])
   const [clientes, setClientes] = useState<Cliente[]>([])
@@ -231,17 +419,16 @@ export default function IngresosPage() {
 
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingOperacionId, setEditingOperacionId] = useState<string | null>(null)
 
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10))
   const [clienteId, setClienteId] = useState('')
   const [productoId, setProductoId] = useState('')
   const [cantidad, setCantidad] = useState(1)
   const [concepto, setConcepto] = useState('')
-  const [metodoPagoId, setMetodoPagoId] = useState('')
   const [estado, setEstado] = useState<EstadoUI>('pagado')
   const [notas, setNotas] = useState('')
-  const [tasaBCV, setTasaBCV] = useState(0)
-  const [referencia, setReferencia] = useState('')
+  const [pagosMixtos, setPagosMixtos] = useState<PagoMixtoItem[]>([makePagoItem('USD')])
 
   useEffect(() => {
     void cargarDatos()
@@ -255,15 +442,24 @@ export default function IngresosPage() {
         .from('pagos')
         .select(`
           id,
+          operacion_pago_id,
+          pago_item_no,
+          pago_items_total,
+          es_pago_mixto,
           fecha,
           concepto,
           categoria,
           tipo_origen,
           estado,
           moneda_pago,
+          tasa_bcv,
+          monto,
+          monto_pago,
           monto_equivalente_usd,
           monto_equivalente_bs,
           cliente_id,
+          inventario_id,
+          cantidad_producto,
           metodo_pago_id,
           metodo_pago_v2_id,
           notas,
@@ -284,7 +480,9 @@ export default function IngresosPage() {
           tipo,
           moneda,
           cartera:carteras(nombre, codigo)
-        `),
+        `)
+        .eq('activo', true)
+        .eq('permite_recibir', true),
 
       supabase
         .from('inventario')
@@ -338,7 +536,7 @@ export default function IngresosPage() {
   const precioUnitarioUSD = Number(productoSeleccionado?.precio_venta_usd || 0)
 
   const totalUSD = useMemo(() => {
-    return Math.round(Number((cantidad || 0) * precioUnitarioUSD) * 100) / 100
+    return r2(Number((cantidad || 0) * precioUnitarioUSD))
   }, [cantidad, precioUnitarioUSD])
 
   const stockInsuficiente = useMemo(() => {
@@ -346,34 +544,7 @@ export default function IngresosPage() {
     return cantidad > Number(productoSeleccionado.cantidad_actual || 0)
   }, [productoSeleccionado, cantidad])
 
-  const metodoSeleccionado = useMemo(
-    () => metodosPago.find((m) => m.id === metodoPagoId) || null,
-    [metodosPago, metodoPagoId]
-  )
-
-  const esBs = useMemo(() => {
-    const moneda = (metodoSeleccionado?.moneda || '').toUpperCase()
-    const nombre = (metodoSeleccionado?.nombre || '').toLowerCase()
-
-    return (
-      moneda === 'BS' ||
-      moneda === 'VES' ||
-      nombre.includes('bs') ||
-      nombre.includes('bolívar') ||
-      nombre.includes('bolivar') ||
-      nombre.includes('pago móvil') ||
-      nombre.includes('pago movil')
-    )
-  }, [metodoSeleccionado])
-
-  const totalBs = useMemo(() => {
-    if (!esBs || !tasaBCV || totalUSD <= 0) return 0
-    return Math.round(totalUSD * tasaBCV * 100) / 100
-  }, [esBs, tasaBCV, totalUSD])
-
   async function resolverTasaBCVActual() {
-    if (tasaBCV && tasaBCV > 0) return tasaBCV
-
     const hoy = new Date().toISOString().slice(0, 10)
 
     const { data, error } = await supabase
@@ -396,18 +567,8 @@ export default function IngresosPage() {
       throw new Error('No se pudo obtener la tasa BCV automática')
     }
 
-    setTasaBCV(posibleTasa)
     return posibleTasa
   }
-
-  useEffect(() => {
-    if (!esBs || estado !== 'pagado') return
-    if (tasaBCV > 0) return
-
-    void resolverTasaBCVActual().catch((err) => {
-      console.error('Error cargando tasa BCV automática:', err)
-    })
-  }, [esBs, estado, tasaBCV])
 
   async function descontarInventarioYCrearMovimiento(args: {
     pagoId?: string | null
@@ -477,6 +638,148 @@ export default function IngresosPage() {
     if (error) throw error
   }
 
+  function getMetodosForMoneda(moneda: 'USD' | 'BS') {
+    return moneda === 'USD'
+      ? metodosPago.filter((m) => detectarMetodoUsd(m))
+      : metodosPago.filter((m) => detectarMetodoBs(m))
+  }
+
+  function updatePagoItem(idLocal: string, patch: Partial<PagoMixtoItem>) {
+    setPagosMixtos((prev) =>
+      prev.map((item) => (item.id_local === idLocal ? { ...item, ...patch } : item))
+    )
+  }
+
+  function addPagoItem(moneda: 'USD' | 'BS' = 'USD') {
+    setPagosMixtos((prev) => [...prev, makePagoItem(moneda)])
+  }
+
+  function removePagoItem(idLocal: string) {
+    setPagosMixtos((prev) => {
+      if (prev.length <= 1) return prev
+      return prev.filter((item) => item.id_local !== idLocal)
+    })
+  }
+
+  const handlePagoBsTasaChange = useCallback((idLocal: string, tasa: number | null) => {
+    setPagosMixtos((prev) =>
+      prev.map((item) =>
+        item.id_local === idLocal ? { ...item, tasa_bcv: tasa } : item
+      )
+    )
+  }, [])
+
+  const handlePagoBsMontoChange = useCallback((idLocal: string, monto: number) => {
+    setPagosMixtos((prev) =>
+      prev.map((item) =>
+        item.id_local === idLocal ? { ...item, monto_bs: monto } : item
+      )
+    )
+  }, [])
+
+  const resumenPagos = useMemo(() => {
+    const items = pagosMixtos.map((item) => {
+      const montoUsdEq =
+        item.moneda_pago === 'USD'
+          ? r2(Number(item.monto_usd || 0))
+          : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+            ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+            : 0
+
+      const montoBs =
+        item.moneda_pago === 'BS'
+          ? r2(Number(item.monto_bs || 0))
+          : Number(item.tasa_bcv || 0) > 0 && Number(item.monto_usd || 0) > 0
+            ? r2(Number(item.monto_usd || 0) * Number(item.tasa_bcv || 0))
+            : 0
+
+      return {
+        ...item,
+        monto_equivalente_usd: montoUsdEq,
+        monto_equivalente_bs: montoBs > 0 ? montoBs : null,
+        monto_insertar:
+          item.moneda_pago === 'BS'
+            ? r2(Number(item.monto_bs || 0))
+            : r2(Number(item.monto_usd || 0)),
+        valido:
+          !!item.metodo_pago_v2_id &&
+          (
+            item.moneda_pago === 'USD'
+              ? Number(item.monto_usd || 0) > 0
+              : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+          ),
+      }
+    })
+
+    const totalUsd = r2(
+      items.reduce((acc, item) => acc + Number(item.monto_equivalente_usd || 0), 0)
+    )
+    const totalBs = r2(
+      items.reduce((acc, item) => acc + Number(item.monto_equivalente_bs || 0), 0)
+    )
+    const faltanteUsd = r2(Math.max(totalUSD - totalUsd, 0))
+    const excedenteUsd = r2(Math.max(totalUsd - totalUSD, 0))
+    const diferenciaUsd = r2(totalUSD - totalUsd)
+
+    return {
+      items,
+      totalUsd,
+      totalBs,
+      faltanteUsd,
+      excedenteUsd,
+      diferenciaUsd,
+      cuadra: Math.abs(diferenciaUsd) < 0.01 && totalUSD > 0,
+      todosValidos: items.every((item) => item.valido),
+    }
+  }, [pagosMixtos, totalUSD])
+
+  async function registrarPagoMixtoProducto(args: {
+    fecha: string
+    concepto: string
+    clienteId: string
+    inventarioId: string
+    cantidad: number
+    notasGenerales: string | null
+  }) {
+    const { data, error } = await supabase.rpc('registrar_pagos_mixtos', {
+      p_fecha: args.fecha,
+      p_tipo_origen: 'producto',
+      p_categoria: 'producto',
+      p_concepto: args.concepto,
+      p_cliente_id: args.clienteId,
+      p_cita_id: null,
+      p_cliente_plan_id: null,
+      p_cuenta_cobrar_id: null,
+      p_inventario_id: args.inventarioId,
+      p_registrado_por: null,
+      p_notas_generales: args.notasGenerales,
+      p_pagos: resumenPagos.items.map((item) => ({
+        metodo_pago_v2_id: item.metodo_pago_v2_id,
+        moneda_pago: item.moneda_pago,
+        monto: item.monto_insertar,
+        tasa_bcv: item.moneda_pago === 'BS' ? item.tasa_bcv : null,
+        referencia: item.referencia || null,
+        notas: item.notas || null,
+      })),
+    })
+
+    if (error) throw error
+
+    const operacionPagoId = data?.operacion_pago_id || null
+
+    if (operacionPagoId) {
+      await supabase
+        .from('pagos')
+        .update({
+          inventario_id: args.inventarioId,
+          cantidad_producto: args.cantidad,
+        })
+        .eq('operacion_pago_id', operacionPagoId)
+    }
+
+    return operacionPagoId
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
 
@@ -495,13 +798,8 @@ export default function IngresosPage() {
       return
     }
 
-    if (stockInsuficiente) {
+    if (!editingId && stockInsuficiente) {
       alert('No hay suficiente stock disponible')
-      return
-    }
-
-    if (estado === 'pagado' && !metodoPagoId) {
-      alert('Selecciona un método de pago')
       return
     }
 
@@ -515,78 +813,60 @@ export default function IngresosPage() {
       return
     }
 
+    const conceptoFinal =
+      concepto.trim() || `Venta de ${productoSeleccionado.nombre} x${cantidad}`
+
     setSaving(true)
 
     try {
-      const conceptoFinal =
-        concepto.trim() || `Venta de ${productoSeleccionado.nombre} x${cantidad}`
-
       if (editingId) {
         if (estado === 'pendiente') {
-          alert('Para evitar inconsistencias, una venta editada no se cambia a pendiente desde aquí.')
+          alert('Una operación pagada no se puede convertir a pendiente desde aquí.')
           setSaving(false)
           return
         }
 
-        let payload: any = {}
-
-        if (esBs) {
-          const tasaAplicada = await resolverTasaBCVActual()
-
-          if (!tasaAplicada || tasaAplicada <= 0) {
-            throw new Error('Debe colocar la tasa BCV')
-          }
-
-          const montoBsCalculado = Math.round(totalUSD * tasaAplicada * 100) / 100
-          const equivalentes = calcularEquivalentes(
-            montoBsCalculado,
-            'BS',
-            tasaAplicada
-          )
-
-          payload = {
-            fecha,
-            concepto: conceptoFinal,
-            categoria: 'producto',
-            tipo_origen: 'producto',
-            cliente_id: clienteSeleccionado.id,
-            moneda_pago: 'BS',
-            monto: montoBsCalculado,
-            tasa_bcv: tasaAplicada,
-            monto_equivalente_usd: equivalentes.usd,
-            monto_equivalente_bs: equivalentes.bs,
-            metodo_pago_id: null,
-            metodo_pago_v2_id: metodoPagoId,
-            estado: 'pagado',
-            notas: notas.trim() || null,
-            referencia: referencia.trim() || null,
-          }
-        } else {
-          payload = {
-            fecha,
-            concepto: conceptoFinal,
-            categoria: 'producto',
-            tipo_origen: 'producto',
-            cliente_id: clienteSeleccionado.id,
-            moneda_pago: 'USD',
-            monto: totalUSD,
-            tasa_bcv: null,
-            monto_equivalente_usd: totalUSD,
-            monto_equivalente_bs: null,
-            metodo_pago_id: null,
-            metodo_pago_v2_id: metodoPagoId,
-            estado: 'pagado',
-            notas: notas.trim() || null,
-            referencia: referencia.trim() || null,
-          }
+        if (!resumenPagos.todosValidos) {
+          alert('Completa correctamente todos los fragmentos del pago.')
+          setSaving(false)
+          return
         }
 
-        const { error } = await supabase
-          .from('pagos')
-          .update(payload)
-          .eq('id', editingId)
+        if (!resumenPagos.cuadra) {
+          alert(
+            `La suma de pagos no cuadra. Objetivo: ${formatearMoneda(totalUSD, 'USD')} | Registrado: ${formatearMoneda(
+              resumenPagos.totalUsd,
+              'USD'
+            )} | Faltante: ${formatearMoneda(resumenPagos.faltanteUsd, 'USD')}`
+          )
+          setSaving(false)
+          return
+        }
 
-        if (error) throw error
+        if (editingOperacionId) {
+          const { error: deleteError } = await supabase
+            .from('pagos')
+            .delete()
+            .eq('operacion_pago_id', editingOperacionId)
+
+          if (deleteError) throw deleteError
+        } else {
+          const { error: deleteError } = await supabase
+            .from('pagos')
+            .delete()
+            .eq('id', editingId)
+
+          if (deleteError) throw deleteError
+        }
+
+        await registrarPagoMixtoProducto({
+          fecha,
+          concepto: conceptoFinal,
+          clienteId: clienteSeleccionado.id,
+          inventarioId: productoId,
+          cantidad,
+          notasGenerales: notas.trim() || null,
+        })
 
         alert('✅ Ingreso actualizado')
         resetForm()
@@ -626,72 +906,37 @@ export default function IngresosPage() {
         return
       }
 
-      let payload: any = {}
-
-      if (esBs) {
-        const tasaAplicada = await resolverTasaBCVActual()
-
-        if (!tasaAplicada || tasaAplicada <= 0) {
-          throw new Error('Debe colocar la tasa BCV')
-        }
-
-        const montoBsCalculado = Math.round(totalUSD * tasaAplicada * 100) / 100
-        const equivalentes = calcularEquivalentes(
-          montoBsCalculado,
-          'BS',
-          tasaAplicada
-        )
-
-        payload = {
-          fecha,
-          concepto: conceptoFinal,
-          categoria: 'producto',
-          tipo_origen: 'producto',
-          cliente_id: clienteSeleccionado.id,
-          moneda_pago: 'BS',
-          monto: montoBsCalculado,
-          tasa_bcv: tasaAplicada,
-          monto_equivalente_usd: equivalentes.usd,
-          monto_equivalente_bs: equivalentes.bs,
-          metodo_pago_id: null,
-          metodo_pago_v2_id: metodoPagoId,
-          estado: 'pagado',
-          notas: notas.trim() || null,
-          referencia: referencia.trim() || null,
-        }
-      } else {
-        payload = {
-          fecha,
-          concepto: conceptoFinal,
-          categoria: 'producto',
-          tipo_origen: 'producto',
-          cliente_id: clienteSeleccionado.id,
-          moneda_pago: 'USD',
-          monto: totalUSD,
-          tasa_bcv: null,
-          monto_equivalente_usd: totalUSD,
-          monto_equivalente_bs: null,
-          metodo_pago_id: null,
-          metodo_pago_v2_id: metodoPagoId,
-          estado: 'pagado',
-          notas: notas.trim() || null,
-          referencia: referencia.trim() || null,
-        }
+      if (!resumenPagos.todosValidos) {
+        alert('Completa correctamente todos los fragmentos del pago.')
+        setSaving(false)
+        return
       }
 
-      const { data, error } = await supabase
-        .from('pagos')
-        .insert(payload)
-        .select('id')
-        .single()
+      if (!resumenPagos.cuadra) {
+        alert(
+          `La suma de pagos no cuadra. Objetivo: ${formatearMoneda(totalUSD, 'USD')} | Registrado: ${formatearMoneda(
+            resumenPagos.totalUsd,
+            'USD'
+          )} | Faltante: ${formatearMoneda(resumenPagos.faltanteUsd, 'USD')}`
+        )
+        setSaving(false)
+        return
+      }
 
-      if (error) throw error
+      await registrarPagoMixtoProducto({
+        fecha,
+        concepto: conceptoFinal,
+        clienteId: clienteSeleccionado.id,
+        inventarioId: productoId,
+        cantidad,
+        notasGenerales: notas.trim() || null,
+      })
 
       const cantidadAnterior = Number(productoSeleccionado.cantidad_actual || 0)
       const cantidadNueva = cantidadAnterior - cantidad
 
       await descontarInventarioYCrearMovimiento({
-        pagoId: data.id,
+        pagoId: null,
         productoId,
         cantidad,
         cantidadAnterior,
@@ -716,36 +961,62 @@ export default function IngresosPage() {
     setClienteId('')
     setCantidad(1)
     setConcepto('')
-    setMetodoPagoId('')
     setEstado('pagado')
     setNotas('')
-    setReferencia('')
-    setTasaBCV(0)
     setFecha(new Date().toISOString().slice(0, 10))
+    setPagosMixtos([makePagoItem('USD')])
     setEditingId(null)
+    setEditingOperacionId(null)
     setShowForm(false)
   }
 
-  function startEdit(pago: Pago) {
-    setEditingId(pago.id)
-    setFecha(pago.fecha)
-    setConcepto(pago.concepto)
-    setProductoId('')
-    setCantidad(1)
-    setClienteId(pago.cliente_id || '')
-    setMetodoPagoId(pago.metodo_pago_v2_id || '')
-    setEstado(estadoUiDesdeDb(pago.estado))
-    setNotas(pago.notas || '')
-    setReferencia(pago.referencia || '')
+  function startEdit(operacion: PagoOperacion) {
+    setEditingId(operacion.id_representativo)
+    setEditingOperacionId(operacion.operacion_pago_id)
+    setFecha(operacion.fecha)
+    setConcepto(operacion.concepto)
+    setProductoId(operacion.inventario_id || '')
+    setCantidad(Number(operacion.cantidad_producto || 1))
+    setClienteId(operacion.cliente_id || '')
+    setEstado(estadoUiDesdeDb(operacion.estado))
+    setNotas(operacion.items[0]?.notas || '')
+    setPagosMixtos(
+      operacion.items.map((item) => ({
+        id_local: `${item.id}_${Math.random().toString(36).slice(2, 6)}`,
+        moneda_pago: (item.moneda_pago || 'USD') as 'USD' | 'BS',
+        metodo_pago_v2_id: item.metodo_pago_v2_id || '',
+        monto_usd:
+          String(
+            item.moneda_pago === 'BS'
+              ? r2(Number(item.monto_equivalente_usd || 0))
+              : r2(Number(item.monto_equivalente_usd || 0))
+          ),
+        monto_bs:
+          item.moneda_pago === 'BS'
+            ? r2(Number(item.monto_equivalente_bs || item.monto || 0))
+            : null,
+        tasa_bcv: item.tasa_bcv || null,
+        referencia: item.referencia || '',
+        notas: item.notas || '',
+      }))
+    )
     setShowForm(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  async function eliminarPago(id: string) {
+  async function eliminarPago(operacion: PagoOperacion) {
     if (!confirm('¿Eliminar este ingreso?')) return
 
     try {
-      const { error } = await supabase.from('pagos').delete().eq('id', id)
+      let query = supabase.from('pagos').delete()
+
+      if (operacion.operacion_pago_id) {
+        query = query.eq('operacion_pago_id', operacion.operacion_pago_id)
+      } else {
+        query = query.eq('id', operacion.id_representativo)
+      }
+
+      const { error } = await query
       if (error) throw error
 
       alert('✅ Ingreso eliminado')
@@ -755,11 +1026,11 @@ export default function IngresosPage() {
     }
   }
 
-  const pagosFiltrados = useMemo(() => {
-    return pagos.filter((pago) => {
-      const estadoUi = estadoUiDesdeDb(pago.estado)
+  const operaciones = useMemo(() => agruparPagosPorOperacion(pagos), [pagos])
 
-      if (estadoFiltro !== 'todos' && estadoUi !== estadoFiltro) return false
+  const pagosFiltrados = useMemo(() => {
+    return operaciones.filter((pago) => {
+      if (estadoFiltro !== 'todos' && pago.estado !== estadoFiltro) return false
 
       if (search) {
         const s = search.toLowerCase()
@@ -767,29 +1038,23 @@ export default function IngresosPage() {
           pago.concepto.toLowerCase().includes(s) ||
           pago.categoria.toLowerCase().includes(s) ||
           pago.tipo_origen.toLowerCase().includes(s) ||
-          (pago.clientes?.nombre || '').toLowerCase().includes(s)
+          (pago.cliente_nombre || '').toLowerCase().includes(s)
         )
       }
 
       return true
     })
-  }, [pagos, estadoFiltro, search])
+  }, [operaciones, estadoFiltro, search])
 
   const totales = useMemo(() => {
-    const pagados = pagos.filter((p) => estadoUiDesdeDb(p.estado) === 'pagado')
+    const pagados = operaciones.filter((p) => p.estado === 'pagado')
 
     return {
-      totalUSD: pagados.reduce(
-        (sum, p) => sum + Number(p.monto_equivalente_usd || 0),
-        0
-      ),
-      totalBS: pagados.reduce(
-        (sum, p) => sum + Number(p.monto_equivalente_bs || 0),
-        0
-      ),
+      totalUSD: pagados.reduce((sum, p) => sum + Number(p.total_usd || 0), 0),
+      totalBS: pagados.reduce((sum, p) => sum + Number(p.total_bs || 0), 0),
       cantidad: pagados.length,
     }
-  }, [pagos])
+  }, [operaciones])
 
   if (loading) {
     return (
@@ -840,7 +1105,7 @@ export default function IngresosPage() {
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl">
-              <p className="text-xs text-white/55">Registros</p>
+              <p className="text-xs text-white/55">Operaciones</p>
               <p className="mt-1 text-lg font-semibold text-white">
                 {totales.cantidad}
               </p>
@@ -925,12 +1190,8 @@ export default function IngresosPage() {
                         <p className="truncate font-medium text-white">
                           {clienteSeleccionado.nombre}
                         </p>
-                        {clienteSeleccionado.telefono ? (
-                          <p>{clienteSeleccionado.telefono}</p>
-                        ) : null}
-                        {clienteSeleccionado.email ? (
-                          <p className="truncate">{clienteSeleccionado.email}</p>
-                        ) : null}
+                        {clienteSeleccionado.telefono ? <p>{clienteSeleccionado.telefono}</p> : null}
+                        {clienteSeleccionado.email ? <p className="truncate">{clienteSeleccionado.email}</p> : null}
                       </div>
                     </div>
                   )}
@@ -951,6 +1212,7 @@ export default function IngresosPage() {
                     }}
                     className={inputCls}
                     required
+                    disabled={!!editingId}
                   >
                     <option value="" className="bg-[#11131a]">
                       Seleccionar producto...
@@ -961,6 +1223,12 @@ export default function IngresosPage() {
                       </option>
                     ))}
                   </select>
+
+                  {editingId && (
+                    <p className="mt-2 text-xs text-amber-300">
+                      Al editar, producto y cantidad quedan bloqueados para no desajustar el stock.
+                    </p>
+                  )}
 
                   {productoSeleccionado && (
                     <div className="mt-3 flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
@@ -973,15 +1241,11 @@ export default function IngresosPage() {
                           {productoSeleccionado.nombre}
                         </p>
                         <p>
-                          Stock: {productoSeleccionado.cantidad_actual}{' '}
-                          {productoSeleccionado.unidad_medida}
+                          Stock: {productoSeleccionado.cantidad_actual} {productoSeleccionado.unidad_medida}
                         </p>
                         <p>
                           Precio venta:{' '}
-                          {formatearMoneda(
-                            Number(productoSeleccionado.precio_venta_usd || 0),
-                            'USD'
-                          )}
+                          {formatearMoneda(Number(productoSeleccionado.precio_venta_usd || 0), 'USD')}
                         </p>
                       </div>
                     </div>
@@ -1005,11 +1269,11 @@ export default function IngresosPage() {
                     }}
                     className={inputCls}
                     required
+                    disabled={!!editingId}
                   />
                   {productoSeleccionado && (
                     <p className="mt-2 text-xs text-white/45">
-                      Disponible: {formatQty(productoSeleccionado.cantidad_actual)}{' '}
-                      {productoSeleccionado.unidad_medida}
+                      Disponible: {formatQty(productoSeleccionado.cantidad_actual)} {productoSeleccionado.unidad_medida}
                     </p>
                   )}
                 </div>
@@ -1040,15 +1304,6 @@ export default function IngresosPage() {
                     </span>
                   </div>
 
-                  {esBs && estado === 'pagado' && (
-                    <div className="mt-2 flex items-center justify-between text-sm">
-                      <span className="text-white/55">Total Bs</span>
-                      <span className="font-semibold text-white">
-                        {totalBs > 0 ? formatearMoneda(totalBs, 'BS') : '—'}
-                      </span>
-                    </div>
-                  )}
-
                   {estado === 'pendiente' && (
                     <p className="mt-3 text-xs text-amber-300">
                       Si no paga, se envía a cobranzas con el cliente seleccionado.
@@ -1062,6 +1317,7 @@ export default function IngresosPage() {
                     value={estado}
                     onChange={(e) => setEstado(e.target.value as EstadoUI)}
                     className={inputCls}
+                    disabled={!!editingId}
                   >
                     <option value="pagado" className="bg-[#11131a]">
                       Pagado
@@ -1070,31 +1326,261 @@ export default function IngresosPage() {
                       Pendiente
                     </option>
                   </select>
+
+                  {editingId && (
+                    <p className="mt-2 text-xs text-amber-300">
+                      Al editar, esta operación se mantiene como pagada.
+                    </p>
+                  )}
                 </div>
 
                 {estado === 'pagado' && (
-                  <SelectorMetodoPago
-                    metodoPagoId={metodoPagoId}
-                    onMetodoPagoChange={setMetodoPagoId}
-                    onTasaChange={setTasaBCV}
-                    tasaActual={tasaBCV}
-                    monto={estado === 'pagado' && esBs ? totalBs : totalUSD}
-                  />
+                  <div className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                    <p className="text-sm font-medium text-white">Pago</p>
+
+                    {pagosMixtos.map((item, index) => {
+                      const metodosDisponibles = getMetodosForMoneda(item.moneda_pago)
+                      const montoUsdEq =
+                        item.moneda_pago === 'USD'
+                          ? r2(Number(item.monto_usd || 0))
+                          : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+                            ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+                            : 0
+
+                      return (
+                        <div
+                          key={item.id_local}
+                          className="rounded-2xl border border-white/10 bg-white/[0.02] p-4"
+                        >
+                          <div className="mb-4 flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-semibold text-white">
+                                Fragmento #{index + 1}
+                              </p>
+                              <p className="text-xs text-white/45">
+                                {item.moneda_pago === 'BS'
+                                  ? `Equivalente USD calculado: ${formatearMoneda(montoUsdEq, 'USD')}`
+                                  : `Monto del fragmento: ${formatearMoneda(montoUsdEq, 'USD')}`}
+                              </p>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => removePagoItem(item.id_local)}
+                              disabled={pagosMixtos.length <= 1}
+                              className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/70 hover:bg-white/[0.06] disabled:opacity-40"
+                            >
+                              Quitar
+                            </button>
+                          </div>
+
+                          <div className="grid gap-4 md:grid-cols-3">
+                            <div>
+                              <label className={labelCls}>Moneda</label>
+                              <select
+                                value={item.moneda_pago}
+                                onChange={(e) =>
+                                  updatePagoItem(item.id_local, {
+                                    moneda_pago: e.target.value as 'USD' | 'BS',
+                                    metodo_pago_v2_id: '',
+                                    monto_usd: '',
+                                    monto_bs: null,
+                                    tasa_bcv: null,
+                                  })
+                                }
+                                className={inputCls}
+                              >
+                                <option value="USD" className="bg-[#11131a]">USD</option>
+                                <option value="BS" className="bg-[#11131a]">Bs</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className={labelCls}>
+                                {item.moneda_pago === 'USD' ? 'Método USD' : 'Método Bs'}
+                              </label>
+                              <select
+                                value={item.metodo_pago_v2_id}
+                                onChange={(e) =>
+                                  updatePagoItem(item.id_local, {
+                                    metodo_pago_v2_id: e.target.value,
+                                  })
+                                }
+                                className={inputCls}
+                              >
+                                <option value="" className="bg-[#11131a]">
+                                  Seleccionar método
+                                </option>
+                                {metodosDisponibles.map((metodo) => (
+                                  <option key={metodo.id} value={metodo.id} className="bg-[#11131a]">
+                                    {metodo.nombre}
+                                    {metodo.moneda ? ` · ${metodo.moneda}` : ''}
+                                    {metodo.cartera?.nombre ? ` · ${metodo.cartera.nombre}` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {item.moneda_pago === 'USD' ? (
+                              <div>
+                                <label className={labelCls}>Monto USD</label>
+                                <input
+                                  type="number"
+                                  min="0.01"
+                                  step="0.01"
+                                  value={item.monto_usd}
+                                  onChange={(e) =>
+                                    updatePagoItem(item.id_local, {
+                                      monto_usd: e.target.value,
+                                    })
+                                  }
+                                  className={inputCls}
+                                  placeholder="0.00"
+                                />
+                              </div>
+                            ) : (
+                              <div>
+                                <label className={labelCls}>Monto Bs</label>
+                                <input
+                                  type="number"
+                                  min="0.01"
+                                  step="0.01"
+                                  value={item.monto_bs ?? ''}
+                                  onChange={(e) =>
+                                    updatePagoItem(item.id_local, {
+                                      monto_bs: e.target.value ? Number(e.target.value) : null,
+                                    })
+                                  }
+                                  className={inputCls}
+                                  placeholder="0.00"
+                                />
+                              </div>
+                            )}
+
+                            {item.moneda_pago === 'BS' && (
+                              <div className="md:col-span-3">
+                                <PagoBsSelector
+                                  fecha={fecha}
+                                  montoUsd={
+                                    Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+                                      ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+                                      : 0
+                                  }
+                                  montoBs={item.monto_bs}
+                                  onChangeTasa={(tasa) => handlePagoBsTasaChange(item.id_local, tasa)}
+                                  onChangeMontoBs={(monto) => handlePagoBsMontoChange(item.id_local, monto)}
+                                />
+                              </div>
+                            )}
+
+                            <div>
+                              <label className={labelCls}>Referencia</label>
+                              <input
+                                type="text"
+                                value={item.referencia}
+                                onChange={(e) =>
+                                  updatePagoItem(item.id_local, {
+                                    referencia: e.target.value,
+                                  })
+                                }
+                                placeholder="Número de referencia..."
+                                className={inputCls}
+                              />
+                            </div>
+
+                            <div className="md:col-span-2">
+                              <label className={labelCls}>Notas del fragmento</label>
+                              <input
+                                type="text"
+                                value={item.notas}
+                                onChange={(e) =>
+                                  updatePagoItem(item.id_local, {
+                                    notas: e.target.value,
+                                  })
+                                }
+                                placeholder="Notas del fragmento"
+                                className={inputCls}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={() => addPagoItem('USD')}
+                        className={softButtonCls}
+                      >
+                        + Agregar pago USD
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => addPagoItem('BS')}
+                        className={softButtonCls}
+                      >
+                        + Agregar pago Bs
+                      </button>
+                    </div>
+
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+                      <div className="grid gap-3 sm:grid-cols-3 text-sm">
+                        <div>
+                          <p className="text-xs text-white/45">Objetivo</p>
+                          <p className="mt-1 font-semibold text-white">
+                            {formatearMoneda(totalUSD, 'USD')}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-white/45">Total USD</p>
+                          <p className="mt-1 font-semibold text-emerald-400">
+                            {formatearMoneda(resumenPagos.totalUsd, 'USD')}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-white/45">Total Bs</p>
+                          <p className="mt-1 font-semibold text-amber-300">
+                            {formatearMoneda(resumenPagos.totalBs, 'BS')}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                        {!resumenPagos.cuadra ? (
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-sm">
+                              <span className="text-white/55">Faltante USD:</span>
+                              <span className="font-semibold text-amber-300">
+                                {formatearMoneda(resumenPagos.faltanteUsd, 'USD')}
+                              </span>
+                            </div>
+
+                            {resumenPagos.excedenteUsd > 0 && (
+                              <div className="flex justify-between text-sm">
+                                <span className="text-white/55">Excedente USD:</span>
+                                <span className="font-semibold text-rose-300">
+                                  {formatearMoneda(resumenPagos.excedenteUsd, 'USD')}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex justify-between text-sm">
+                            <span className="text-white/55">Estado:</span>
+                            <span className="font-semibold text-emerald-300">
+                              Pago completo
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 <div>
-                  <label className={labelCls}>Referencia (opcional)</label>
-                  <input
-                    type="text"
-                    value={referencia}
-                    onChange={(e) => setReferencia(e.target.value)}
-                    placeholder="Número de referencia..."
-                    className={inputCls}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelCls}>Notas (opcional)</label>
+                  <label className={labelCls}>Notas generales (opcional)</label>
                   <textarea
                     value={notas}
                     onChange={(e) => setNotas(e.target.value)}
@@ -1104,7 +1590,7 @@ export default function IngresosPage() {
                   />
                 </div>
 
-                {stockInsuficiente && (
+                {stockInsuficiente && !editingId && (
                   <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3">
                     <p className="text-sm text-rose-300">
                       No hay suficiente stock para esta venta.
@@ -1115,7 +1601,7 @@ export default function IngresosPage() {
                 <div className="flex flex-col gap-3 sm:flex-row">
                   <button
                     type="submit"
-                    disabled={saving || !!stockInsuficiente}
+                    disabled={saving || (!!stockInsuficiente && !editingId)}
                     className="
                       flex-1 rounded-2xl border border-white/10 bg-white/[0.03]
                       px-6 py-3.5 text-sm font-medium text-white transition
@@ -1170,30 +1656,37 @@ export default function IngresosPage() {
                   <p className="text-white/45">No hay ingresos registrados</p>
                 </div>
               ) : (
-                pagosFiltrados.map((pago) => {
-                  const estadoUi = estadoUiDesdeDb(pago.estado)
+                pagosFiltrados.map((operacion) => {
+                  const estadoUi = estadoUiDesdeDb(operacion.estado)
 
                   return (
                     <div
-                      key={pago.id}
+                      key={operacion.key}
                       className={`${panelCls} p-5 transition hover:bg-white/[0.04]`}
                     >
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0 flex-1">
                           <h3 className="truncate font-medium text-white">
-                            {pago.concepto}
+                            {operacion.concepto}
                           </h3>
 
                           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-white/45">
-                            <span>{pago.fecha}</span>
+                            <span>{operacion.fecha}</span>
                             <span>•</span>
-                            <span>{pago.categoria}</span>
+                            <span>{operacion.categoria}</span>
                             <span>•</span>
-                            <span>{pago.tipo_origen}</span>
-                            {pago.clientes?.nombre ? (
+                            <span>{operacion.tipo_origen}</span>
+                            {operacion.cliente_nombre ? (
                               <>
                                 <span>•</span>
-                                <span>{pago.clientes.nombre}</span>
+                                <span>{operacion.cliente_nombre}</span>
+                              </>
+                            ) : null}
+
+                            {operacion.es_pago_mixto ? (
+                              <>
+                                <span>•</span>
+                                <span>{operacion.items_total} pagos</span>
                               </>
                             ) : null}
 
@@ -1204,28 +1697,58 @@ export default function IngresosPage() {
                                   : 'border-amber-400/20 bg-amber-400/10 text-amber-300'
                               }`}
                             >
-                              {estadoUi}
+                              {operacion.estado}
                             </span>
                           </div>
 
-                          <div className="mt-3 text-xs text-white/45">
-                            {pago.metodos_pago_v2?.nombre || 'Sin método'}
+                          <div className="mt-3 space-y-2">
+                            {operacion.items.map((item) => (
+                              <div
+                                key={item.id}
+                                className="rounded-2xl border border-white/10 bg-white/[0.02] px-3 py-2"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                                  <div className="flex flex-wrap items-center gap-2 text-white/70">
+                                    <span className="font-medium text-white">
+                                      {item.metodos_pago_v2?.nombre || 'Método'}
+                                    </span>
+                                    <span>·</span>
+                                    <span>{item.moneda_pago || 'USD'}</span>
+                                    {item.referencia ? (
+                                      <>
+                                        <span>·</span>
+                                        <span>Ref: {item.referencia}</span>
+                                      </>
+                                    ) : null}
+                                  </div>
+
+                                  <div className="text-right">
+                                    <p className="font-semibold text-white">
+                                      {formatearMoneda(Number(item.monto_equivalente_usd || 0), 'USD')}
+                                    </p>
+                                    <p className="text-xs text-white/45">
+                                      {formatearMoneda(Number(item.monto_equivalente_bs || 0), 'BS')}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         </div>
 
                         <div className="flex items-start gap-4 lg:ml-4 lg:flex-shrink-0">
                           <div className="text-right">
                             <p className="text-sm font-semibold text-white">
-                              {formatearMoneda(Number(pago.monto_equivalente_usd || 0), 'USD')}
+                              {formatearMoneda(Number(operacion.total_usd || 0), 'USD')}
                             </p>
                             <p className="mt-1 text-xs text-white/45">
-                              {formatearMoneda(Number(pago.monto_equivalente_bs || 0), 'BS')}
+                              {formatearMoneda(Number(operacion.total_bs || 0), 'BS')}
                             </p>
                           </div>
 
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => startEdit(pago)}
+                              onClick={() => startEdit(operacion)}
                               className="rounded-2xl border border-white/10 bg-white/[0.03] p-2 text-white/60 transition hover:bg-white/[0.06] hover:text-white"
                               title="Editar"
                             >
@@ -1233,7 +1756,7 @@ export default function IngresosPage() {
                             </button>
 
                             <button
-                              onClick={() => eliminarPago(pago.id)}
+                              onClick={() => eliminarPago(operacion)}
                               className="rounded-2xl border border-rose-400/20 bg-rose-400/10 p-2 text-rose-300 transition hover:bg-rose-400/15"
                               title="Eliminar"
                             >

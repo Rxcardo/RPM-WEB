@@ -16,6 +16,11 @@ type EmpleadoRef = {
   rol: string | null
 } | null
 
+type AuditorRef = {
+  id: string
+  nombre: string | null
+} | null
+
 type Cliente = {
   id: string
   nombre: string
@@ -23,10 +28,15 @@ type Cliente = {
   email: string | null
   estado: string
   created_at: string
+  updated_at: string | null
+  created_by: string | null
+  updated_by: string | null
   terapeuta_id: string | null
   empleado_id: string | null
   terapeuta: EmpleadoRef
   empleado: EmpleadoRef
+  creado_por: AuditorRef
+  editado_por: AuditorRef
 }
 
 type ClientePlan = {
@@ -40,7 +50,8 @@ type ClientePlan = {
   planes: {
     nombre: string
     precio: number | null
-    vigencia_dias?: number | null
+    vigencia_valor?: number | null
+    vigencia_tipo?: string | null
   } | null
 }
 
@@ -103,6 +114,31 @@ function formatDate(value: string | null | undefined) {
   } catch {
     return value
   }
+}
+
+function formatAuditDate(value: string | null | undefined) {
+  if (!value) return '—'
+  try {
+    return new Date(value).toLocaleString()
+  } catch {
+    return value
+  }
+}
+
+function formatVigencia(
+  valor: number | null | undefined,
+  tipo: string | null | undefined
+) {
+  const n = Number(valor || 0)
+  const t = (tipo || '').toLowerCase()
+
+  if (!n) return '—'
+
+  if (t === 'dias') return `${n} ${n === 1 ? 'día' : 'días'}`
+  if (t === 'semanas') return `${n} ${n === 1 ? 'semana' : 'semanas'}`
+  if (t === 'meses') return `${n} ${n === 1 ? 'mes' : 'meses'}`
+
+  return `${n} ${tipo || ''}`.trim()
 }
 
 function estadoBadge(estado: string) {
@@ -174,6 +210,28 @@ function resolveEmpleadoNombre(cliente: Cliente) {
   return fisioterapeuta || empleado || 'Sin asignar'
 }
 
+function getAuditLines(cliente: Cliente) {
+  const creador = cliente.creado_por?.nombre || 'Sin registro'
+  const editor = cliente.editado_por?.nombre || 'Sin registro'
+
+  const createdAt = formatAuditDate(cliente.created_at)
+  const updatedAt = formatAuditDate(cliente.updated_at)
+
+  const wasEdited =
+    !!cliente.updated_at &&
+    cliente.updated_at !== cliente.created_at &&
+    !!cliente.updated_by
+
+  if (!wasEdited) {
+    return [`Creó: ${creador} · ${createdAt}`]
+  }
+
+  return [
+    `Creó: ${creador} · ${createdAt}`,
+    `Editó: ${editor} · ${updatedAt}`,
+  ]
+}
+
 function Field({
   label,
   children,
@@ -227,18 +285,29 @@ export default function ClientesPage() {
             email,
             estado,
             created_at,
+            updated_at,
+            created_by,
+            updated_by,
             terapeuta_id,
             empleado_id,
             terapeuta:terapeuta_id (
-  id,
-  nombre,
-  rol
-),
-empleado:empleado_id (
-  id,
-  nombre,
-  rol
-)
+              id,
+              nombre,
+              rol
+            ),
+            empleado:empleado_id (
+              id,
+              nombre,
+              rol
+            ),
+            creado_por:created_by (
+              id,
+              nombre
+            ),
+            editado_por:updated_by (
+              id,
+              nombre
+            )
           `)
           .order('created_at', { ascending: false }),
 
@@ -255,7 +324,8 @@ empleado:empleado_id (
             planes:plan_id (
               nombre,
               precio,
-              vigencia_dias
+              vigencia_valor,
+              vigencia_tipo
             )
           `)
           .eq('estado', 'activo'),
@@ -552,9 +622,9 @@ empleado:empleado_id (
                 className={inputClassName}
               >
                 <option value="nombre_asc" className="bg-[#11131a] text-white">Nombre A-Z</option>
-<option value="nombre_desc" className="bg-[#11131a] text-white">Nombre Z-A</option>
-<option value="empleado_asc" className="bg-[#11131a] text-white">Fisioterapeuta A-Z</option>
-<option value="empleado_desc" className="bg-[#11131a] text-white">Fisioterapeuta Z-A</option>
+                <option value="nombre_desc" className="bg-[#11131a] text-white">Nombre Z-A</option>
+                <option value="empleado_asc" className="bg-[#11131a] text-white">Fisioterapeuta A-Z</option>
+                <option value="empleado_desc" className="bg-[#11131a] text-white">Fisioterapeuta Z-A</option>
                 <option value="fecha_reciente" className="bg-[#11131a] text-white">Más recientes</option>
                 <option value="fecha_antigua" className="bg-[#11131a] text-white">Más antiguos</option>
                 <option value="estado" className="bg-[#11131a] text-white">Estado</option>
@@ -605,8 +675,13 @@ empleado:empleado_id (
                   <tr key={cliente.id} className="align-top transition hover:bg-white/[0.03]">
                     <td className="px-4 py-4">
                       <div className="font-medium text-white">{cliente.nombre}</div>
-                      <div className="mt-1 text-xs text-white/45">
-                        Registro: {formatDate(cliente.created_at)}
+
+                      <div className="mt-1 space-y-1">
+                        {getAuditLines(cliente).map((line, index) => (
+                          <div key={index} className="text-[11px] leading-4 text-white/35">
+                            {line}
+                          </div>
+                        ))}
                       </div>
                     </td>
 
@@ -637,6 +712,13 @@ empleado:empleado_id (
                           </div>
                           <div className="mt-1 text-xs text-white/45">
                             Vence: {formatDate(planActivo.fecha_fin)}
+                          </div>
+                          <div className="mt-1 text-xs text-white/45">
+                            Vigencia:{' '}
+                            {formatVigencia(
+                              planActivo.planes?.vigencia_valor,
+                              planActivo.planes?.vigencia_tipo
+                            )}
                           </div>
                           <div className="mt-1 text-xs text-white/45">
                             Valor: {money(planActivo.planes?.precio)}

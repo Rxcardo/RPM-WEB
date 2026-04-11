@@ -11,6 +11,11 @@ import Section from '@/components/ui/Section'
 import StatCard from '@/components/ui/StatCard'
 import ActionCard from '@/components/ui/ActionCard'
 
+type AuditorRef = {
+  id: string
+  nombre: string | null
+} | null
+
 type Cliente = {
   id: string
   nombre: string
@@ -18,13 +23,19 @@ type Cliente = {
   email: string | null
   estado: string
   created_at: string
+  updated_at: string | null
+  created_by: string | null
+  updated_by: string | null
+  creado_por: AuditorRef
+  editado_por: AuditorRef
 }
 
 type Plan = {
   id: string
   nombre: string
   sesiones_totales: number
-  vigencia_dias: number
+  vigencia_valor: number
+  vigencia_tipo: 'dias' | 'semanas' | 'meses' | string
   precio: number
   estado: string
   descripcion: string | null
@@ -158,6 +169,50 @@ function formatDateTime(value: string | null | undefined) {
 function formatTime(value: string | null | undefined) {
   if (!value) return '—'
   return String(value).slice(0, 5)
+}
+
+function formatAuditDate(value: string | null | undefined) {
+  if (!value) return '—'
+  try {
+    return new Date(value).toLocaleString()
+  } catch {
+    return value
+  }
+}
+
+function formatVigencia(valor: number | null | undefined, tipo: string | null | undefined) {
+  const n = Number(valor || 0)
+  const t = (tipo || '').toLowerCase()
+
+  if (!n) return '—'
+
+  if (t === 'dias') return `${n} ${n === 1 ? 'día' : 'días'}`
+  if (t === 'semanas') return `${n} ${n === 1 ? 'semana' : 'semanas'}`
+  if (t === 'meses') return `${n} ${n === 1 ? 'mes' : 'meses'}`
+
+  return `${n} ${tipo || ''}`.trim()
+}
+
+function getAuditLines(cliente: Cliente) {
+  const creador = cliente.creado_por?.nombre || 'Sin registro'
+  const editor = cliente.editado_por?.nombre || 'Sin registro'
+
+  const createdAt = formatAuditDate(cliente.created_at)
+  const updatedAt = formatAuditDate(cliente.updated_at)
+
+  const wasEdited =
+    !!cliente.updated_at &&
+    cliente.updated_at !== cliente.created_at &&
+    !!cliente.updated_by
+
+  if (!wasEdited) {
+    return [`Creó: ${creador} · ${createdAt}`]
+  }
+
+  return [
+    `Creó: ${creador} · ${createdAt}`,
+    `Editó: ${editor} · ${updatedAt}`,
+  ]
 }
 
 function estadoPlanBadge(estado: string) {
@@ -301,13 +356,31 @@ export default function ClienteDetallePage() {
     try {
       const clienteRes = await supabase
         .from('clientes')
-        .select('id, nombre, telefono, email, estado, created_at')
+        .select(`
+          id,
+          nombre,
+          telefono,
+          email,
+          estado,
+          created_at,
+          updated_at,
+          created_by,
+          updated_by,
+          creado_por:created_by (
+            id,
+            nombre
+          ),
+          editado_por:updated_by (
+            id,
+            nombre
+          )
+        `)
         .eq('id', id)
         .single()
 
       if (clienteRes.error) throw new Error(clienteRes.error.message)
 
-      setCliente(clienteRes.data as Cliente)
+      setCliente(clienteRes.data as unknown as Cliente)
       setLoading(false)
       void loadClienteExtras(id)
     } catch (err: any) {
@@ -338,7 +411,8 @@ export default function ClienteDetallePage() {
             id,
             nombre,
             sesiones_totales,
-            vigencia_dias,
+            vigencia_valor,
+            vigencia_tipo,
             precio,
             estado,
             descripcion
@@ -468,7 +542,6 @@ export default function ClienteDetallePage() {
                 }
               : null,
           }))
-          // ✅ Excluir sesiones cuyo plan esté cancelado
           .filter((row) => {
             const estadoPlan = (row.clientes_planes?.estado || '').toLowerCase()
             return estadoPlan !== 'cancelado'
@@ -508,7 +581,6 @@ export default function ClienteDetallePage() {
     return { totalPagado, cantidad: pagosPagados.length, monedaResumen }
   }, [pagos])
 
-  // ✅ Stats de asistencia solo de sesiones con plan NO cancelado (ya filtrado arriba)
   const resumenAsistenciaPlan = useMemo(() => {
     return {
       asistio: sesionesPlan.filter((s) => s.asistencia_estado === 'asistio').length,
@@ -640,6 +712,7 @@ export default function ClienteDetallePage() {
                 <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
                   <tr>
                     <th className="px-4 py-3 text-left font-medium">Plan</th>
+                    <th className="px-4 py-3 text-left font-medium">Vigencia</th>
                     <th className="px-4 py-3 text-left font-medium">Precio</th>
                     <th className="px-4 py-3 text-left font-medium">Inicio</th>
                     <th className="px-4 py-3 text-left font-medium">Fin</th>
@@ -650,7 +723,7 @@ export default function ClienteDetallePage() {
                 <tbody className="divide-y divide-white/10">
                   {historialPlanes.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-6 text-white/55">
+                      <td colSpan={7} className="px-4 py-6 text-white/55">
                         Este cliente no tiene planes registrados.
                       </td>
                     </tr>
@@ -673,6 +746,9 @@ export default function ClienteDetallePage() {
                                 </p>
                               ) : null}
                             </div>
+                          </td>
+                          <td className="px-4 py-3 text-white/75">
+                            {formatVigencia(item.planes?.vigencia_valor, item.planes?.vigencia_tipo)}
                           </td>
                           <td className="px-4 py-3 text-white/75">
                             {money(item.planes?.precio || 0, 'USD')}
@@ -855,6 +931,16 @@ export default function ClienteDetallePage() {
         </div>
 
         <div className="space-y-6 xl:col-span-1">
+          <Section title="Auditoría del cliente" description="Quién lo creó y quién lo editó.">
+            <div className="space-y-2">
+              {getAuditLines(cliente).map((line, index) => (
+                <Card key={index} className="p-3">
+                  <p className="text-sm text-white/75">{line}</p>
+                </Card>
+              ))}
+            </div>
+          </Section>
+
           <Section title="Plan actual" description="Resumen del plan activo y acceso rápido.">
             {!planActivo ? (
               <p className="text-sm text-white/55">No tiene plan activo.</p>
@@ -866,6 +952,9 @@ export default function ClienteDetallePage() {
                   </p>
                   <p className="text-sm text-white/55">
                     {money(planActivo.planes?.precio || 0, 'USD')}
+                  </p>
+                  <p className="text-xs text-white/45">
+                    Vigencia: {formatVigencia(planActivo.planes?.vigencia_valor, planActivo.planes?.vigencia_tipo)}
                   </p>
                 </div>
 

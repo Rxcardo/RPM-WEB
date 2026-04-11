@@ -7,7 +7,6 @@ import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import StatCard from '@/components/ui/StatCard'
-import ActionCard from '@/components/ui/ActionCard'
 
 type Servicio = {
   id: string
@@ -19,6 +18,9 @@ type Servicio = {
   estado: string
   color: string | null
   created_at: string
+  comision_base: number | null
+  comision_rpm: number | null
+  comision_entrenador: number | null
 }
 
 type FormState = {
@@ -27,6 +29,9 @@ type FormState = {
   categoria: string
   duracion_minutos: string
   precio: string
+  comision_base: string
+  comision_rpm_pct: string
+  comision_entrenador_pct: string
   estado: string
   color: string
 }
@@ -37,6 +42,9 @@ const INITIAL_FORM: FormState = {
   categoria: '',
   duracion_minutos: '60',
   precio: '',
+  comision_base: '',
+  comision_rpm_pct: '50',
+  comision_entrenador_pct: '50',
   estado: 'activo',
   color: '#0f172a',
 }
@@ -48,7 +56,7 @@ const inputClassName = `
   focus:border-white/20 focus:bg-white/[0.05]
 `
 
-function money(value: number) {
+function money(value: number | string | null | undefined) {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
@@ -58,14 +66,17 @@ function money(value: number) {
 function Field({
   label,
   children,
+  helper,
 }: {
   label: string
   children: ReactNode
+  helper?: string
 }) {
   return (
     <div>
       <label className="mb-2 block text-sm font-medium text-white/75">{label}</label>
       {children}
+      {helper ? <p className="mt-2 text-xs text-white/45">{helper}</p> : null}
     </div>
   )
 }
@@ -74,6 +85,15 @@ function estadoBadgeClasses(estado: string) {
   return estado === 'activo'
     ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
     : 'border-white/10 bg-white/[0.05] text-white/70'
+}
+
+function clampPercent(value: number) {
+  if (Number.isNaN(value)) return 0
+  return Math.max(0, Math.min(100, value))
+}
+
+function round2(value: number) {
+  return Number(value.toFixed(2))
 }
 
 export default function ServiciosPage() {
@@ -117,13 +137,69 @@ export default function ServiciosPage() {
   }
 
   function onChange<K extends keyof FormState>(key: K, value: FormState[K]) {
+    if (key === 'precio') {
+      setForm((prev) => ({
+        ...prev,
+        precio: value,
+        comision_base: value,
+      }))
+      return
+    }
+
     setForm((prev) => ({
       ...prev,
       [key]: value,
     }))
   }
 
+  function onRpmPercentChange(value: string) {
+    if (value === '') {
+      setForm((prev) => ({
+        ...prev,
+        comision_rpm_pct: '',
+        comision_entrenador_pct: '100',
+      }))
+      return
+    }
+
+    const rpmPct = clampPercent(Number(value))
+    const entrenadorPct = round2(100 - rpmPct)
+
+    setForm((prev) => ({
+      ...prev,
+      comision_rpm_pct: String(rpmPct),
+      comision_entrenador_pct: String(entrenadorPct),
+    }))
+  }
+
+  function onEntrenadorPercentChange(value: string) {
+    if (value === '') {
+      setForm((prev) => ({
+        ...prev,
+        comision_entrenador_pct: '',
+        comision_rpm_pct: '100',
+      }))
+      return
+    }
+
+    const entrenadorPct = clampPercent(Number(value))
+    const rpmPct = round2(100 - entrenadorPct)
+
+    setForm((prev) => ({
+      ...prev,
+      comision_entrenador_pct: String(entrenadorPct),
+      comision_rpm_pct: String(rpmPct),
+    }))
+  }
+
   function onEdit(servicio: Servicio) {
+    const base = Number(servicio.comision_base ?? servicio.precio ?? 0)
+    const rpm = Number(servicio.comision_rpm ?? 0)
+    const entrenador = Number(servicio.comision_entrenador ?? 0)
+
+    const rpmPct = base > 0 ? round2((rpm / base) * 100) : 50
+    const entrenadorPct = base > 0 ? round2((entrenador / base) * 100) : 50
+
     setEditingId(servicio.id)
     setForm({
       nombre: servicio.nombre || '',
@@ -131,6 +207,9 @@ export default function ServiciosPage() {
       categoria: servicio.categoria || '',
       duracion_minutos: String(servicio.duracion_minutos || 60),
       precio: String(servicio.precio ?? ''),
+      comision_base: String(servicio.comision_base ?? servicio.precio ?? ''),
+      comision_rpm_pct: String(rpmPct),
+      comision_entrenador_pct: String(entrenadorPct),
       estado: servicio.estado || 'activo',
       color: servicio.color || '#0f172a',
     })
@@ -146,9 +225,28 @@ export default function ServiciosPage() {
       return
     }
 
+    if (Number(form.comision_rpm_pct || 0) < 0 || Number(form.comision_rpm_pct || 0) > 100) {
+      setError('El porcentaje de RPM no es válido')
+      return
+    }
+
+    if (Number(form.comision_entrenador_pct || 0) < 0 || Number(form.comision_entrenador_pct || 0) > 100) {
+      setError('El porcentaje del entrenador no es válido')
+      return
+    }
+
+    if (round2(Number(form.comision_rpm_pct || 0) + Number(form.comision_entrenador_pct || 0)) !== 100) {
+      setError('RPM y entrenador deben sumar 100%')
+      return
+    }
+
     try {
       setSaving(true)
       setError('')
+
+      const base = Number(form.comision_base || 0)
+      const rpmPct = clampPercent(Number(form.comision_rpm_pct || 0))
+      const entrenadorPct = clampPercent(Number(form.comision_entrenador_pct || 0))
 
       const payload = {
         nombre: form.nombre.trim(),
@@ -156,6 +254,9 @@ export default function ServiciosPage() {
         categoria: form.categoria.trim() || null,
         duracion_minutos: Number(form.duracion_minutos || 0),
         precio: Number(form.precio || 0),
+        comision_base: base,
+        comision_rpm: round2((base * rpmPct) / 100),
+        comision_entrenador: round2((base * entrenadorPct) / 100),
         estado: form.estado,
         color: form.color || null,
       }
@@ -229,7 +330,11 @@ export default function ServiciosPage() {
         item.nombre?.toLowerCase().includes(q) ||
         item.categoria?.toLowerCase().includes(q) ||
         item.descripcion?.toLowerCase().includes(q) ||
-        item.estado?.toLowerCase().includes(q)
+        item.estado?.toLowerCase().includes(q) ||
+        String(item.precio || '').includes(q) ||
+        String(item.comision_base || '').includes(q) ||
+        String(item.comision_rpm || '').includes(q) ||
+        String(item.comision_entrenador || '').includes(q)
       )
     })
   }, [servicios, search])
@@ -237,9 +342,18 @@ export default function ServiciosPage() {
   const totalActivos = servicios.filter((s) => s.estado === 'activo').length
   const totalInactivos = servicios.filter((s) => s.estado !== 'activo').length
 
+  const precioNum = Number(form.precio || 0)
+  const comisionBaseNum = Number(form.comision_base || 0)
+  const porcentajeRpm = clampPercent(Number(form.comision_rpm_pct || 0))
+  const porcentajeEntrenador = clampPercent(Number(form.comision_entrenador_pct || 0))
+  const comisionRpmNum = round2((comisionBaseNum * porcentajeRpm) / 100)
+  const comisionEntrenadorNum = round2((comisionBaseNum * porcentajeEntrenador) / 100)
+  const porcentajeTotal = round2(porcentajeRpm + porcentajeEntrenador)
+  const porcentajeRestante = round2(Math.max(100 - porcentajeTotal, 0))
+  const comisionRestante = round2(Math.max(comisionBaseNum - comisionRpmNum - comisionEntrenadorNum, 0))
+
   return (
     <div className="space-y-6">
-      {/* Header - Más limpio */}
       <div>
         <div className="flex items-center justify-between">
           <div>
@@ -266,8 +380,8 @@ export default function ServiciosPage() {
               }
             }}
             className="
-              flex items-center gap-2 rounded-2xl border border-white/10 
-              bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white 
+              flex items-center gap-2 rounded-2xl border border-white/10
+              bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white
               transition-all hover:bg-white/[0.12] hover:border-white/20
             "
           >
@@ -290,31 +404,18 @@ export default function ServiciosPage() {
         </div>
       </div>
 
-      {/* Stats - Más compactos y ordenados */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
-        <StatCard
-          title="Total"
-          value={servicios.length}
-        />
-        <StatCard
-          title="Activos"
-          value={totalActivos}
-          color="text-emerald-400"
-        />
-        <StatCard
-          title="Inactivos"
-          value={totalInactivos}
-          color="text-white/60"
-        />
+        <StatCard title="Total" value={servicios.length} />
+        <StatCard title="Activos" value={totalActivos} color="text-emerald-400" />
+        <StatCard title="Inactivos" value={totalInactivos} color="text-white/60" />
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
           <p className="text-xs font-medium text-white/55">Categorías</p>
           <p className="mt-1.5 text-2xl font-bold text-white">
-            {new Set(servicios.map(s => s.categoria).filter(Boolean)).size}
+            {new Set(servicios.map((s) => s.categoria).filter(Boolean)).size}
           </p>
         </div>
       </div>
 
-      {/* Error - Más visible */}
       {error && (
         <div className="rounded-2xl border border-rose-400/20 bg-rose-400/10 p-4">
           <div className="flex items-start gap-3">
@@ -337,14 +438,12 @@ export default function ServiciosPage() {
         </div>
       )}
 
-      {/* Form - Más estructurado */}
       {showForm && (
         <Section
           title={editingId ? 'Editar servicio' : 'Crear servicio'}
           description="Completa la información principal del servicio."
         >
           <form onSubmit={onSubmit} className="space-y-6">
-            {/* Información básica */}
             <div>
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/40">
                 Información básica
@@ -388,7 +487,6 @@ export default function ServiciosPage() {
               </div>
             </div>
 
-            {/* Detalles del servicio */}
             <div>
               <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/40">
                 Detalles del servicio
@@ -405,7 +503,7 @@ export default function ServiciosPage() {
                   />
                 </Field>
 
-                <Field label="Precio (USD)">
+                <Field label="Precio (USD)" helper="Al cambiarlo, actualiza automáticamente la base de comisión.">
                   <input
                     type="number"
                     min="0"
@@ -431,7 +529,109 @@ export default function ServiciosPage() {
               </div>
             </div>
 
-            {/* Descripción */}
+            <div>
+              <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-white/40">
+                Configuración de comisión
+              </h3>
+
+              <div className="rounded-[28px] border border-white/10 bg-white/[0.03] p-5 md:p-6">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <Field
+                    label="Base comisión"
+                    helper="Se toma automáticamente del precio."
+                  >
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={form.comision_base}
+                      readOnly
+                      className={`${inputClassName} cursor-not-allowed opacity-80`}
+                      placeholder="0.00"
+                    />
+                  </Field>
+
+                  <Field
+                    label="RPM recibe"
+                    helper="Al editar, ajusta el del entrenador."
+                  >
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={form.comision_rpm_pct}
+                        onChange={(e) => onRpmPercentChange(e.target.value)}
+                        min="0"
+                        max="100"
+                        className={`${inputClassName} pr-10`}
+                        placeholder="0"
+                      />
+                      <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm text-white/45">
+                        %
+                      </span>
+                    </div>
+                  </Field>
+
+                  <Field
+                    label="Entrenador recibe"
+                    helper="Al editar, ajusta el de RPM."
+                  >
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={form.comision_entrenador_pct}
+                        onChange={(e) => onEntrenadorPercentChange(e.target.value)}
+                        min="0"
+                        max="100"
+                        className={`${inputClassName} pr-10`}
+                        placeholder="0"
+                      />
+                      <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-sm text-white/45">
+                        %
+                      </span>
+                    </div>
+                  </Field>
+                </div>
+
+                <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <div className="rounded-[28px] border border-white/10 bg-white/[0.05] p-5">
+                    <p className="text-sm text-white/60">Base</p>
+                    <p className="mt-2 text-3xl font-bold text-white">{money(comisionBaseNum)}</p>
+                    <p className="mt-2 text-xs text-white/40">
+                      Precio del servicio: {money(precioNum)}
+                    </p>
+                  </div>
+
+                  <div className="rounded-[28px] border border-violet-400/15 bg-white/[0.05] p-5">
+                    <p className="text-sm text-white/60">RPM recibe</p>
+                    <p className="mt-2 text-3xl font-bold text-violet-400">{money(comisionRpmNum)}</p>
+                    <p className="mt-2 text-sm text-white/50">{porcentajeRpm}%</p>
+                  </div>
+
+                  <div className="rounded-[28px] border border-emerald-400/15 bg-white/[0.05] p-5">
+                    <p className="text-sm text-white/60">Entrenador recibe</p>
+                    <p className="mt-2 text-3xl font-bold text-emerald-400">{money(comisionEntrenadorNum)}</p>
+                    <p className="mt-2 text-sm text-white/50">{porcentajeEntrenador}%</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-white/40">Resumen</p>
+                    <p className="mt-1 text-sm text-white/70">
+                      RPM y entrenador deben sumar 100% del total de comisión.
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-white/40">Restante</p>
+                    <p className="text-sm font-semibold text-white">
+                      {porcentajeRestante}% · {money(comisionRestante)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div>
               <Field label="Descripción">
                 <textarea
@@ -443,15 +643,14 @@ export default function ServiciosPage() {
               </Field>
             </div>
 
-            {/* Botones */}
             <div className="flex flex-wrap gap-3 border-t border-white/10 pt-6">
               <button
                 type="submit"
                 disabled={saving}
                 className="
-                  flex items-center gap-2 rounded-2xl border border-white/10 
-                  bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white 
-                  transition-all hover:bg-white/[0.12] disabled:opacity-60 
+                  flex items-center gap-2 rounded-2xl border border-white/10
+                  bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white
+                  transition-all hover:bg-white/[0.12] disabled:opacity-60
                   disabled:cursor-not-allowed
                 "
               >
@@ -477,8 +676,8 @@ export default function ServiciosPage() {
                 type="button"
                 onClick={resetForm}
                 className="
-                  flex items-center gap-2 rounded-2xl border border-white/10 
-                  bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 
+                  flex items-center gap-2 rounded-2xl border border-white/10
+                  bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80
                   transition-all hover:bg-white/[0.06]
                 "
               >
@@ -492,10 +691,9 @@ export default function ServiciosPage() {
         </Section>
       )}
 
-      {/* Listado - Mejor organizado */}
       <Section
         title="Listado de servicios"
-        description="Busca por nombre, categoría, descripción o estado."
+        description="Busca por nombre, categoría, descripción, estado o comisión."
         className="p-0"
         contentClassName="overflow-hidden"
       >
@@ -551,6 +749,9 @@ export default function ServiciosPage() {
                     Precio
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/40">
+                    Comisión
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white/40">
                     Estado
                   </th>
                   <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-white/40">
@@ -560,92 +761,112 @@ export default function ServiciosPage() {
               </thead>
 
               <tbody className="divide-y divide-white/10">
-                {serviciosFiltrados.map((servicio) => (
-                  <tr key={servicio.id} className="transition hover:bg-white/[0.03]">
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-3">
-                        <span
-                          className="h-10 w-10 flex-shrink-0 rounded-xl"
-                          style={{ backgroundColor: servicio.color || '#0f172a' }}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="font-semibold text-white">{servicio.nombre}</p>
-                          <p className="mt-0.5 truncate text-xs text-white/45">
-                            {servicio.descripcion || 'Sin descripción'}
+                {serviciosFiltrados.map((servicio) => {
+                  const base = Number(servicio.comision_base || 0)
+                  const rpm = Number(servicio.comision_rpm || 0)
+                  const entrenador = Number(servicio.comision_entrenador || 0)
+                  const rpmPct = base > 0 ? round2((rpm / base) * 100) : 0
+                  const entrenadorPct = base > 0 ? round2((entrenador / base) * 100) : 0
+
+                  return (
+                    <tr key={servicio.id} className="transition hover:bg-white/[0.03]">
+                      <td className="px-4 py-4">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className="h-10 w-10 flex-shrink-0 rounded-xl"
+                            style={{ backgroundColor: servicio.color || '#0f172a' }}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="font-semibold text-white">{servicio.nombre}</p>
+                            <p className="mt-0.5 truncate text-xs text-white/45">
+                              {servicio.descripcion || 'Sin descripción'}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        {servicio.categoria ? (
+                          <span className="inline-flex rounded-lg border border-white/10 bg-white/[0.05] px-2.5 py-1 text-xs font-medium text-white/75">
+                            {servicio.categoria}
+                          </span>
+                        ) : (
+                          <span className="text-white/30">—</span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <span className="text-white/75">{servicio.duracion_minutos} min</span>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <span className="font-semibold text-white">{money(servicio.precio)}</span>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <div className="space-y-1">
+                          <p className="text-xs text-white/45">Base: {money(servicio.comision_base)}</p>
+                          <p className="text-xs text-violet-300">
+                            RPM: {money(servicio.comision_rpm)} · {rpmPct}%
+                          </p>
+                          <p className="text-xs text-emerald-300">
+                            Entrenador: {money(servicio.comision_entrenador)} · {entrenadorPct}%
                           </p>
                         </div>
-                      </div>
-                    </td>
+                      </td>
 
-                    <td className="px-4 py-4">
-                      {servicio.categoria ? (
-                        <span className="inline-flex rounded-lg border border-white/10 bg-white/[0.05] px-2.5 py-1 text-xs font-medium text-white/75">
-                          {servicio.categoria}
+                      <td className="px-4 py-4">
+                        <span
+                          className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${estadoBadgeClasses(
+                            servicio.estado
+                          )}`}
+                        >
+                          {servicio.estado}
                         </span>
-                      ) : (
-                        <span className="text-white/30">—</span>
-                      )}
-                    </td>
+                      </td>
 
-                    <td className="px-4 py-4">
-                      <span className="text-white/75">{servicio.duracion_minutos} min</span>
-                    </td>
+                      <td className="px-4 py-4">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => onEdit(servicio)}
+                            className="
+                              rounded-xl border border-white/10 bg-white/[0.03]
+                              px-3 py-2 text-xs font-medium text-white/80 transition
+                              hover:bg-white/[0.08] hover:border-white/20
+                            "
+                          >
+                            Editar
+                          </button>
 
-                    <td className="px-4 py-4">
-                      <span className="font-semibold text-white">{money(servicio.precio)}</span>
-                    </td>
+                          <button
+                            type="button"
+                            onClick={() => cambiarEstado(servicio.id, servicio.estado)}
+                            className="
+                              rounded-xl border border-white/10 bg-white/[0.03]
+                              px-3 py-2 text-xs font-medium text-white/80 transition
+                              hover:bg-white/[0.08] hover:border-white/20
+                            "
+                          >
+                            {servicio.estado === 'activo' ? 'Inactivar' : 'Activar'}
+                          </button>
 
-                    <td className="px-4 py-4">
-                      <span
-                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${estadoBadgeClasses(
-                          servicio.estado
-                        )}`}
-                      >
-                        {servicio.estado}
-                      </span>
-                    </td>
-
-                    <td className="px-4 py-4">
-                      <div className="flex justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => onEdit(servicio)}
-                          className="
-                            rounded-xl border border-white/10 bg-white/[0.03]
-                            px-3 py-2 text-xs font-medium text-white/80 transition
-                            hover:bg-white/[0.08] hover:border-white/20
-                          "
-                        >
-                          Editar
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => cambiarEstado(servicio.id, servicio.estado)}
-                          className="
-                            rounded-xl border border-white/10 bg-white/[0.03]
-                            px-3 py-2 text-xs font-medium text-white/80 transition
-                            hover:bg-white/[0.08] hover:border-white/20
-                          "
-                        >
-                          {servicio.estado === 'activo' ? 'Inactivar' : 'Activar'}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => eliminarServicio(servicio.id)}
-                          className="
-                            rounded-xl border border-rose-400/20 bg-rose-400/10
-                            px-3 py-2 text-xs font-medium text-rose-300 transition
-                            hover:bg-rose-400/20 hover:border-rose-400/30
-                          "
-                        >
-                          Eliminar
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          <button
+                            type="button"
+                            onClick={() => eliminarServicio(servicio.id)}
+                            className="
+                              rounded-xl border border-rose-400/20 bg-rose-400/10
+                              px-3 py-2 text-xs font-medium text-rose-300 transition
+                              hover:bg-rose-400/20 hover:border-rose-400/30
+                            "
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

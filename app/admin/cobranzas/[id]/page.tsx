@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -24,7 +24,8 @@ import {
 } from '@/lib/cobranzas/cuentas'
 import {
   obtenerAbonosCuenta,
-  registrarAbono,
+  registrarAbonoMixto,
+  agruparAbonosPorOperacion,
   type Abono,
 } from '@/lib/cobranzas/abonos'
 import { supabase } from '@/lib/supabase/client'
@@ -238,6 +239,17 @@ type MetodoPagoV2Raw = {
     | null
 }
 
+type PagoMixtoItem = {
+  id_local: string
+  moneda_pago: 'USD' | 'BS'
+  metodo_pago_v2_id: string
+  monto_usd: string
+  monto_bs: number | null
+  tasa_bcv: number | null
+  referencia: string
+  notas: string
+}
+
 function detectarMetodoBs(metodo: MetodoPagoV2 | null) {
   if (!metodo) return false
 
@@ -265,6 +277,62 @@ function detectarMetodoBs(metodo: MetodoPagoV2 | null) {
   )
 }
 
+function detectarMetodoUsd(metodo: MetodoPagoV2 | null) {
+  if (!metodo) return false
+
+  const moneda = String(metodo.moneda || '').toUpperCase()
+  const nombre = String(metodo.nombre || '').toLowerCase()
+  const carteraCodigo = String(metodo.cartera?.codigo || '').toLowerCase()
+
+  return (
+    moneda === 'USD' ||
+    nombre.includes('usd') ||
+    nombre.includes('zelle') ||
+    nombre.includes('efectivo $') ||
+    nombre.includes('efectivo usd') ||
+    carteraCodigo.includes('usd')
+  )
+}
+
+function makePagoItem(moneda: 'USD' | 'BS' = 'USD'): PagoMixtoItem {
+  return {
+    id_local: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    moneda_pago: moneda,
+    metodo_pago_v2_id: '',
+    monto_usd: '',
+    monto_bs: null,
+    tasa_bcv: null,
+    referencia: '',
+    notas: '',
+  }
+}
+
+const PagoBsSelector = memo(function PagoBsSelector({
+  fecha,
+  montoUsd,
+  montoBs,
+  onChangeTasa,
+  onChangeMontoBs,
+}: {
+  fecha: string
+  montoUsd: number
+  montoBs: number | null
+  onChangeTasa: (tasa: number | null) => void
+  onChangeMontoBs: (monto: number) => void
+}) {
+  return (
+    <SelectorTasaBCV
+      fecha={fecha}
+      monedaPago="BS"
+      monedaReferencia="EUR"
+      montoUSD={montoUsd}
+      montoBs={montoBs || undefined}
+      onTasaChange={onChangeTasa}
+      onMontoBsChange={onChangeMontoBs}
+    />
+  )
+})
+
 export default function DetalleCuentaPage() {
   const router = useRouter()
   const params = useParams()
@@ -279,15 +347,11 @@ export default function DetalleCuentaPage() {
   const [error, setError] = useState('')
 
   const [formAbono, setFormAbono] = useState({
-    monto_usd: 0,
-    metodo_pago_v2_id: '',
-    referencia: '',
     fecha: new Date().toISOString().split('T')[0],
-    notas: '',
+    notas_generales: '',
   })
 
-  const [tasaCongelada, setTasaCongelada] = useState<number | null>(null)
-  const [montoBsPersonalizado, setMontoBsPersonalizado] = useState<number | null>(null)
+  const [pagosMixtos, setPagosMixtos] = useState<PagoMixtoItem[]>([makePagoItem('USD')])
 
   useEffect(() => {
     if (!id) return
@@ -330,6 +394,7 @@ export default function DetalleCuentaPage() {
           cartera:carteras(nombre, codigo)
         `)
         .eq('activo', true)
+        .eq('permite_recibir', true)
         .order('nombre')
 
       if (error) throw error
@@ -361,39 +426,109 @@ export default function DetalleCuentaPage() {
     }
   }
 
-  const metodoSeleccionado = useMemo(
-    () => metodosPago.find((m) => m.id === formAbono.metodo_pago_v2_id) || null,
-    [metodosPago, formAbono.metodo_pago_v2_id]
-  )
+  function getMetodosForMoneda(moneda: 'USD' | 'BS') {
+    return moneda === 'USD'
+      ? metodosPago.filter((m) => detectarMetodoUsd(m))
+      : metodosPago.filter((m) => detectarMetodoBs(m))
+  }
 
-  const esBs = useMemo(() => detectarMetodoBs(metodoSeleccionado), [metodoSeleccionado])
+  function updatePagoItem(idLocal: string, patch: Partial<PagoMixtoItem>) {
+    setPagosMixtos((prev) =>
+      prev.map((item) => (item.id_local === idLocal ? { ...item, ...patch } : item))
+    )
+  }
 
-  const montoAbonoFinalUsd = useMemo(() => {
-    if (esBs && montoBsPersonalizado && tasaCongelada && tasaCongelada > 0) {
-      return r2(montoBsPersonalizado / tasaCongelada)
+  function addPagoItem(moneda: 'USD' | 'BS' = 'USD') {
+    setPagosMixtos((prev) => [...prev, makePagoItem(moneda)])
+  }
+
+  function removePagoItem(idLocal: string) {
+    setPagosMixtos((prev) => {
+      if (prev.length <= 1) return prev
+      return prev.filter((item) => item.id_local !== idLocal)
+    })
+  }
+
+  const handlePagoBsTasaChange = useCallback((idLocal: string, tasa: number | null) => {
+    setPagosMixtos((prev) =>
+      prev.map((item) =>
+        item.id_local === idLocal ? { ...item, tasa_bcv: tasa } : item
+      )
+    )
+  }, [])
+
+  const handlePagoBsMontoChange = useCallback((idLocal: string, monto: number) => {
+    setPagosMixtos((prev) =>
+      prev.map((item) =>
+        item.id_local === idLocal ? { ...item, monto_bs: monto } : item
+      )
+    )
+  }, [])
+
+  const saldo = Number(cuenta?.saldo_usd || 0)
+
+  const resumenPagos = useMemo(() => {
+    const items = pagosMixtos.map((item) => {
+      const montoUsdEq =
+        item.moneda_pago === 'USD'
+          ? r2(Number(item.monto_usd || 0))
+          : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+            ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+            : 0
+
+      const montoBs =
+        item.moneda_pago === 'BS'
+          ? r2(Number(item.monto_bs || 0))
+          : Number(item.tasa_bcv || 0) > 0 && Number(item.monto_usd || 0) > 0
+            ? r2(Number(item.monto_usd || 0) * Number(item.tasa_bcv || 0))
+            : 0
+
+      return {
+        ...item,
+        monto_equivalente_usd: montoUsdEq,
+        monto_equivalente_bs: montoBs > 0 ? montoBs : null,
+        monto_insertar:
+          item.moneda_pago === 'BS'
+            ? r2(Number(item.monto_bs || 0))
+            : r2(Number(item.monto_usd || 0)),
+        valido:
+          !!item.metodo_pago_v2_id &&
+          (
+            item.moneda_pago === 'USD'
+              ? Number(item.monto_usd || 0) > 0
+              : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+          ),
+      }
+    })
+
+    const totalUsd = r2(
+      items.reduce((acc, item) => acc + Number(item.monto_equivalente_usd || 0), 0)
+    )
+    const totalBs = r2(
+      items.reduce((acc, item) => acc + Number(item.monto_equivalente_bs || 0), 0)
+    )
+    const faltanteUsd = r2(Math.max(saldo - totalUsd, 0))
+    const excedenteUsd = r2(Math.max(totalUsd - saldo, 0))
+    const diferenciaUsd = r2(saldo - totalUsd)
+
+    return {
+      items,
+      totalUsd,
+      totalBs,
+      faltanteUsd,
+      excedenteUsd,
+      diferenciaUsd,
+      cuadra: Math.abs(diferenciaUsd) < 0.01 && saldo > 0,
+      todosValidos: items.every((item) => item.valido),
     }
-
-    return r2(Number(formAbono.monto_usd || 0))
-  }, [esBs, montoBsPersonalizado, tasaCongelada, formAbono.monto_usd])
-
-  const montoAbonoFinalBs = useMemo(() => {
-    if (esBs && montoBsPersonalizado) return r2(montoBsPersonalizado)
-    if (esBs && tasaCongelada && formAbono.monto_usd > 0) {
-      return r2(formAbono.monto_usd * tasaCongelada)
-    }
-    return 0
-  }, [esBs, montoBsPersonalizado, tasaCongelada, formAbono.monto_usd])
+  }, [pagosMixtos, saldo])
 
   function resetAbonoForm() {
     setFormAbono({
-      monto_usd: 0,
-      metodo_pago_v2_id: '',
-      referencia: '',
       fecha: new Date().toISOString().split('T')[0],
-      notas: '',
+      notas_generales: '',
     })
-    setTasaCongelada(null)
-    setMontoBsPersonalizado(null)
+    setPagosMixtos([makePagoItem('USD')])
   }
 
   async function handleRegistrarAbono(e: React.FormEvent) {
@@ -401,18 +536,18 @@ export default function DetalleCuentaPage() {
 
     if (!cuenta) return
 
-    if (montoAbonoFinalUsd <= 0) {
-      setError('El monto debe ser mayor a 0.')
+    if (!resumenPagos.todosValidos) {
+      setError('Completa correctamente todos los fragmentos del abono.')
       return
     }
 
-    if (montoAbonoFinalUsd > Number(cuenta.saldo_usd || 0)) {
-      setError(`El monto no puede ser mayor al saldo (${money(cuenta.saldo_usd)}).`)
+    if (resumenPagos.totalUsd <= 0) {
+      setError('El abono debe ser mayor a 0.')
       return
     }
 
-    if (esBs && (!tasaCongelada || tasaCongelada <= 0)) {
-      setError('Debes cargar la tasa BCV para registrar un pago en bolívares.')
+    if (resumenPagos.totalUsd > Number(cuenta.saldo_usd || 0)) {
+      setError(`El abono no puede ser mayor al saldo (${money(cuenta.saldo_usd)}).`)
       return
     }
 
@@ -420,26 +555,21 @@ export default function DetalleCuentaPage() {
       setGuardandoAbono(true)
       setError('')
 
-      const notasFinales = [
-        formAbono.notas?.trim() || '',
-        esBs && tasaCongelada
-          ? `Pago en Bs | Tasa BCV: ${tasaCongelada} | Monto Bs: ${money(montoAbonoFinalBs, 'VES')} | Equivalente USD: ${money(montoAbonoFinalUsd)}`
-          : '',
-      ]
-        .filter(Boolean)
-        .join(' | ')
-
-      await registrarAbono({
+      await registrarAbonoMixto({
         cuenta_cobrar_id: id,
-        monto_usd: montoAbonoFinalUsd,
-        metodo_pago_v2_id: formAbono.metodo_pago_v2_id || null,
-        referencia: formAbono.referencia || null,
         fecha: formAbono.fecha,
-        notas: notasFinales || null,
-      } as any)
+        notas_generales: formAbono.notas_generales || null,
+        pagos: resumenPagos.items.map((item) => ({
+          metodo_pago_v2_id: item.metodo_pago_v2_id,
+          moneda_pago: item.moneda_pago,
+          monto: item.monto_insertar,
+          tasa_bcv: item.moneda_pago === 'BS' ? item.tasa_bcv : null,
+          referencia: item.referencia || null,
+          notas: item.notas || null,
+        })),
+      })
 
       await cargarDatos()
-
       setMostrarFormAbono(false)
       resetAbonoForm()
     } catch (err: any) {
@@ -481,7 +611,6 @@ export default function DetalleCuentaPage() {
 
   const montoTotal = Number(cuenta?.monto_total_usd || 0)
   const montoPagado = Number(cuenta?.monto_pagado_usd || 0)
-  const saldo = Number(cuenta?.saldo_usd || 0)
 
   const porcentajePagado =
     montoTotal > 0 ? Math.min(100, Math.round((montoPagado / montoTotal) * 100)) : 0
@@ -491,6 +620,8 @@ export default function DetalleCuentaPage() {
     cuenta.estado !== 'cobrada' &&
     cuenta.estado !== 'cancelada' &&
     saldo > 0
+
+  const gruposAbonos = useMemo(() => agruparAbonosPorOperacion(abonos), [abonos])
 
   if (cargando) {
     return (
@@ -629,8 +760,8 @@ export default function DetalleCuentaPage() {
               </div>
 
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                <p className="text-xs uppercase tracking-wider text-white/45">Abonos</p>
-                <p className="mt-2 text-2xl font-bold text-white">{abonos.length}</p>
+                <p className="text-xs uppercase tracking-wider text-white/45">Operaciones</p>
+                <p className="mt-2 text-2xl font-bold text-white">{gruposAbonos.length}</p>
               </div>
             </div>
           </div>
@@ -738,18 +869,18 @@ export default function DetalleCuentaPage() {
             </div>
 
             <div className="rounded-2xl bg-white/[0.03] p-4">
-              <p className="text-sm text-white/55">Número de abonos</p>
-              <p className="mt-2 text-2xl font-bold text-white">{abonos.length}</p>
+              <p className="text-sm text-white/55">Operaciones de abono</p>
+              <p className="mt-2 text-2xl font-bold text-white">{gruposAbonos.length}</p>
             </div>
 
-            {abonos.length > 0 ? (
+            {gruposAbonos.length > 0 ? (
               <div className="rounded-2xl bg-white/[0.03] p-4">
                 <p className="text-sm text-white/55">Último abono</p>
                 <div className="mt-2 flex items-start justify-between gap-4">
                   <p className="text-2xl font-bold text-white">
-                    {money((abonos[0] as any).monto_usd)}
+                    {money(gruposAbonos[0].total_usd)}
                   </p>
-                  <p className="text-xs text-white/45">{formatDate((abonos[0] as any).fecha)}</p>
+                  <p className="text-xs text-white/45">{formatDate(gruposAbonos[0].fecha)}</p>
                 </div>
               </div>
             ) : null}
@@ -761,11 +892,11 @@ export default function DetalleCuentaPage() {
         <div className="border-b border-white/10 p-6">
           <SectionHeader
             title="Historial de abonos"
-            description={`${abonos.length} abono${abonos.length !== 1 ? 's' : ''} registrado${abonos.length !== 1 ? 's' : ''}.`}
+            description={`${gruposAbonos.length} operación${gruposAbonos.length !== 1 ? 'es' : ''} registrada${gruposAbonos.length !== 1 ? 's' : ''}.`}
           />
         </div>
 
-        {abonos.length === 0 ? (
+        {gruposAbonos.length === 0 ? (
           <div className="p-14 text-center">
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-white/10 bg-white/[0.04]">
               <Receipt className="h-7 w-7 text-white/30" />
@@ -774,8 +905,8 @@ export default function DetalleCuentaPage() {
           </div>
         ) : (
           <div className="divide-y divide-white/10">
-            {abonos.map((abono: any) => (
-              <div key={abono.id} className="p-5 transition-colors hover:bg-white/[0.02]">
+            {gruposAbonos.map((grupo) => (
+              <div key={grupo.operacion_pago_id} className="p-5 transition-colors hover:bg-white/[0.02]">
                 <div className="flex items-start gap-4">
                   <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-2.5">
                     <CheckCircle2 className="h-5 w-5 text-emerald-400" />
@@ -785,36 +916,71 @@ export default function DetalleCuentaPage() {
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <p className="font-semibold text-white">
-                          Abono de {money(abono.monto_usd)}
+                          Abono de {money(grupo.total_usd)}
+                          {grupo.es_pago_mixto ? ' · Pago mixto' : ''}
                         </p>
 
                         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-white/45">
                           <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1">
                             <Calendar className="h-3.5 w-3.5" />
-                            {formatDate(abono.fecha)}
+                            {formatDate(grupo.fecha)}
                           </span>
 
-                          {abono.metodo_pago?.nombre ? (
+                          {grupo.total_bs > 0 ? (
                             <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1">
-                              <CreditCard className="h-3.5 w-3.5" />
-                              {abono.metodo_pago.nombre}
+                              <Wallet className="h-3.5 w-3.5" />
+                              {money(grupo.total_bs, 'VES')}
                             </span>
                           ) : null}
 
-                          {abono.referencia ? (
-                            <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1">
-                              Ref: {abono.referencia}
-                            </span>
-                          ) : null}
+                          <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1">
+                            {grupo.items_total} item{grupo.items_total !== 1 ? 's' : ''}
+                          </span>
                         </div>
 
-                        {abono.notas ? (
-                          <p className="mt-3 text-sm text-white/50">{abono.notas}</p>
-                        ) : null}
+                        <div className="mt-3 space-y-2">
+                          {grupo.items.map((item) => (
+                            <div
+                              key={item.id}
+                              className="rounded-2xl border border-white/10 bg-white/[0.02] px-3 py-2"
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                                <div className="flex flex-wrap items-center gap-2 text-white/70">
+                                  <span className="font-medium text-white">
+                                    {item.metodo_pago?.nombre || 'Método'}
+                                  </span>
+                                  <span>·</span>
+                                  <span>{String(item.moneda_pago || 'USD')}</span>
+                                  {item.referencia ? (
+                                    <>
+                                      <span>·</span>
+                                      <span>Ref: {item.referencia}</span>
+                                    </>
+                                  ) : null}
+                                </div>
+
+                                <div className="text-right">
+                                  <p className="font-semibold text-emerald-400">
+                                    {money(item.monto_usd)}
+                                  </p>
+                                  {Number(item.monto_bs || 0) > 0 ? (
+                                    <p className="text-xs text-amber-300">
+                                      {money(item.monto_bs || 0, 'VES')}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              </div>
+
+                              {item.notas ? (
+                                <p className="mt-2 text-xs text-white/45">{item.notas}</p>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
                       </div>
 
                       <p className="text-xl font-bold text-emerald-400">
-                        {money(abono.monto_usd)}
+                        {money(grupo.total_usd)}
                       </p>
                     </div>
                   </div>
@@ -826,13 +992,13 @@ export default function DetalleCuentaPage() {
       </Card>
 
       {mostrarFormAbono ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0a0b0f]/80 p-4 backdrop-blur-sm">
-          <Card className="w-full max-w-2xl overflow-hidden border-white/10 bg-gradient-to-b from-[#0a0b0f] to-[#11131a]">
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0a0b0f]/80 p-3 backdrop-blur-sm">
+    <Card className="w-full max-w-3xl overflow-hidden border-white/10 bg-gradient-to-b from-[#0a0b0f] to-[#11131a] shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 bg-transparent px-6 py-5">
               <div>
                 <h2 className="text-xl font-semibold text-white">Registrar abono</h2>
                 <p className="mt-1 text-sm text-white/55">
-                  Registra un nuevo pago para esta cuenta.
+                  Registra uno o varios métodos de pago para esta cuenta.
                 </p>
               </div>
 
@@ -850,48 +1016,19 @@ export default function DetalleCuentaPage() {
             </div>
 
             <form
-              onSubmit={handleRegistrarAbono}
-              className="bg-gradient-to-b from-[#0a0b0f] to-[#11131a] p-6"
-            >
-              <div className="mb-6 rounded-3xl border border-sky-400/20 bg-sky-400/10 p-5">
-                <p className="text-sm font-medium text-sky-300">Saldo pendiente actual</p>
-                <p className="mt-2 text-4xl font-bold tracking-tight text-white">
-                  {money(cuenta.saldo_usd)}
-                </p>
-              </div>
+  onSubmit={handleRegistrarAbono}
+  className="max-h-[82vh] overflow-y-auto bg-gradient-to-b from-[#0a0b0f] to-[#11131a] p-5"
+>
+              <div className="mb-5 rounded-2xl border border-sky-400/20 bg-sky-400/10 px-4 py-4">
+  <p className="text-xs font-medium uppercase tracking-wide text-sky-300">
+    Saldo pendiente actual
+  </p>
+  <p className="mt-1 text-3xl font-bold tracking-tight text-white">
+    {money(cuenta.saldo_usd)}
+  </p>
+</div>
 
-              <div className="grid gap-5 sm:grid-cols-2">
-                <Field label="Método de pago">
-                  <select
-                    value={formAbono.metodo_pago_v2_id}
-                    onChange={(e) => {
-                      setFormAbono((prev) => ({
-                        ...prev,
-                        metodo_pago_v2_id: e.target.value,
-                      }))
-                      setTasaCongelada(null)
-                      setMontoBsPersonalizado(null)
-                      setError('')
-                    }}
-                    className={inputClassName}
-                  >
-                    <option value="" className="bg-[#11131a] text-white">
-                      Seleccionar método
-                    </option>
-                    {metodosPago.map((metodo) => (
-                      <option
-                        key={metodo.id}
-                        value={metodo.id}
-                        className="bg-[#11131a] text-white"
-                      >
-                        {metodo.nombre}
-                        {metodo.moneda ? ` · ${metodo.moneda}` : ''}
-                        {metodo.cartera?.nombre ? ` · ${metodo.cartera.nombre}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-
+              <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Fecha">
                   <input
                     type="date"
@@ -904,215 +1041,333 @@ export default function DetalleCuentaPage() {
                   />
                 </Field>
 
-                {!esBs ? (
-                  <Field label="Monto del abono (USD)" helper="No puede ser mayor al saldo pendiente.">
-                    <div className="relative">
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/35">
-                        $
-                      </span>
-                      <input
-                        type="number"
-                        min="0.01"
-                        step="0.01"
-                        max={saldo}
-                        value={formAbono.monto_usd || ''}
-                        onChange={(e) => {
-                          setFormAbono((prev) => ({
-                            ...prev,
-                            monto_usd: parseFloat(e.target.value) || 0,
-                          }))
-                          setError('')
-                        }}
-                        className={`${inputClassName} pl-8`}
-                        required
-                      />
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFormAbono((prev) => ({ ...prev, monto_usd: saldo }))
-                        }
-                        className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
-                      >
-                        Pago total
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFormAbono((prev) => ({
-                            ...prev,
-                            monto_usd: Number((saldo / 2).toFixed(2)),
-                          }))
-                        }
-                        className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
-                      >
-                        50%
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setFormAbono((prev) => ({
-                            ...prev,
-                            monto_usd: Number((saldo * 0.25).toFixed(2)),
-                          }))
-                        }
-                        className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
-                      >
-                        25%
-                      </button>
-                    </div>
-                  </Field>
-                ) : (
-                  <div className="sm:col-span-2">
-                    <Field
-                      label="Monto base del abono (USD)"
-                      helper="Este monto es el equivalente en USD que se registrará en la cuenta."
-                    >
-                      <div className="relative">
-                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/35">
-                          $
-                        </span>
-                        <input
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          max={saldo}
-                          value={formAbono.monto_usd || ''}
-                          onChange={(e) => {
-                            setFormAbono((prev) => ({
-                              ...prev,
-                              monto_usd: parseFloat(e.target.value) || 0,
-                            }))
-                            setMontoBsPersonalizado(null)
-                            setError('')
-                          }}
-                          className={`${inputClassName} pl-8`}
-                          required
-                        />
-                      </div>
-
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setFormAbono((prev) => ({ ...prev, monto_usd: saldo }))
-                            if (tasaCongelada && tasaCongelada > 0) {
-                              setMontoBsPersonalizado(r2(saldo * tasaCongelada))
-                            }
-                          }}
-                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
-                        >
-                          Pago total
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const usd = Number((saldo / 2).toFixed(2))
-                            setFormAbono((prev) => ({ ...prev, monto_usd: usd }))
-                            if (tasaCongelada && tasaCongelada > 0) {
-                              setMontoBsPersonalizado(r2(usd * tasaCongelada))
-                            }
-                          }}
-                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
-                        >
-                          50%
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const usd = Number((saldo * 0.25).toFixed(2))
-                            setFormAbono((prev) => ({ ...prev, monto_usd: usd }))
-                            if (tasaCongelada && tasaCongelada > 0) {
-                              setMontoBsPersonalizado(r2(usd * tasaCongelada))
-                            }
-                          }}
-                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]"
-                        >
-                          25%
-                        </button>
-                      </div>
-                    </Field>
-
-                    <div className="mt-5">
-                      <SelectorTasaBCV
-                        fecha={formAbono.fecha}
-                        monedaPago="BS"
-                        montoUSD={Number(formAbono.monto_usd || 0)}
-                        montoBs={montoBsPersonalizado || undefined}
-                        onTasaChange={setTasaCongelada}
-                        onMontoBsChange={(monto) => {
-                          setMontoBsPersonalizado(monto)
-                          if (monto > 0 && tasaCongelada) {
-                            setFormAbono((prev) => ({
-                              ...prev,
-                              monto_usd: r2(monto / tasaCongelada),
-                            }))
-                          }
-                        }}
-                      />
-                    </div>
-
-                    <div className="mt-5 grid gap-4 sm:grid-cols-3">
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                        <p className="text-xs text-white/45">Tasa BCV</p>
-                        <p className="mt-2 text-lg font-semibold text-white">
-                          {tasaCongelada ? tasaCongelada : '—'}
-                        </p>
-                      </div>
-
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                        <p className="text-xs text-white/45">Total Bs</p>
-                        <p className="mt-2 text-lg font-semibold text-amber-300">
-                          {montoAbonoFinalBs > 0 ? money(montoAbonoFinalBs, 'VES') : '—'}
-                        </p>
-                      </div>
-
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                        <p className="text-xs text-white/45">Equivalente USD</p>
-                        <p className="mt-2 text-lg font-semibold text-emerald-400">
-                          {montoAbonoFinalUsd > 0 ? money(montoAbonoFinalUsd) : '—'}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <Field label="Referencia">
+                <Field label="Total registrado USD">
                   <input
                     type="text"
-                    value={formAbono.referencia}
-                    onChange={(e) =>
-                      setFormAbono((prev) => ({
-                        ...prev,
-                        referencia: e.target.value,
-                      }))
-                    }
-                    placeholder="Número de referencia o comprobante"
-                    className={inputClassName}
+                    value={money(resumenPagos.totalUsd)}
+                    readOnly
+                    className={`${inputClassName} cursor-not-allowed opacity-70`}
                   />
                 </Field>
 
                 <div className="sm:col-span-2">
-                  <Field label="Notas">
+                  <Field label="Notas generales">
                     <textarea
-                      value={formAbono.notas}
+                      value={formAbono.notas_generales}
                       onChange={(e) =>
                         setFormAbono((prev) => ({
                           ...prev,
-                          notas: e.target.value,
+                          notas_generales: e.target.value,
                         }))
                       }
-                      rows={4}
-                      placeholder="Notas adicionales del abono"
-                      className={`${inputClassName} min-h-[120px] resize-none`}
-                    />
+                      rows={3}
+                      placeholder="Notas generales del abono"
+                      className={`${inputClassName} min-h-[78px] resize-none`}                    />
                   </Field>
+                </div>
+              </div>
+
+              <div className="mt-6 space-y-4">
+                {pagosMixtos.map((item, index) => {
+                  const metodosDisponibles = getMetodosForMoneda(item.moneda_pago)
+                  const montoUsdEq =
+                    item.moneda_pago === 'USD'
+                      ? r2(Number(item.monto_usd || 0))
+                      : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+                        ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+                        : 0
+
+                  return (
+                    <div
+  key={item.id_local}
+  className="rounded-2xl border border-white/10 bg-white/[0.03] p-3.5"
+>
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-white">
+                            Fragmento #{index + 1}
+                          </p>
+                          <p className="text-xs text-white/45">
+                            {item.moneda_pago === 'BS'
+                              ? `Equivalente USD calculado: ${money(montoUsdEq)}`
+                              : `Monto del fragmento: ${money(montoUsdEq)}`}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => removePagoItem(item.id_local)}
+                          disabled={pagosMixtos.length <= 1}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/70 hover:bg-white/[0.06] disabled:opacity-40"
+                        >
+                          Quitar
+                        </button>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-3">
+                        <Field label="Moneda">
+                          <select
+                            value={item.moneda_pago}
+                            onChange={(e) =>
+                              updatePagoItem(item.id_local, {
+                                moneda_pago: e.target.value as 'USD' | 'BS',
+                                metodo_pago_v2_id: '',
+                                monto_usd: '',
+                                monto_bs: null,
+                                tasa_bcv: null,
+                              })
+                            }
+                            className={inputClassName}
+                          >
+                            <option value="USD" className="bg-[#11131a] text-white">
+                              USD
+                            </option>
+                            <option value="BS" className="bg-[#11131a] text-white">
+                              Bs
+                            </option>
+                          </select>
+                        </Field>
+
+                        <Field label={item.moneda_pago === 'USD' ? 'Método USD' : 'Método Bs'}>
+                          <select
+                            value={item.metodo_pago_v2_id}
+                            onChange={(e) =>
+                              updatePagoItem(item.id_local, {
+                                metodo_pago_v2_id: e.target.value,
+                              })
+                            }
+                            className={inputClassName}
+                          >
+                            <option value="" className="bg-[#11131a] text-white">
+                              Seleccionar método
+                            </option>
+                            {metodosDisponibles.map((metodo) => (
+                              <option
+                                key={metodo.id}
+                                value={metodo.id}
+                                className="bg-[#11131a] text-white"
+                              >
+                                {metodo.nombre}
+                                {metodo.moneda ? ` · ${metodo.moneda}` : ''}
+                                {metodo.cartera?.nombre ? ` · ${metodo.cartera.nombre}` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+
+                        {item.moneda_pago === 'USD' ? (
+                          <Field label="Monto USD">
+                            <input
+                              type="number"
+                              min="0.01"
+                              step="0.01"
+                              value={item.monto_usd}
+                              onChange={(e) =>
+                                updatePagoItem(item.id_local, {
+                                  monto_usd: e.target.value,
+                                })
+                              }
+                              className={inputClassName}
+                              placeholder="0.00"
+                            />
+                          </Field>
+                        ) : (
+                          <Field label="Monto Bs">
+                            <input
+                              type="number"
+                              min="0.01"
+                              step="0.01"
+                              value={item.monto_bs ?? ''}
+                              onChange={(e) =>
+                                updatePagoItem(item.id_local, {
+                                  monto_bs: e.target.value ? Number(e.target.value) : null,
+                                })
+                              }
+                              className={inputClassName}
+                              placeholder="0.00"
+                            />
+                          </Field>
+                        )}
+
+                        {item.moneda_pago === 'BS' && (
+                          <div className="md:col-span-3">
+                            <PagoBsSelector
+                              fecha={formAbono.fecha}
+                              montoUsd={
+                                Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+                                  ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+                                  : 0
+                              }
+                              montoBs={item.monto_bs}
+                              onChangeTasa={(tasa) => handlePagoBsTasaChange(item.id_local, tasa)}
+                              onChangeMontoBs={(monto) => handlePagoBsMontoChange(item.id_local, monto)}
+                            />
+                          </div>
+                        )}
+
+                        {item.moneda_pago === 'BS' && (
+                          <div className="md:col-span-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm">
+                            <div className="flex justify-between">
+                              <span className="text-white/55">Equivalente USD calculado:</span>
+                              <span className="text-white">
+                                {money(
+                                  Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
+                                    ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
+                                    : 0
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        <Field label="Referencia">
+                          <input
+                            type="text"
+                            value={item.referencia}
+                            onChange={(e) =>
+                              updatePagoItem(item.id_local, {
+                                referencia: e.target.value,
+                              })
+                            }
+                            placeholder="Número de referencia o comprobante"
+                            className={inputClassName}
+                          />
+                        </Field>
+
+                        <div className="md:col-span-2">
+                          <Field label="Notas del fragmento">
+                            <input
+                              type="text"
+                              value={item.notas}
+                              onChange={(e) =>
+                                updatePagoItem(item.id_local, {
+                                  notas: e.target.value,
+                                })
+                              }
+                              placeholder="Notas del fragmento"
+                              className={inputClassName}
+                            />
+                          </Field>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => addPagoItem('USD')}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                >
+                  + Agregar pago USD
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => addPagoItem('BS')}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                >
+                  + Agregar pago Bs
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const monto = saldo
+                    setPagosMixtos([
+                      {
+                        ...makePagoItem('USD'),
+                        monto_usd: String(monto),
+                      },
+                    ])
+                  }}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                >
+                  Pago total
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const monto = r2(saldo / 2)
+                    setPagosMixtos([
+                      {
+                        ...makePagoItem('USD'),
+                        monto_usd: String(monto),
+                      },
+                    ])
+                  }}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                >
+                  50%
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const monto = r2(saldo * 0.25)
+                    setPagosMixtos([
+                      {
+                        ...makePagoItem('USD'),
+                        monto_usd: String(monto),
+                      },
+                    ])
+                  }}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                >
+                  25%
+                </button>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="grid gap-3 sm:grid-cols-3 text-sm">
+                  <div>
+                    <p className="text-xs text-white/45">Saldo actual</p>
+                    <p className="mt-1 font-semibold text-white">{money(saldo)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-white/45">Total registrado</p>
+                    <p className="mt-1 font-semibold text-emerald-400">
+                      {money(resumenPagos.totalUsd)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-white/45">Total Bs</p>
+                    <p className="mt-1 font-semibold text-amber-300">
+                      {money(resumenPagos.totalBs, 'VES')}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                  {!resumenPagos.cuadra ? (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-white/55">Faltante USD:</span>
+                        <span className="font-semibold text-amber-300">
+                          {money(resumenPagos.faltanteUsd)}
+                        </span>
+                      </div>
+
+                      {resumenPagos.excedenteUsd > 0 && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-white/55">Excedente USD:</span>
+                          <span className="font-semibold text-rose-300">
+                            {money(resumenPagos.excedenteUsd)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-white/55">Estado:</span>
+                      <span className="font-semibold text-emerald-300">
+                        Abono exacto
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 

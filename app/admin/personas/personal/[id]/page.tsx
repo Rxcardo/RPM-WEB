@@ -109,6 +109,16 @@ type SplitPago = {
   monto: string
 }
 
+type TipoCambioRow = {
+  fecha?: string | null
+  tasa?: number | string | null
+  valor?: number | string | null
+  monto?: number | string | null
+  bcv?: number | string | null
+  precio?: number | string | null
+}
+
+type Moneda = 'USD' | 'BS'
 type Tab = 'info' | 'agenda' | 'comisiones'
 
 function getTodayLocal() {
@@ -154,6 +164,10 @@ function formatBs(v: number | null | undefined) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Number(v || 0))
+}
+
+function formatMontoByMoneda(v: number | null | undefined, moneda: Moneda) {
+  return moneda === 'USD' ? formatMoney(v) : formatBs(v)
 }
 
 function formatDate(v: string | null) {
@@ -287,16 +301,38 @@ function monedaMetodoEsBs(metodo: MetodoPago | null) {
   )
 }
 
+function getMetodoMoneda(metodo: MetodoPago | null): Moneda {
+  return monedaMetodoEsBs(metodo) ? 'BS' : 'USD'
+}
+
 function getMetodoSaldo(metodo: MetodoPago | null) {
   const raw = metodo?.cartera?.saldo_actual
   const n = Number(raw || 0)
   return Number.isFinite(n) ? n : 0
 }
 
-function getComisionMontoByMoneda(c: ComisionDetalle, moneda: 'USD' | 'BS') {
+function getComisionMontoByMoneda(c: ComisionDetalle, moneda: Moneda) {
   return moneda === 'USD'
     ? Number(c.monto_profesional_usd ?? c.profesional ?? 0)
     : Number(c.monto_profesional_bs ?? 0)
+}
+
+function convertirMonto(
+  monto: number,
+  from: Moneda,
+  to: Moneda,
+  tasa: number | null | undefined
+): number | null {
+  const montoNum = Number(monto || 0)
+
+  if (!Number.isFinite(montoNum)) return null
+  if (from === to) return r2(montoNum)
+  if (!tasa || tasa <= 0) return null
+
+  if (from === 'USD' && to === 'BS') return r2(montoNum * tasa)
+  if (from === 'BS' && to === 'USD') return r2(montoNum / tasa)
+
+  return null
 }
 
 function chunkAgendaByCliente(items: AgendaItem[]) {
@@ -345,10 +381,12 @@ export default function VerPersonalPage() {
   const [agendaTipo, setAgendaTipo] = useState<'todos' | 'entrenamientos' | 'citas'>('todos')
   const [agendaClienteFiltro, setAgendaClienteFiltro] = useState('todos')
 
-  const [monedaPago, setMonedaPago] = useState<'USD' | 'BS'>('USD')
+  const [monedaPago, setMonedaPago] = useState<Moneda>('USD')
   const [referencia, setReferencia] = useState('')
   const [notasLiquidacion, setNotasLiquidacion] = useState('')
   const [tasaBCV, setTasaBCV] = useState<number | null>(null)
+  const [tasaBCVAuto, setTasaBCVAuto] = useState<number | null>(null)
+  const [cargandoTasa, setCargandoTasa] = useState(false)
   const [selectedComisionIds, setSelectedComisionIds] = useState<string[]>([])
   const [splitsPago, setSplitsPago] = useState<SplitPago[]>([
     { id: crypto.randomUUID(), metodoPagoId: '', monto: '' },
@@ -378,6 +416,7 @@ export default function VerPersonalPage() {
     setReferencia('')
     setNotasLiquidacion('')
     setTasaBCV(null)
+    setTasaBCVAuto(null)
   }, [monedaPago])
 
   async function loadAll() {
@@ -543,6 +582,46 @@ export default function VerPersonalPage() {
     setLoading(false)
   }
 
+  async function resolverTasaBCVActual() {
+    const hoyFecha = new Date().toISOString().slice(0, 10)
+
+    const { data, error } = await supabase
+      .from('tipos_cambio')
+      .select('*')
+      .lte('fecha', hoyFecha)
+      .order('fecha', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) throw error
+
+    const row = data as TipoCambioRow | null
+
+    const posibleTasa = Number(
+      row?.tasa ?? row?.valor ?? row?.monto ?? row?.bcv ?? row?.precio ?? 0
+    )
+
+    if (!posibleTasa || posibleTasa <= 0) {
+      throw new Error('No se pudo obtener la tasa BCV automática')
+    }
+
+    return r2(posibleTasa)
+  }
+
+  async function cargarTasaBCVAutomatica() {
+    setCargandoTasa(true)
+
+    try {
+      const tasa = await resolverTasaBCVActual()
+      setTasaBCVAuto(tasa)
+      setTasaBCV((prev) => (prev && prev > 0 ? prev : tasa))
+    } catch {
+      setTasaBCVAuto(null)
+    } finally {
+      setCargandoTasa(false)
+    }
+  }
+
   const agendaFiltrada = useMemo(() => {
     let items = agenda
 
@@ -680,13 +759,6 @@ export default function VerPersonalPage() {
     }
   }, [comisionesSeleccionadas])
 
-  const metodosFiltradosPorMoneda = useMemo(() => {
-    return metodosPago.filter((m) => {
-      const isBs = monedaMetodoEsBs(m)
-      return monedaPago === 'BS' ? isBs : !isBs
-    })
-  }, [metodosPago, monedaPago])
-
   const totalSplits = useMemo(() => {
     return r2(
       splitsPago.reduce((acc, split) => {
@@ -706,6 +778,37 @@ export default function VerPersonalPage() {
     () => r2(montoFacturar - totalSplits),
     [montoFacturar, totalSplits]
   )
+
+  const splitsConMetodo = useMemo(() => {
+    return splitsPago.map((split) => {
+      const metodo = metodosPago.find((m) => m.id === split.metodoPagoId) || null
+      const metodoMoneda = getMetodoMoneda(metodo)
+      const montoLiquidacion = r2(Number(split.monto || 0))
+      const montoDescontar = convertirMonto(montoLiquidacion, monedaPago, metodoMoneda, tasaBCV)
+      const requiereConversion = !!metodo && metodoMoneda !== monedaPago
+      const saldo = getMetodoSaldo(metodo)
+
+      return {
+        ...split,
+        metodo,
+        metodoMoneda,
+        montoLiquidacion,
+        montoDescontar,
+        requiereConversion,
+        saldo,
+      }
+    })
+  }, [splitsPago, metodosPago, monedaPago, tasaBCV])
+
+  const requiereTasa = useMemo(() => {
+    return splitsConMetodo.some((split) => split.metodo && split.requiereConversion)
+  }, [splitsConMetodo])
+
+  useEffect(() => {
+    if (!requiereTasa) return
+    if (tasaBCV && tasaBCV > 0) return
+    void cargarTasaBCVAutomatica()
+  }, [requiereTasa, tasaBCV])
 
   function toggleComision(idComision: string) {
     setSelectedComisionIds((prev) =>
@@ -753,21 +856,33 @@ export default function VerPersonalPage() {
       return
     }
 
-    if (monedaPago === 'BS' && (!tasaBCV || tasaBCV <= 0)) {
-      alert('Debes indicar la tasa BCV para liquidaciones en BS.')
-      return
-    }
-
     const splitsValidos = splitsPago
-      .map((s) => ({
-        ...s,
-        montoNum: r2(Number(s.monto || 0)),
-        metodo: metodosFiltradosPorMoneda.find((m) => m.id === s.metodoPagoId) || null,
-      }))
+      .map((s) => {
+        const metodo = metodosPago.find((m) => m.id === s.metodoPagoId) || null
+        const metodoMoneda = getMetodoMoneda(metodo)
+        const montoNum = r2(Number(s.monto || 0))
+        const montoDescontarMetodo = convertirMonto(montoNum, monedaPago, metodoMoneda, tasaBCV)
+
+        return {
+          ...s,
+          montoNum,
+          metodo,
+          metodoMoneda,
+          montoDescontarMetodo,
+          requiereConversion: !!metodo && metodoMoneda !== monedaPago,
+        }
+      })
       .filter((s) => s.metodoPagoId && s.montoNum > 0)
 
     if (splitsValidos.length === 0) {
       alert('Debes indicar al menos un método de pago con monto.')
+      return
+    }
+
+    const requiereConversion = splitsValidos.some((s) => s.requiereConversion)
+
+    if (requiereConversion && (!tasaBCV || tasaBCV <= 0)) {
+      alert('No se pudo obtener la tasa automática. Indícala manualmente para hacer la conversión.')
       return
     }
 
@@ -783,7 +898,7 @@ export default function VerPersonalPage() {
     const sumaSplits = r2(splitsValidos.reduce((acc, x) => acc + x.montoNum, 0))
     if (sumaSplits !== montoFacturar) {
       alert(
-        `La suma de métodos (${monedaPago === 'USD' ? formatMoney(sumaSplits) : formatBs(sumaSplits)}) debe ser igual al monto a liquidar (${monedaPago === 'USD' ? formatMoney(montoFacturar) : formatBs(montoFacturar)}).`
+        `La suma de métodos (${formatMontoByMoneda(sumaSplits, monedaPago)}) debe ser igual al monto a liquidar (${formatMontoByMoneda(montoFacturar, monedaPago)}).`
       )
       return
     }
@@ -794,18 +909,35 @@ export default function VerPersonalPage() {
         return
       }
 
+      if (split.requiereConversion && (split.montoDescontarMetodo === null || split.montoDescontarMetodo <= 0)) {
+        alert(`No se pudo calcular la conversión para el método "${split.metodo.nombre}".`)
+        return
+      }
+
       const saldo = getMetodoSaldo(split.metodo)
-      if (saldo > 0 && split.montoNum > saldo) {
+      const montoContraMetodo = split.requiereConversion
+        ? Number(split.montoDescontarMetodo || 0)
+        : split.montoNum
+
+      if (saldo > 0 && montoContraMetodo > saldo) {
         alert(
-          `El método "${split.metodo.nombre}" no tiene saldo suficiente.\nSaldo: ${monedaPago === 'USD' ? formatMoney(saldo) : formatBs(saldo)}\nIntentas pagar: ${monedaPago === 'USD' ? formatMoney(split.montoNum) : formatBs(split.montoNum)}`
+          `El método "${split.metodo.nombre}" no tiene saldo suficiente.\nSaldo: ${formatMontoByMoneda(
+            saldo,
+            split.metodoMoneda
+          )}\nIntentas usar: ${formatMontoByMoneda(montoContraMetodo, split.metodoMoneda)}`
         )
         return
       }
     }
 
     const montoPagoNum = montoFacturar
+
     const montoEquivalenteUsd =
-      monedaPago === 'USD' ? r2(montoPagoNum) : r2(resumenSeleccionado.profesionalUsd)
+      monedaPago === 'USD'
+        ? r2(montoPagoNum)
+        : tasaBCV && tasaBCV > 0
+          ? r2(montoPagoNum / tasaBCV)
+          : r2(resumenSeleccionado.profesionalUsd)
 
     const montoEquivalenteBs =
       monedaPago === 'BS'
@@ -825,16 +957,23 @@ export default function VerPersonalPage() {
       .map((s) => {
         const nombre = s.metodo?.nombre || 'Método'
         const cartera = s.metodo?.cartera?.nombre ? ` / ${s.metodo.cartera.nombre}` : ''
-        const montoTxt = monedaPago === 'USD' ? formatMoney(s.montoNum) : formatBs(s.montoNum)
-        return `• ${nombre}${cartera}: ${montoTxt}`
+        const baseTxt = formatMontoByMoneda(s.montoNum, monedaPago)
+
+        if (!s.requiereConversion) {
+          return `• ${nombre}${cartera}: ${baseTxt}`
+        }
+
+        const convertidoTxt = formatMontoByMoneda(s.montoDescontarMetodo, s.metodoMoneda)
+        return `• ${nombre}${cartera}: ${baseTxt} → se descuenta ${convertidoTxt}`
       })
       .join('\n')
 
     const ok = window.confirm(
       `¿Liquidar comisiones seleccionadas?\n\n` +
         `Registros: ${pendientes.length}\n` +
-        `Moneda: ${monedaPago}\n` +
-        `Monto total: ${monedaPago === 'USD' ? formatMoney(montoPagoNum) : formatBs(montoPagoNum)}\n\n` +
+        `Moneda liquidación: ${monedaPago}\n` +
+        `Monto total: ${formatMontoByMoneda(montoPagoNum, monedaPago)}\n` +
+        `${requiereConversion && tasaBCV ? `Tasa BCV: ${tasaBCV}\n` : ''}\n` +
         `Métodos:\n${resumenMetodos}`
     )
 
@@ -847,12 +986,21 @@ export default function VerPersonalPage() {
         notasLiquidacion.trim() ||
           `Liquidación manual de saldo disponible - ${empleado?.nombre || 'Profesional'}`,
         '',
+        `Moneda liquidación: ${monedaPago}`,
+        ...(requiereConversion && tasaBCV ? [`Tasa BCV aplicada: ${tasaBCV}`] : []),
+        '',
         'Desglose de pago:',
         ...splitsValidos.map((s) => {
           const nombre = s.metodo?.nombre || 'Método'
           const cartera = s.metodo?.cartera?.nombre ? ` (${s.metodo.cartera.nombre})` : ''
-          const montoTxt = monedaPago === 'USD' ? formatMoney(s.montoNum) : formatBs(s.montoNum)
-          return `- ${nombre}${cartera}: ${montoTxt}`
+          const montoTxt = formatMontoByMoneda(s.montoNum, monedaPago)
+
+          if (!s.requiereConversion) {
+            return `- ${nombre}${cartera}: ${montoTxt}`
+          }
+
+          const convertidoTxt = formatMontoByMoneda(s.montoDescontarMetodo, s.metodoMoneda)
+          return `- ${nombre}${cartera}: ${montoTxt} -> descontado ${convertidoTxt}`
         }),
       ].join('\n')
 
@@ -873,7 +1021,7 @@ export default function VerPersonalPage() {
           notas: notasFinales,
           moneda_pago: monedaPago,
           monto_pago: montoPagoNum,
-          tasa_bcv: monedaPago === 'BS' ? tasaBCV : null,
+          tasa_bcv: requiereConversion ? tasaBCV : null,
           monto_equivalente_usd: montoEquivalenteUsd,
           monto_equivalente_bs: montoEquivalenteBs,
           metodo_pago_id: null,
@@ -895,7 +1043,7 @@ export default function VerPersonalPage() {
           tipo: 'liquidacion_manual',
           moneda_pago: monedaPago,
           monto_pago: montoPagoNum,
-          tasa_bcv: monedaPago === 'BS' ? tasaBCV : null,
+          tasa_bcv: requiereConversion ? tasaBCV : null,
           monto_equivalente_usd: montoEquivalenteUsd,
           monto_equivalente_bs: montoEquivalenteBs,
           metodo_pago_id: null,
@@ -932,14 +1080,23 @@ export default function VerPersonalPage() {
         const split = splitsValidos[i]
         const concepto = `Liquidación comisión - ${empleado?.nombre || 'Profesional'} - ${fechaFacturacion} - Parte ${i + 1}/${splitsValidos.length}`
 
+        const monedaMetodo = split.metodoMoneda
+        const montoContraMetodo = split.requiereConversion
+          ? Number(split.montoDescontarMetodo || 0)
+          : split.montoNum
+
         const montoSplitUsd =
-          monedaPago === 'USD' ? r2(split.montoNum) : r2(split.montoNum / Number(tasaBCV || 1))
+          monedaMetodo === 'USD'
+            ? r2(montoContraMetodo)
+            : tasaBCV && tasaBCV > 0
+              ? r2(montoContraMetodo / tasaBCV)
+              : 0
 
         const montoSplitBs =
-          monedaPago === 'BS'
-            ? r2(split.montoNum)
+          monedaMetodo === 'BS'
+            ? r2(montoContraMetodo)
             : tasaBCV && tasaBCV > 0
-              ? r2(split.montoNum * tasaBCV)
+              ? r2(montoContraMetodo * tasaBCV)
               : 0
 
         const { data: egreso, error: egresoError } = await supabase
@@ -949,17 +1106,18 @@ export default function VerPersonalPage() {
             categoria: 'nomina',
             concepto,
             proveedor: empleado?.nombre || null,
-            monto: split.montoNum,
+            monto: montoContraMetodo,
             metodo_pago_id: null,
             metodo_pago_v2_id: split.metodoPagoId,
             estado: 'pagado',
             notas:
               `Liquidación parcial ${i + 1} de ${splitsValidos.length}\n` +
-              `Liquidación total: ${monedaPago === 'USD' ? formatMoney(montoPagoNum) : formatBs(montoPagoNum)}\n` +
-              `Parte: ${monedaPago === 'USD' ? formatMoney(split.montoNum) : formatBs(split.montoNum)}\n` +
+              `Liquidación total: ${formatMontoByMoneda(montoPagoNum, monedaPago)}\n` +
+              `Parte aplicada a liquidación: ${formatMontoByMoneda(split.montoNum, monedaPago)}\n` +
+              `Monto descontado del método: ${formatMontoByMoneda(montoContraMetodo, monedaMetodo)}\n` +
               notasFinales,
-            moneda: monedaPago,
-            tasa_bcv: monedaPago === 'BS' ? tasaBCV : null,
+            moneda: monedaMetodo,
+            tasa_bcv: split.requiereConversion ? tasaBCV : null,
             monto_equivalente_usd: montoSplitUsd,
             monto_equivalente_bs: montoSplitBs,
             empleado_id: id,
@@ -1008,7 +1166,7 @@ export default function VerPersonalPage() {
       alert(
         `✅ Liquidación realizada.\n\n` +
           `Moneda: ${monedaPago}\n` +
-          `Monto: ${monedaPago === 'USD' ? formatMoney(montoPagoNum) : formatBs(montoPagoNum)}\n` +
+          `Monto: ${formatMontoByMoneda(montoPagoNum, monedaPago)}\n` +
           `Registros liquidados: ${pendientes.length}\n` +
           `Métodos usados: ${splitsValidos.length}`
       )
@@ -1018,6 +1176,7 @@ export default function VerPersonalPage() {
       setReferencia('')
       setNotasLiquidacion('')
       setTasaBCV(null)
+      setTasaBCVAuto(null)
       await loadAll()
     } catch (err: any) {
       console.error(err)
@@ -1386,7 +1545,7 @@ export default function VerPersonalPage() {
                   <label className="mb-2 block text-sm font-medium text-white/75">Moneda</label>
                   <select
                     value={monedaPago}
-                    onChange={(e) => setMonedaPago(e.target.value as 'USD' | 'BS')}
+                    onChange={(e) => setMonedaPago(e.target.value as Moneda)}
                     className={inputCls()}
                   >
                     <option value="USD" className="bg-[#11131a] text-white">
@@ -1398,18 +1557,41 @@ export default function VerPersonalPage() {
                   </select>
                 </div>
 
-                {monedaPago === 'BS' && (
+                {requiereTasa && (
                   <div>
                     <label className="mb-2 block text-sm font-medium text-white/75">Tasa BCV</label>
-                    <input
-                      type="number"
-                      step="0.0001"
-                      min="0"
-                      value={tasaBCV ?? ''}
-                      onChange={(e) => setTasaBCV(e.target.value ? Number(e.target.value) : null)}
-                      className={inputCls()}
-                      placeholder="Ej: 36.52"
-                    />
+                    <div className="space-y-2">
+                      <input
+                        type="number"
+                        step="0.0001"
+                        min="0"
+                        value={tasaBCV ?? ''}
+                        onChange={(e) => setTasaBCV(e.target.value ? Number(e.target.value) : null)}
+                        className={inputCls()}
+                        placeholder="Ej: 36.52"
+                      />
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void cargarTasaBCVAutomatica()}
+                          disabled={cargandoTasa}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-white/75 hover:bg-white/[0.06] disabled:opacity-60"
+                        >
+                          {cargandoTasa ? 'Cargando tasa...' : 'Recargar tasa automática'}
+                        </button>
+
+                        {tasaBCVAuto && (
+                          <span className="text-xs text-emerald-300">
+                            Automática: {tasaBCVAuto}
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-amber-300">
+                        Solo se usa cuando el método está en una moneda distinta a la liquidación.
+                      </p>
+                    </div>
                   </div>
                 )}
 
@@ -1492,7 +1674,7 @@ export default function VerPersonalPage() {
                         <div className="text-right">
                           <p className="text-xs text-white/35">Monto a liquidar</p>
                           <p className="font-semibold text-emerald-400">
-                            {monedaPago === 'USD' ? formatMoney(monto) : formatBs(monto)}
+                            {formatMontoByMoneda(monto, monedaPago)}
                           </p>
                         </div>
                       </label>
@@ -1505,21 +1687,21 @@ export default function VerPersonalPage() {
             <Card className="mb-4 border-amber-400/20 bg-amber-400/5 p-4">
               <p className="text-sm font-medium text-amber-300">Métodos de pago / carteras</p>
               <p className="mt-1 text-xs text-white/45">
-                Puedes pagar con una sola cartera o dividir entre varias.
+                Puedes pagar con una sola cartera o dividir entre varias. También puedes usar una cartera de otra moneda y convertir aquí mismo.
               </p>
 
               <div className="mt-4 grid gap-3 md:grid-cols-3">
                 <Card className="p-4">
                   <p className="text-xs text-white/45">Monto seleccionado</p>
                   <p className="mt-1 text-lg font-semibold text-white">
-                    {monedaPago === 'USD' ? formatMoney(montoFacturar) : formatBs(montoFacturar)}
+                    {formatMontoByMoneda(montoFacturar, monedaPago)}
                   </p>
                 </Card>
 
                 <Card className="border-violet-400/20 bg-violet-400/5 p-4">
                   <p className="text-xs text-white/45">Asignado en métodos</p>
                   <p className="mt-1 text-lg font-semibold text-violet-300">
-                    {monedaPago === 'USD' ? formatMoney(totalSplits) : formatBs(totalSplits)}
+                    {formatMontoByMoneda(totalSplits, monedaPago)}
                   </p>
                 </Card>
 
@@ -1530,18 +1712,19 @@ export default function VerPersonalPage() {
                       restantePorAsignar === 0 ? 'text-emerald-400' : 'text-amber-300'
                     }`}
                   >
-                    {monedaPago === 'USD'
-                      ? formatMoney(restantePorAsignar)
-                      : formatBs(restantePorAsignar)}
+                    {formatMontoByMoneda(restantePorAsignar, monedaPago)}
                   </p>
                 </Card>
               </div>
 
               <div className="mt-4 space-y-3">
-                {splitsPago.map((split, index) => {
-                  const metodo =
-                    metodosFiltradosPorMoneda.find((m) => m.id === split.metodoPagoId) || null
-                  const saldo = getMetodoSaldo(metodo)
+                {splitsConMetodo.map((split, index) => {
+                  const metodo = split.metodo
+                  const saldo = split.saldo
+                  const monedaMetodo = split.metodoMoneda
+                  const montoContraMetodo = split.requiereConversion
+                    ? split.montoDescontar
+                    : split.montoLiquidacion
 
                   return (
                     <div
@@ -1560,18 +1743,17 @@ export default function VerPersonalPage() {
                           <option value="" className="bg-[#11131a] text-white">
                             Seleccionar método
                           </option>
-                          {metodosFiltradosPorMoneda.map((m) => {
+                          {metodosPago.map((m) => {
                             const saldoMetodo = getMetodoSaldo(m)
+                            const monedaM = getMetodoMoneda(m)
+
                             return (
                               <option key={m.id} value={m.id} className="bg-[#11131a] text-white">
                                 {m.nombre}
                                 {m.cartera?.nombre ? ` · ${m.cartera.nombre}` : ''}
+                                {` · ${monedaM}`}
                                 {saldoMetodo > 0
-                                  ? ` · Saldo ${
-                                      monedaPago === 'USD'
-                                        ? formatMoney(saldoMetodo)
-                                        : formatBs(saldoMetodo)
-                                    }`
+                                  ? ` · Saldo ${formatMontoByMoneda(saldoMetodo, monedaM)}`
                                   : ''}
                               </option>
                             )
@@ -1579,15 +1761,30 @@ export default function VerPersonalPage() {
                         </select>
 
                         {metodo && (
-                          <p className="mt-2 text-xs text-white/40">
-                            Cartera: {metodo.cartera?.nombre || '—'} · Saldo:{' '}
-                            {monedaPago === 'USD' ? formatMoney(saldo) : formatBs(saldo)}
-                          </p>
+                          <div className="mt-2 space-y-1 text-xs text-white/40">
+                            <p>
+                              Cartera: {metodo.cartera?.nombre || '—'} · Moneda método: {monedaMetodo} ·
+                              Saldo: {formatMontoByMoneda(saldo, monedaMetodo)}
+                            </p>
+
+                            {split.requiereConversion && (
+                              <p className="text-amber-300">
+                                Para cubrir {formatMontoByMoneda(split.montoLiquidacion, monedaPago)} en{' '}
+                                {monedaPago}, se descontarán{' '}
+                                {montoContraMetodo !== null
+                                  ? formatMontoByMoneda(montoContraMetodo, monedaMetodo)
+                                  : '—'}{' '}
+                                de esta cartera.
+                              </p>
+                            )}
+                          </div>
                         )}
                       </div>
 
                       <div>
-                        <label className="mb-2 block text-xs text-white/45">Monto</label>
+                        <label className="mb-2 block text-xs text-white/45">
+                          Monto en {monedaPago}
+                        </label>
                         <input
                           type="number"
                           min="0"

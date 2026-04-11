@@ -15,6 +15,11 @@ type Empleado = {
   estado: string | null
 }
 
+type AuditorRef = {
+  id: string
+  nombre: string | null
+} | null
+
 type AsistenciaEstado =
   | 'asistio'
   | 'no_asistio'
@@ -30,10 +35,14 @@ type AsistenciaRow = {
   observaciones: string | null
   created_at: string
   updated_at?: string | null
+  created_by?: string | null
+  updated_by?: string | null
   empleados?: {
     nombre: string
     rol: string | null
   } | null
+  creado_por?: AuditorRef
+  actualizado_por?: AuditorRef
 }
 
 type DisponibilidadTipo =
@@ -170,6 +179,74 @@ function formatDisponibilidadTipo(tipo: DisponibilidadTipo) {
   }
 }
 
+function roleLabel(rol: string | null | undefined) {
+  const value = (rol || '').trim().toLowerCase()
+  if (!value) return 'Sin rol'
+  if (value === 'terapeuta' || value === 'fisioterapeuta') return 'Fisioterapeuta'
+  if (value === 'entrenador') return 'Entrenador'
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function getLocalToday() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function getMonthStart(dateStr: string) {
+  const d = new Date(`${dateStr}T12:00:00`)
+  return new Date(d.getFullYear(), d.getMonth(), 1)
+}
+
+function formatMonthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+function monthTitle(date: Date) {
+  return date.toLocaleDateString('es-ES', {
+    month: 'long',
+    year: 'numeric',
+  })
+}
+
+function dayKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate()
+  ).padStart(2, '0')}`
+}
+
+function sameDay(a: string, b: string) {
+  return a === b
+}
+
+function getCalendarDays(monthDate: Date) {
+  const year = monthDate.getFullYear()
+  const month = monthDate.getMonth()
+  const first = new Date(year, month, 1)
+  const last = new Date(year, month + 1, 0)
+
+  const startOffset = (first.getDay() + 6) % 7
+  const days: Date[] = []
+
+  for (let i = startOffset; i > 0; i--) {
+    days.push(new Date(year, month, 1 - i))
+  }
+
+  for (let i = 1; i <= last.getDate(); i++) {
+    days.push(new Date(year, month, i))
+  }
+
+  while (days.length % 7 !== 0) {
+    days.push(new Date(year, month, last.getDate() + (days.length % 7) + 1))
+  }
+
+  return days
+}
+
+function getUltimoRegistroTexto(item: AsistenciaRow) {
+  const actor = item.actualizado_por?.nombre || item.creado_por?.nombre || 'Sin registro'
+  const fecha = formatDateTime(item.updated_at || item.created_at)
+  return `Último registro: ${actor} · ${fecha}`
+}
+
 export default function AsistenciaPage() {
   const [empleados, setEmpleados] = useState<Empleado[]>([])
   const [asistencias, setAsistencias] = useState<AsistenciaRow[]>([])
@@ -181,9 +258,12 @@ export default function AsistenciaPage() {
   const [saving, setSaving] = useState(false)
   const [quickSavingId, setQuickSavingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [empleadoActualId, setEmpleadoActualId] = useState('')
 
   const [search, setSearch] = useState('')
   const [alert, setAlert] = useState<AlertState>(null)
+
+  const [monthView, setMonthView] = useState(() => formatMonthKey(new Date()))
 
   function showAlert(
     type: 'error' | 'success' | 'info' | 'warning',
@@ -199,7 +279,47 @@ export default function AsistenciaPage() {
 
   useEffect(() => {
     void loadData()
+    void loadEmpleadoActual()
   }, [])
+
+  async function resolveEmpleadoActualId(): Promise<string> {
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError) return ''
+
+      const authUserId = authData.user?.id
+      if (!authUserId) return ''
+
+      const { data: empleadoPorAuth, error: errorPorAuth } = await supabase
+        .from('empleados')
+        .select('id, nombre, auth_user_id')
+        .eq('auth_user_id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorAuth && empleadoPorAuth?.id) {
+        return String(empleadoPorAuth.id)
+      }
+
+      const { data: empleadoPorId, error: errorPorId } = await supabase
+        .from('empleados')
+        .select('id, nombre')
+        .eq('id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorId && empleadoPorId?.id) {
+        return String(empleadoPorId.id)
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
+  async function loadEmpleadoActual() {
+    const empleadoId = await resolveEmpleadoActualId()
+    setEmpleadoActualId(empleadoId)
+  }
 
   const empleadosFiltrados = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -224,6 +344,48 @@ export default function AsistenciaPage() {
     })
     return map
   }, [asistenciaDelDia])
+
+  const currentMonthDate = useMemo(() => {
+    const [year, month] = monthView.split('-').map(Number)
+    return new Date(year, (month || 1) - 1, 1)
+  }, [monthView])
+
+  const monthDays = useMemo(() => getCalendarDays(currentMonthDate), [currentMonthDate])
+
+  const asistenciasDelMes = useMemo(() => {
+    return asistencias.filter((a) => a.fecha.startsWith(monthView))
+  }, [asistencias, monthView])
+
+  const resumenPorDia = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        total: number
+        asistio: number
+        no_asistio: number
+        permiso: number
+        reposo: number
+        vacaciones: number
+      }
+    >()
+
+    for (const item of asistenciasDelMes) {
+      const current = map.get(item.fecha) || {
+        total: 0,
+        asistio: 0,
+        no_asistio: 0,
+        permiso: 0,
+        reposo: 0,
+        vacaciones: 0,
+      }
+
+      current.total += 1
+      current[item.estado] += 1
+      map.set(item.fecha, current)
+    }
+
+    return map
+  }, [asistenciasDelMes])
 
   const stats = useMemo(() => {
     const delDia = asistencias.filter((a) => a.fecha === form.fecha)
@@ -259,9 +421,14 @@ export default function AsistenciaPage() {
             observaciones,
             created_at,
             updated_at,
-            empleados:empleado_id ( nombre, rol )
+            created_by,
+            updated_by,
+            empleados:empleado_id ( nombre, rol ),
+            creado_por:created_by ( id, nombre ),
+            actualizado_por:updated_by ( id, nombre )
           `)
           .order('fecha', { ascending: false })
+          .order('updated_at', { ascending: false })
           .order('created_at', { ascending: false }),
 
         supabase
@@ -301,7 +468,7 @@ export default function AsistenciaPage() {
   function resetForm() {
     setForm({
       ...INITIAL_FORM,
-      fecha: new Date().toISOString().slice(0, 10),
+      fecha: getLocalToday(),
     })
   }
 
@@ -337,6 +504,13 @@ export default function AsistenciaPage() {
     observaciones: string,
     bloquearAgenda: boolean
   ) {
+    let auditorId = empleadoActualId || ''
+
+    if (!auditorId) {
+      auditorId = await resolveEmpleadoActualId()
+      setEmpleadoActualId(auditorId)
+    }
+
     const observacionFinal = observaciones.trim() || null
 
     const existente = asistencias.find(
@@ -349,6 +523,7 @@ export default function AsistenciaPage() {
         .update({
           estado,
           observaciones: observacionFinal,
+          updated_by: auditorId || null,
         })
         .eq('id', existente.id)
 
@@ -361,6 +536,8 @@ export default function AsistenciaPage() {
           fecha,
           estado,
           observaciones: observacionFinal,
+          created_by: auditorId || null,
+          updated_by: auditorId || null,
         })
 
       if (error) throw error
@@ -447,7 +624,7 @@ export default function AsistenciaPage() {
       showAlert(
         'success',
         'Listo',
-        `${empleado.nombre} marcado como ${formatAsistenciaEstado(estado).toLowerCase()}.`
+        `${empleado.nombre} quedó marcado como ${formatAsistenciaEstado(estado).toLowerCase()}.`
       )
 
       await loadData()
@@ -482,6 +659,24 @@ export default function AsistenciaPage() {
     }
   }
 
+  function goPrevMonth() {
+    const d = new Date(currentMonthDate)
+    d.setMonth(d.getMonth() - 1)
+    setMonthView(formatMonthKey(d))
+  }
+
+  function goNextMonth() {
+    const d = new Date(currentMonthDate)
+    d.setMonth(d.getMonth() + 1)
+    setMonthView(formatMonthKey(d))
+  }
+
+  function goToday() {
+    const today = new Date()
+    setMonthView(formatMonthKey(today))
+    setForm((prev) => ({ ...prev, fecha: dayKey(today) }))
+  }
+
   return (
     <div className="space-y-6 px-4 py-6 lg:px-6">
       <div>
@@ -490,7 +685,7 @@ export default function AsistenciaPage() {
           Asistencia
         </h1>
         <p className="mt-2 text-sm text-white/55">
-          Control diario de asistencia del personal con integración a bloqueo de agenda.
+          Control diario de asistencia del personal con calendario mensual y último responsable del registro.
         </p>
       </div>
 
@@ -542,12 +737,138 @@ export default function AsistenciaPage() {
         <StatCard title="Bloqueos agenda" value={stats.bloqueadosHoy} color="text-rose-400" />
       </div>
 
+      <Section
+        title="Calendario mensual de asistencia"
+        description="Vista tipo calendario normal. Puedes cambiar de mes y hacer clic en cualquier día."
+      >
+        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={goPrevMonth}
+              className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/80 hover:bg-white/[0.06]"
+            >
+              ←
+            </button>
+
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-semibold text-white">
+              {monthTitle(currentMonthDate)}
+            </div>
+
+            <button
+              type="button"
+              onClick={goNextMonth}
+              className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/80 hover:bg-white/[0.06]"
+            >
+              →
+            </button>
+
+            <button
+              type="button"
+              onClick={goToday}
+              className="rounded-xl border border-sky-400/20 bg-sky-400/10 px-3 py-2 text-sm font-medium text-sky-300 hover:bg-sky-400/15"
+            >
+              Hoy
+            </button>
+          </div>
+
+          <div className="text-sm text-white/50">
+            Día seleccionado: <span className="text-white">{form.fecha}</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-7 gap-2">
+          {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map((label) => (
+            <div
+              key={label}
+              className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-center text-xs font-medium text-white/55"
+            >
+              {label}
+            </div>
+          ))}
+
+          {monthDays.map((date) => {
+            const key = dayKey(date)
+            const resumen = resumenPorDia.get(key)
+            const isCurrentMonth = date.getMonth() === currentMonthDate.getMonth()
+            const isSelected = sameDay(key, form.fecha)
+            const isToday = sameDay(key, getLocalToday())
+
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() =>
+                  setForm((prev) => ({
+                    ...prev,
+                    fecha: key,
+                  }))
+                }
+                className={`min-h-[108px] rounded-2xl border p-3 text-left transition ${
+                  isSelected
+                    ? 'border-violet-400/40 bg-violet-500/10'
+                    : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'
+                } ${!isCurrentMonth ? 'opacity-35' : ''}`}
+              >
+                <div className="flex items-center justify-between">
+                  <span
+                    className={`text-sm font-semibold ${
+                      isToday ? 'text-emerald-300' : 'text-white'
+                    }`}
+                  >
+                    {date.getDate()}
+                  </span>
+
+                  {resumen?.total ? (
+                    <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
+                      {resumen.total}
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="mt-3 space-y-1">
+                  {resumen?.asistio ? (
+                    <div className="rounded-lg bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-300">
+                      Asistió: {resumen.asistio}
+                    </div>
+                  ) : null}
+
+                  {resumen?.no_asistio ? (
+                    <div className="rounded-lg bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300">
+                      No asistió: {resumen.no_asistio}
+                    </div>
+                  ) : null}
+
+                  {resumen?.permiso ? (
+                    <div className="rounded-lg bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+                      Permiso: {resumen.permiso}
+                    </div>
+                  ) : null}
+
+                  {resumen?.reposo ? (
+                    <div className="rounded-lg bg-fuchsia-500/10 px-2 py-1 text-[11px] text-fuchsia-300">
+                      Reposo: {resumen.reposo}
+                    </div>
+                  ) : null}
+
+                  {resumen?.vacaciones ? (
+                    <div className="rounded-lg bg-sky-500/10 px-2 py-1 text-[11px] text-sky-300">
+                      Vacaciones: {resumen.vacaciones}
+                    </div>
+                  ) : null}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+      </Section>
+
       <div className="grid gap-6 xl:grid-cols-3">
         <div className="space-y-6 xl:col-span-1">
           <form onSubmit={handleGuardar}>
             <Section
               title="Registrar asistencia"
-              description="Guarda la asistencia de un miembro del personal y opcionalmente bloquea la agenda."
+              description="Guarda la asistencia y, si aplica, bloquea la agenda."
             >
               <div className="space-y-4">
                 <Field label="Personal">
@@ -566,7 +887,7 @@ export default function AsistenciaPage() {
                     </option>
                     {empleados.map((empleado) => (
                       <option key={empleado.id} value={empleado.id} className="bg-[#11131a] text-white">
-                        {empleado.nombre} {empleado.rol ? `· ${empleado.rol}` : ''}
+                        {empleado.nombre} {empleado.rol ? `· ${roleLabel(empleado.rol)}` : ''}
                       </option>
                     ))}
                   </select>
@@ -694,7 +1015,7 @@ export default function AsistenciaPage() {
 
           <Section
             title="Historial del día"
-            description="Resumen rápido de quién asistió y quién no en la fecha seleccionada."
+            description="Aquí se ve el último estado que quedó guardado y quién lo dejó."
           >
             <div className="space-y-3">
               {loading ? (
@@ -710,7 +1031,7 @@ export default function AsistenciaPage() {
                           {item.empleados?.nombre || 'Personal'}
                         </p>
                         <p className="text-xs text-white/45">
-                          {item.empleados?.rol || 'Sin rol'}
+                          {roleLabel(item.empleados?.rol)}
                         </p>
                       </div>
 
@@ -727,8 +1048,14 @@ export default function AsistenciaPage() {
                       {item.observaciones || 'Sin observaciones'}
                     </p>
 
+                    <div className="mt-3 space-y-1">
+                      <div className="text-[11px] text-white/35">
+                        {getUltimoRegistroTexto(item)}
+                      </div>
+                    </div>
+
                     <div className="mt-3 flex items-center justify-between gap-3 text-xs text-white/45">
-                      <span>{formatDateTime(item.created_at)}</span>
+                      <span>{formatDateTime(item.updated_at || item.created_at)}</span>
 
                       <button
                         type="button"
@@ -793,12 +1120,12 @@ export default function AsistenciaPage() {
                     <Card key={empleado.id} className="p-4">
                       <div className="mb-3">
                         <p className="text-sm font-semibold text-white">{empleado.nombre}</p>
-                        <p className="text-xs text-white/45">{empleado.rol || 'Sin rol'}</p>
+                        <p className="text-xs text-white/45">{roleLabel(empleado.rol)}</p>
                       </div>
 
                       <div className="mb-3 space-y-2">
                         <div className="flex items-center justify-between">
-                          <span className="text-xs text-white/45">Estado</span>
+                          <span className="text-xs text-white/45">Estado actual</span>
                           {registro ? (
                             <span
                               className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${asistenciaBadge(
@@ -815,6 +1142,14 @@ export default function AsistenciaPage() {
                         <div className="text-xs text-white/45">
                           {registro?.observaciones || 'Sin observaciones'}
                         </div>
+
+                        {registro ? (
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-2">
+                            <p className="text-[11px] text-white/55">
+                              {getUltimoRegistroTexto(registro)}
+                            </p>
+                          </div>
+                        ) : null}
 
                         {bloqueosDelDia.length > 0 ? (
                           <div className="rounded-2xl border border-rose-400/20 bg-rose-400/10 p-2">

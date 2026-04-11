@@ -74,12 +74,12 @@ function getServicioDuracion(servicio: ServicioRaw | null): number | null {
 
   const posibles = [
     servicio.duracion_minutos,
-    servicio.duracion_min,
-    servicio.duracion,
-    servicio.tiempo,
-    servicio.tiempo_min,
-    servicio.tiempo_minutos,
-    servicio.minutos,
+    (servicio as any).duracion_min,
+    (servicio as any).duracion,
+    (servicio as any).tiempo,
+    (servicio as any).tiempo_min,
+    (servicio as any).tiempo_minutos,
+    (servicio as any).minutos,
   ]
 
   for (const valor of posibles) {
@@ -175,6 +175,7 @@ export default function EditarCitaPage() {
   const [loadingData, setLoadingData] = useState(true)
   const [saving, setSaving] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
+  const [empleadoActualId, setEmpleadoActualId] = useState('')
 
   const [servicios, setServicios] = useState<Servicio[]>([])
   const [recursos, setRecursos] = useState<Recurso[]>([])
@@ -211,8 +212,48 @@ export default function EditarCitaPage() {
   useEffect(() => {
     if (!id) return
     void loadData()
+    void loadEmpleadoActual()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
+
+  async function resolveEmpleadoActualId(): Promise<string> {
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError) return ''
+
+      const authUserId = authData.user?.id
+      if (!authUserId) return ''
+
+      const { data: empleadoPorAuth, error: errorPorAuth } = await supabase
+        .from('empleados')
+        .select('id, nombre, auth_user_id')
+        .eq('auth_user_id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorAuth && empleadoPorAuth?.id) {
+        return String(empleadoPorAuth.id)
+      }
+
+      const { data: empleadoPorId, error: errorPorId } = await supabase
+        .from('empleados')
+        .select('id, nombre')
+        .eq('id', authUserId)
+        .maybeSingle()
+
+      if (!errorPorId && empleadoPorId?.id) {
+        return String(empleadoPorId.id)
+      }
+
+      return ''
+    } catch {
+      return ''
+    }
+  }
+
+  async function loadEmpleadoActual() {
+    const empleadoId = await resolveEmpleadoActualId()
+    setEmpleadoActualId(empleadoId)
+  }
 
   async function loadData() {
     setLoadingData(true)
@@ -343,9 +384,16 @@ export default function EditarCitaPage() {
         return
       }
 
+      let auditorId = empleadoActualId || ''
+      if (!auditorId) {
+        auditorId = await resolveEmpleadoActualId()
+        setEmpleadoActualId(auditorId)
+      }
+
       const payload = {
         servicio_id: form.servicio_id,
         recurso_id: form.recurso_id || null,
+        updated_by: auditorId || null,
       }
 
       const { error } = await supabase.from('citas').update(payload).eq('id', id)
