@@ -32,18 +32,38 @@ export default function LoginPage() {
   }, [])
 
   async function verificarSesion() {
-    const { data: { session } } = await supabase.auth.getSession()
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+
     if (!session) return
 
-    const { data: empleado } = await supabase
+    const { data: empleado, error: empleadoError } = await supabase
       .from('empleados')
-      .select('id, roles:rol_id(nombre)')
-      .eq('id', session.user.id)
-      .single()
+      .select('id, auth_user_id, rol, roles:rol_id(nombre)')
+      .eq('auth_user_id', session.user.id)
+      .maybeSingle()
 
-    const rol = getRolNombre(empleado)
-    if (rol === 'cliente') { router.replace('/cliente'); return }
-    if (rol) router.replace('/admin')
+    if (empleadoError) {
+      console.error('Error verificando sesión:', empleadoError)
+      return
+    }
+
+    if (!empleado) return
+
+    const rol = getRolNombre(empleado) ?? empleado?.rol ?? null
+
+    if (rol === 'cliente') {
+      router.replace('/cliente')
+      return
+    }
+
+    if (rol === 'admin' || rol === 'recepcionista' || rol === 'terapeuta') {
+      router.replace('/admin')
+      return
+    }
+
+    router.replace('/sin-acceso')
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -53,27 +73,56 @@ export default function LoginPage() {
     setSuccess('')
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { error: loginError } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       })
 
-      if (error) { setError(error.message || 'No se pudo iniciar sesión'); return }
+      if (loginError) {
+        setError(loginError.message || 'No se pudo iniciar sesión')
+        return
+      }
 
       setSuccess('Inicio de sesión correcto')
 
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { setError('No se pudo obtener el usuario autenticado'); return }
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser()
 
-      const { data: empleado } = await supabase
+      if (userError || !user) {
+        setError('No se pudo obtener el usuario autenticado')
+        return
+      }
+
+      const { data: empleado, error: empleadoError } = await supabase
         .from('empleados')
-        .select('id, roles:rol_id(nombre)')
-        .eq('id', user.id)
-        .single()
+        .select('id, auth_user_id, rol, roles:rol_id(nombre)')
+        .eq('auth_user_id', user.id)
+        .maybeSingle()
 
-      const rol = getRolNombre(empleado)
-      if (rol === 'cliente') { router.replace('/cliente'); return }
-      if (rol === 'admin' || rol === 'recepcionista' || rol === 'terapeuta') { router.replace('/admin'); return }
+      if (empleadoError) {
+        setError('Error consultando el perfil del empleado')
+        return
+      }
+
+      if (!empleado) {
+        setError('Tu usuario autenticado no está vinculado a un empleado')
+        return
+      }
+
+      const rol = getRolNombre(empleado) ?? empleado?.rol ?? null
+
+      if (rol === 'cliente') {
+        router.replace('/cliente')
+        return
+      }
+
+      if (rol === 'admin' || rol === 'recepcionista' || rol === 'terapeuta') {
+        router.replace('/admin')
+        return
+      }
+
       router.replace('/sin-acceso')
     } catch (err: any) {
       setError(err?.message || 'Ocurrió un error inesperado')
@@ -158,84 +207,129 @@ export default function LoginPage() {
         .btn-toggle:hover { background: rgba(255,255,255,0.09); }
       `}</style>
 
-      {/* Full-screen background */}
-      <div style={{
-        minHeight: '100vh',
-        background: '#0b0b10',
-        position: 'relative',
-        overflow: 'hidden',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '24px 16px',
-      }}>
+      <div
+        style={{
+          minHeight: '100vh',
+          background: '#0b0b10',
+          position: 'relative',
+          overflow: 'hidden',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px 16px',
+        }}
+      >
+        <div
+          className="b1"
+          style={{
+            position: 'absolute',
+            borderRadius: '50%',
+            width: '65vw',
+            height: '65vw',
+            top: '-20%',
+            right: '-15%',
+            background:
+              'radial-gradient(circle, rgba(109,40,217,0.65) 0%, transparent 70%)',
+            filter: 'blur(72px)',
+            pointerEvents: 'none',
+          }}
+        />
+        <div
+          className="b2"
+          style={{
+            position: 'absolute',
+            borderRadius: '50%',
+            width: '55vw',
+            height: '55vw',
+            bottom: '-15%',
+            left: '-10%',
+            background:
+              'radial-gradient(circle, rgba(167,139,250,0.45) 0%, transparent 70%)',
+            filter: 'blur(80px)',
+            pointerEvents: 'none',
+          }}
+        />
+        <div
+          className="b3"
+          style={{
+            position: 'absolute',
+            borderRadius: '50%',
+            width: '40vw',
+            height: '40vw',
+            top: '25%',
+            left: '15%',
+            background:
+              'radial-gradient(circle, rgba(76,29,149,0.50) 0%, transparent 70%)',
+            filter: 'blur(64px)',
+            pointerEvents: 'none',
+          }}
+        />
 
-        {/* Blobs */}
-        <div className="b1" style={{
-          position: 'absolute', borderRadius: '50%',
-          width: '65vw', height: '65vw',
-          top: '-20%', right: '-15%',
-          background: 'radial-gradient(circle, rgba(109,40,217,0.65) 0%, transparent 70%)',
-          filter: 'blur(72px)', pointerEvents: 'none',
-        }} />
-        <div className="b2" style={{
-          position: 'absolute', borderRadius: '50%',
-          width: '55vw', height: '55vw',
-          bottom: '-15%', left: '-10%',
-          background: 'radial-gradient(circle, rgba(167,139,250,0.45) 0%, transparent 70%)',
-          filter: 'blur(80px)', pointerEvents: 'none',
-        }} />
-        <div className="b3" style={{
-          position: 'absolute', borderRadius: '50%',
-          width: '40vw', height: '40vw',
-          top: '25%', left: '15%',
-          background: 'radial-gradient(circle, rgba(76,29,149,0.50) 0%, transparent 70%)',
-          filter: 'blur(64px)', pointerEvents: 'none',
-        }} />
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background:
+              'radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.60) 100%)',
+            pointerEvents: 'none',
+          }}
+        />
 
-        {/* Vignette */}
-        <div style={{
-          position: 'absolute', inset: 0,
-          background: 'radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.60) 100%)',
-          pointerEvents: 'none',
-        }} />
-
-        {/* Watermark bottom-left */}
-        <div style={{
-          position: 'absolute', bottom: 44, left: 52,
-          zIndex: 1, pointerEvents: 'none', userSelect: 'none',
-        }}>
-          <p style={{
-            fontSize: 12, letterSpacing: '0.18em',
-            textTransform: 'uppercase',
-            color: 'rgba(196,167,255,0.40)',
-            margin: '0 0 6px', fontWeight: 600,
-          }}>Bienvenido</p>
-          <h2 style={{
-            fontSize: 'clamp(32px, 4.5vw, 60px)',
-            fontWeight: 800,
-            color: 'rgba(255,255,255,0.07)',
-            lineHeight: 1.05, margin: 0,
-            letterSpacing: '-0.02em',
-          }}>
-            Gestiona<br />tu negocio.
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 44,
+            left: 52,
+            zIndex: 1,
+            pointerEvents: 'none',
+            userSelect: 'none',
+          }}
+        >
+          <p
+            style={{
+              fontSize: 12,
+              letterSpacing: '0.18em',
+              textTransform: 'uppercase',
+              color: 'rgba(196,167,255,0.40)',
+              margin: '0 0 6px',
+              fontWeight: 600,
+            }}
+          >
+            Bienvenido
+          </p>
+          <h2
+            style={{
+              fontSize: 'clamp(32px, 4.5vw, 60px)',
+              fontWeight: 800,
+              color: 'rgba(255,255,255,0.07)',
+              lineHeight: 1.05,
+              margin: 0,
+              letterSpacing: '-0.02em',
+            }}
+          >
+            Gestiona
+            <br />
+            tu negocio.
           </h2>
         </div>
 
-        {/* ── Floating card — rectangular ── */}
-        <div className="card" style={{
-          position: 'relative', zIndex: 10,
-          width: '100%', maxWidth: 460,
-          background: 'rgba(15, 15, 22, 0.78)',
-          backdropFilter: 'blur(32px)',
-          WebkitBackdropFilter: 'blur(32px)',
-          border: '1px solid rgba(255,255,255,0.08)',
-          borderRadius: 14,                        /* más rectangular */
-          padding: '44px 44px',
-          boxShadow: '0 40px 100px rgba(0,0,0,0.60), 0 0 0 0.5px rgba(255,255,255,0.03) inset',
-        }}>
-
-          {/* Logo centrado */}
+        <div
+          className="card"
+          style={{
+            position: 'relative',
+            zIndex: 10,
+            width: '100%',
+            maxWidth: 460,
+            background: 'rgba(15, 15, 22, 0.78)',
+            backdropFilter: 'blur(32px)',
+            WebkitBackdropFilter: 'blur(32px)',
+            border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: 14,
+            padding: '44px 44px',
+            boxShadow:
+              '0 40px 100px rgba(0,0,0,0.60), 0 0 0 0.5px rgba(255,255,255,0.03) inset',
+          }}
+        >
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28 }}>
             <Image
               src="/logo-rpm.png"
@@ -247,30 +341,45 @@ export default function LoginPage() {
             />
           </div>
 
-          <h1 style={{
-            fontSize: 24, fontWeight: 700,
-            color: '#fff', margin: '0 0 4px',
-            textAlign: 'center',
-          }}>
+          <h1
+            style={{
+              fontSize: 24,
+              fontWeight: 700,
+              color: '#fff',
+              margin: '0 0 4px',
+              textAlign: 'center',
+            }}
+          >
             Iniciar sesión
           </h1>
-          <p style={{
-            fontSize: 13, color: 'rgba(255,255,255,0.35)',
-            margin: '0 0 32px', textAlign: 'center',
-          }}>
+
+          <p
+            style={{
+              fontSize: 13,
+              color: 'rgba(255,255,255,0.35)',
+              margin: '0 0 32px',
+              textAlign: 'center',
+            }}
+          >
             Accede a tu panel según tu rol
           </p>
 
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-
+          <form
+            onSubmit={handleSubmit}
+            style={{ display: 'flex', flexDirection: 'column', gap: 18 }}
+          >
             <div>
-              <label style={{
-                display: 'block', fontSize: 11,
-                color: 'rgba(255,255,255,0.45)',
-                marginBottom: 8, fontWeight: 600,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-              }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: 11,
+                  color: 'rgba(255,255,255,0.45)',
+                  marginBottom: 8,
+                  fontWeight: 600,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                }}
+              >
                 Correo electrónico
               </label>
               <input
@@ -284,13 +393,17 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label style={{
-                display: 'block', fontSize: 11,
-                color: 'rgba(255,255,255,0.45)',
-                marginBottom: 8, fontWeight: 600,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-              }}>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: 11,
+                  color: 'rgba(255,255,255,0.45)',
+                  marginBottom: 8,
+                  fontWeight: 600,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                }}
+              >
                 Contraseña
               </label>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -302,35 +415,52 @@ export default function LoginPage() {
                   className="inp"
                   required
                 />
-                <button type="button" onClick={() => setShowPassword(v => !v)} className="btn-toggle">
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="btn-toggle"
+                >
                   {showPassword ? 'Ocultar' : 'Ver'}
                 </button>
               </div>
             </div>
 
             {error && (
-              <div style={{
-                background: 'rgba(239,68,68,0.08)',
-                border: '1px solid rgba(239,68,68,0.20)',
-                borderRadius: 8, padding: '11px 14px',
-                fontSize: 13, color: '#fca5a5',
-              }}>
+              <div
+                style={{
+                  background: 'rgba(239,68,68,0.08)',
+                  border: '1px solid rgba(239,68,68,0.20)',
+                  borderRadius: 8,
+                  padding: '11px 14px',
+                  fontSize: 13,
+                  color: '#fca5a5',
+                }}
+              >
                 {error}
               </div>
             )}
 
             {success && (
-              <div style={{
-                background: 'rgba(52,211,153,0.07)',
-                border: '1px solid rgba(52,211,153,0.18)',
-                borderRadius: 8, padding: '11px 14px',
-                fontSize: 13, color: '#6ee7b7',
-              }}>
+              <div
+                style={{
+                  background: 'rgba(52,211,153,0.07)',
+                  border: '1px solid rgba(52,211,153,0.18)',
+                  borderRadius: 8,
+                  padding: '11px 14px',
+                  fontSize: 13,
+                  color: '#6ee7b7',
+                }}
+              >
                 {success}
               </div>
             )}
 
-            <button type="submit" disabled={loading} className="btn-submit" style={{ marginTop: 4 }}>
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-submit"
+              style={{ marginTop: 4 }}
+            >
               {loading ? 'Entrando...' : 'Entrar'}
             </button>
           </form>

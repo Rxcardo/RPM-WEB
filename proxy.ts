@@ -9,8 +9,8 @@ function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
 }
 
 function getRolNombre(empleado: any): NombreRol | undefined {
-  const rol = firstOrNull(empleado?.roles)
-  const nombre = rol?.nombre
+  const rolRelacionado = firstOrNull(empleado?.roles)
+  const nombre = rolRelacionado?.nombre ?? empleado?.rol
 
   if (
     nombre === 'admin' ||
@@ -73,9 +73,9 @@ export async function proxy(req: NextRequest) {
 
   const { data: empleado } = await supabase
     .from('empleados')
-    .select('id, roles:rol_id(nombre)')
-    .eq('id', user.id)
-    .single()
+    .select('id, auth_user_id, rol, roles:rol_id(nombre)')
+    .eq('auth_user_id', user.id)
+    .maybeSingle()
 
   const rol = getRolNombre(empleado)
 
