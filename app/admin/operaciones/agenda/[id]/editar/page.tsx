@@ -22,6 +22,7 @@ type Servicio = {
   nombre: string
   duracion_min: number | null
   estado?: string | null
+  precio?: number | null
 }
 
 type Recurso = {
@@ -88,6 +89,50 @@ function getServicioDuracion(servicio: ServicioRaw | null): number | null {
   }
 
   return null
+}
+
+function getServicioPrecio(servicio: ServicioRaw | Servicio | null): number {
+  if (!servicio) return 0
+  const n = Number((servicio as any).precio ?? 0)
+  return Number.isNaN(n) ? 0 : n
+}
+
+
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function normalizeCitaDetalle(row: any): CitaDetalle {
+  const cliente = firstOrNull(row?.clientes)
+  const empleado = firstOrNull(row?.empleados)
+  const servicio = firstOrNull(row?.servicios)
+  const recurso = firstOrNull(row?.recursos)
+
+  return {
+    id: String(row?.id ?? ''),
+    cliente_id: String(row?.cliente_id ?? ''),
+    terapeuta_id: row?.terapeuta_id ?? null,
+    servicio_id: row?.servicio_id ?? null,
+    recurso_id: row?.recurso_id ?? null,
+    fecha: row?.fecha ?? null,
+    hora_inicio: row?.hora_inicio ?? null,
+    hora_fin: row?.hora_fin ?? null,
+    estado: row?.estado ?? null,
+    notas: row?.notas ?? null,
+    clientes: cliente ? { nombre: String(cliente?.nombre ?? '') } : null,
+    empleados: empleado ? { nombre: String(empleado?.nombre ?? '') } : null,
+    servicios: servicio ? (servicio as ServicioRaw) : null,
+    recursos: recurso ? { id: String(recurso?.id ?? ''), nombre: String(recurso?.nombre ?? '') } : null,
+  }
+}
+
+function formatMoney(value: number | null | undefined) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0))
 }
 
 function Field({
@@ -209,6 +254,21 @@ export default function EditarCitaPage() {
     [recursos, form.recurso_id]
   )
 
+  const precioServicioActual = useMemo(
+    () => getServicioPrecio(citaActual?.servicios || null),
+    [citaActual]
+  )
+
+  const precioServicioNuevo = useMemo(
+    () => getServicioPrecio(servicioSeleccionado || null),
+    [servicioSeleccionado]
+  )
+
+  const ajusteServicioUsd = useMemo(
+    () => Number((precioServicioNuevo - precioServicioActual).toFixed(2)),
+    [precioServicioNuevo, precioServicioActual]
+  )
+
   useEffect(() => {
     if (!id) return
     void loadData()
@@ -263,7 +323,7 @@ export default function EditarCitaPage() {
       const [serviciosRes, recursosRes, citaRes] = await Promise.all([
         supabase
           .from('servicios')
-          .select('id, nombre, estado, duracion_minutos')
+          .select('id, nombre, estado, duracion_minutos, precio')
           .order('nombre', { ascending: true }),
 
         supabase
@@ -290,14 +350,14 @@ export default function EditarCitaPage() {
             recursos:recurso_id ( id, nombre )
           `)
           .eq('id', id)
-          .limit(1)
-          .maybeSingle(),
+          .limit(1),
       ])
 
       if (serviciosRes.error) throw new Error(serviciosRes.error.message)
       if (recursosRes.error) throw new Error(recursosRes.error.message)
       if (citaRes.error) throw new Error(citaRes.error.message)
-      if (!citaRes.data) throw new Error('No se encontró la cita.')
+      const citaRow = Array.isArray(citaRes.data) ? citaRes.data[0] : citaRes.data
+      if (!citaRow) throw new Error('No se encontró la cita.')
 
       const serviciosRaw = (serviciosRes.data || []) as ServicioRaw[]
       const serviciosData: Servicio[] = serviciosRaw
@@ -307,13 +367,14 @@ export default function EditarCitaPage() {
           nombre: s.nombre,
           estado: s.estado ?? null,
           duracion_min: getServicioDuracion(s),
+          precio: Number((s as any).precio ?? 0) || 0,
         }))
 
       const recursosData = ((recursosRes.data || []) as Recurso[]).filter(
         (r) => (r.estado || '').toLowerCase() !== 'inactivo'
       )
 
-      const cita = citaRes.data as unknown as CitaDetalle
+      const cita = normalizeCitaDetalle(citaRow)
 
       setCitaActual(cita)
       setServicios(serviciosData)
@@ -341,6 +402,55 @@ export default function EditarCitaPage() {
     } finally {
       setLoadingData(false)
     }
+  }
+
+  async function registrarCuentaPorCobrarAjusteServicio(params: {
+    montoUsd: number
+    concepto: string
+    fecha: string
+  }) {
+    if (!citaActual || params.montoUsd <= 0.009) return
+
+    const { error } = await supabase.from('cuentas_por_cobrar').insert({
+      cliente_id: citaActual.cliente_id,
+      cliente_nombre: citaActual.clientes?.nombre || 'Cliente',
+      concepto: params.concepto,
+      tipo_origen: 'servicio',
+      monto_total_usd: params.montoUsd,
+      monto_pagado_usd: 0,
+      saldo_usd: params.montoUsd,
+      fecha_venta: params.fecha,
+      estado: 'pendiente',
+      notas: 'Generado automáticamente por edición de cita',
+      registrado_por: empleadoActualId || null,
+    })
+
+    if (error) throw new Error(`Ajuste financiero: ${error.message}`)
+  }
+
+  async function registrarCreditoClienteAjusteServicio(params: {
+    montoUsd: number
+    descripcion: string
+  }) {
+    if (!citaActual || params.montoUsd <= 0.009) return
+
+    const { error } = await supabase.from('clientes_credito').insert({
+      cliente_id: citaActual.cliente_id,
+      origen_tipo: 'servicio',
+      origen_id: citaActual.id,
+      moneda: 'USD',
+      monto_original: params.montoUsd,
+      monto_disponible: params.montoUsd,
+      tasa_bcv: null,
+      monto_original_bs: null,
+      monto_disponible_bs: null,
+      descripcion: params.descripcion,
+      fecha: citaActual.fecha || new Date().toISOString().slice(0, 10),
+      estado: 'activo',
+      registrado_por: empleadoActualId || null,
+    })
+
+    if (error) throw new Error(`Crédito cliente: ${error.message}`)
   }
 
   async function guardarCambios() {
@@ -399,6 +509,21 @@ export default function EditarCitaPage() {
       const { error } = await supabase.from('citas').update(payload).eq('id', id)
 
       if (error) throw new Error(error.message || 'No se pudo actualizar la cita.')
+
+      if (ajusteServicioUsd > 0.009 && citaActual?.fecha) {
+        await registrarCuentaPorCobrarAjusteServicio({
+          montoUsd: ajusteServicioUsd,
+          concepto: `Ajuste por cambio de servicio: ${citaActual.servicios?.nombre || 'Servicio anterior'} → ${servicioSeleccionado?.nombre || 'Nuevo servicio'}`,
+          fecha: citaActual.fecha,
+        })
+      }
+
+      if (ajusteServicioUsd < -0.009) {
+        await registrarCreditoClienteAjusteServicio({
+          montoUsd: Math.abs(ajusteServicioUsd),
+          descripcion: `Saldo a favor por cambio de servicio: ${citaActual.servicios?.nombre || 'Servicio anterior'} → ${servicioSeleccionado?.nombre || 'Nuevo servicio'}`,
+        })
+      }
 
       router.push('/admin/operaciones/agenda')
     } catch (err: any) {
@@ -520,6 +645,61 @@ export default function EditarCitaPage() {
                 </select>
               </Field>
             </div>
+
+            <Card className="p-4">
+              <p className="text-sm font-medium text-white/80">Impacto financiero del cambio</p>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <div>
+                  <p className="text-xs text-white/45">Servicio actual</p>
+                  <p className="mt-1 font-medium text-white">{citaActual?.servicios?.nombre || '—'}</p>
+                  <p className="text-sm text-white/65">{formatMoney(precioServicioActual)}</p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-white/45">Servicio nuevo</p>
+                  <p className="mt-1 font-medium text-white">{servicioSeleccionado?.nombre || '—'}</p>
+                  <p className="text-sm text-white/65">{formatMoney(precioServicioNuevo)}</p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-white/45">
+                    {ajusteServicioUsd > 0.009
+                      ? 'Debe pagar diferencia'
+                      : ajusteServicioUsd < -0.009
+                        ? 'Queda saldo a favor'
+                        : 'Sin diferencia'}
+                  </p>
+                  <p
+                    className={`mt-1 text-sm font-semibold ${
+                      ajusteServicioUsd > 0.009
+                        ? 'text-amber-300'
+                        : ajusteServicioUsd < -0.009
+                          ? 'text-emerald-300'
+                          : 'text-white'
+                    }`}
+                  >
+                    {formatMoney(Math.abs(ajusteServicioUsd))}
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            {ajusteServicioUsd > 0.009 ? (
+              <Card className="p-4">
+                <p className="text-sm text-amber-300">
+                  Este cambio generará una cuenta por cobrar por {formatMoney(ajusteServicioUsd)}.
+                </p>
+              </Card>
+            ) : null}
+
+            {ajusteServicioUsd < -0.009 ? (
+              <Card className="p-4">
+                <p className="text-sm text-emerald-300">
+                  Este cambio registrará un saldo a favor de {formatMoney(Math.abs(ajusteServicioUsd))}.
+                </p>
+              </Card>
+            ) : null}
 
             <div className="flex flex-wrap gap-3 pt-2">
               <button

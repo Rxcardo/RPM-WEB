@@ -45,6 +45,14 @@ type PlanCliente = {
   sesiones_usadas?: number | null
 }
 
+type EstadoCuentaCliente = {
+  cliente_id: string
+  total_pendiente_usd?: number | null
+  credito_disponible_usd?: number | null
+  saldo_pendiente_neto_usd?: number | null
+  saldo_favor_neto_usd?: number | null
+}
+
 type EntrenamientoPlanRow = {
   id: string
   cliente_plan_id: string | null
@@ -249,6 +257,41 @@ function formatDateTime(value: string | null | undefined) {
   }
 }
 
+function getEstadoCuentaLabel(estado: EstadoCuentaCliente | null | undefined) {
+  const pendiente = Number(estado?.saldo_pendiente_neto_usd || 0)
+  const credito = Number(estado?.saldo_favor_neto_usd || 0)
+
+  if (pendiente > 0.009) return `Debe ${money(pendiente)}`
+  if (credito > 0.009) return `Saldo a favor ${money(credito)}`
+  return 'Al día'
+}
+
+function getEstadoCuentaClass(estado: EstadoCuentaCliente | null | undefined) {
+  const pendiente = Number(estado?.saldo_pendiente_neto_usd || 0)
+  const credito = Number(estado?.saldo_favor_neto_usd || 0)
+
+  if (pendiente > 0.009) return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+  if (credito > 0.009) return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+  return 'border-white/10 bg-white/[0.03] text-white/70'
+}
+
+function getEstadoCuentaDetalle(estado: EstadoCuentaCliente | null | undefined) {
+  const pendiente = Number(estado?.saldo_pendiente_neto_usd || 0)
+  const credito = Number(estado?.saldo_favor_neto_usd || 0)
+  const deudaTotal = Number(estado?.total_pendiente_usd || 0)
+  const creditoDisponible = Number(estado?.credito_disponible_usd || 0)
+
+  if (pendiente > 0.009) {
+    return `Pendiente neto ${money(pendiente)} · Deuda total ${money(deudaTotal)}`
+  }
+
+  if (credito > 0.009) {
+    return `Crédito disponible ${money(creditoDisponible || credito)}`
+  }
+
+  return 'Sin deuda pendiente'
+}
+
 const inputClassName = `
   w-full rounded-2xl border border-white/10 bg-white/[0.03]
   px-4 py-3 text-sm text-white outline-none transition
@@ -268,6 +311,7 @@ export default function DashboardPage() {
   const [clientesPlanes, setClientesPlanes] = useState<PlanCliente[]>([])
   const [entrenamientosPlan, setEntrenamientosPlan] = useState<EntrenamientoPlanRow[]>([])
   const [empleadosAsistencia, setEmpleadosAsistencia] = useState<EmpleadoAsistenciaRow[]>([])
+  const [estadosCuentaClientes, setEstadosCuentaClientes] = useState<EstadoCuentaCliente[]>([])
 
   const [empleadoActualId, setEmpleadoActualId] = useState<string>('')
 
@@ -277,6 +321,10 @@ export default function DashboardPage() {
   const [reprogramandoId, setReprogramandoId] = useState<string | null>(null)
   const [reprogramacionDrafts, setReprogramacionDrafts] = useState<Record<string, ReprogramacionDraft>>({})
   const [savingEmpleadoAsistenciaId, setSavingEmpleadoAsistenciaId] = useState<string | null>(null)
+  const [sesionesPlanPage, setSesionesPlanPage] = useState(1)
+  const [empleadosAsistenciaPage, setEmpleadosAsistenciaPage] = useState(1)
+
+  const PAGE_SIZE = 10
 
   useEffect(() => {
     void loadDashboard()
@@ -339,6 +387,7 @@ export default function DashboardPage() {
         clientesPlanesRes,
         entrenamientosPlanRes,
         empleadosAsistenciaRes,
+        estadosCuentaRes,
       ] = await Promise.all([
         supabase.from('clientes').select('id, estado, created_at'),
         supabase.from('citas').select('*'),
@@ -395,6 +444,15 @@ export default function DashboardPage() {
             actualizado_por:updated_by ( id, nombre )
           `)
           .order('fecha', { ascending: false }),
+        supabase
+          .from('v_clientes_estado_cuenta')
+          .select(`
+            cliente_id,
+            total_pendiente_usd,
+            credito_disponible_usd,
+            saldo_pendiente_neto_usd,
+            saldo_favor_neto_usd
+          `),
       ])
 
       if (clientesRes.error) throw new Error(clientesRes.error.message)
@@ -404,6 +462,7 @@ export default function DashboardPage() {
       if (clientesPlanesRes.error) throw new Error(clientesPlanesRes.error.message)
       if (entrenamientosPlanRes.error) throw new Error(entrenamientosPlanRes.error.message)
       if (empleadosAsistenciaRes.error) throw new Error(empleadosAsistenciaRes.error.message)
+      if (estadosCuentaRes.error) throw new Error(estadosCuentaRes.error.message)
 
       setClientes((clientesRes.data || []) as Cliente[])
       setCitas((citasRes.data || []) as CitaRaw[])
@@ -412,6 +471,7 @@ export default function DashboardPage() {
       setClientesPlanes((clientesPlanesRes.data || []) as PlanCliente[])
       setEntrenamientosPlan((entrenamientosPlanRes.data || []) as unknown as EntrenamientoPlanRow[])
       setEmpleadosAsistencia((empleadosAsistenciaRes.data || []) as unknown as EmpleadoAsistenciaRow[])
+      setEstadosCuentaClientes((estadosCuentaRes.data || []) as EstadoCuentaCliente[])
     } catch (err: any) {
       console.error(err)
       setError(err?.message || 'No se pudo cargar el dashboard.')
@@ -422,6 +482,7 @@ export default function DashboardPage() {
       setClientesPlanes([])
       setEntrenamientosPlan([])
       setEmpleadosAsistencia([])
+      setEstadosCuentaClientes([])
     } finally {
       setLoading(false)
     }
@@ -528,22 +589,48 @@ export default function DashboardPage() {
       .slice(0, 5)
   }, [citas, empleados, today])
 
+  const mapaEstadoCuentaClientes = useMemo(() => {
+    const map = new Map<string, EstadoCuentaCliente>()
+    estadosCuentaClientes.forEach((row) => {
+      if (row?.cliente_id) map.set(String(row.cliente_id), row)
+    })
+    return map
+  }, [estadosCuentaClientes])
+
   const sesionesPlanHoyCompactas = useMemo(() => {
-    return entrenamientosPlan
-      .filter((row) => {
-        if (row.fecha !== asistenciaFilterFecha) return false
-        if ((row.estado || '').toLowerCase() === 'cancelado') return false
-        const cp = firstOrNull(row.clientes_planes)
-        if (!cp) return false
-        if ((cp.estado || '').toLowerCase() === 'cancelado') return false
-        return true
-      })
-      .slice(0, 5)
+    return entrenamientosPlan.filter((row) => {
+      if (row.fecha !== asistenciaFilterFecha) return false
+      if ((row.estado || '').toLowerCase() === 'cancelado') return false
+      const cp = firstOrNull(row.clientes_planes)
+      if (!cp) return false
+      if ((cp.estado || '').toLowerCase() === 'cancelado') return false
+      return true
+    })
   }, [entrenamientosPlan, asistenciaFilterFecha])
+
+  const sesionesPlanTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(sesionesPlanHoyCompactas.length / PAGE_SIZE)),
+    [sesionesPlanHoyCompactas.length]
+  )
+
+  const sesionesPlanHoyPaginadas = useMemo(() => {
+    const start = (sesionesPlanPage - 1) * PAGE_SIZE
+    return sesionesPlanHoyCompactas.slice(start, start + PAGE_SIZE)
+  }, [sesionesPlanHoyCompactas, sesionesPlanPage])
 
   const empleadosActivosNoAdmin = useMemo(() => {
     return empleados.filter((e) => e.estado?.toLowerCase() === 'activo' && (e.rol || '').toLowerCase() !== 'admin')
   }, [empleados])
+
+  const empleadosAsistenciaTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(empleadosActivosNoAdmin.length / PAGE_SIZE)),
+    [empleadosActivosNoAdmin.length]
+  )
+
+  const empleadosActivosNoAdminPaginados = useMemo(() => {
+    const start = (empleadosAsistenciaPage - 1) * PAGE_SIZE
+    return empleadosActivosNoAdmin.slice(start, start + PAGE_SIZE)
+  }, [empleadosActivosNoAdmin, empleadosAsistenciaPage])
 
   const mapaAsistenciaPersonalHoy = useMemo(() => {
     const map = new Map<string, EmpleadoAsistenciaRow>()
@@ -552,6 +639,22 @@ export default function DashboardPage() {
       .forEach((row) => map.set(row.empleado_id, row))
     return map
   }, [empleadosAsistencia, asistenciaFilterFecha])
+
+  useEffect(() => {
+    setSesionesPlanPage(1)
+  }, [asistenciaFilterFecha])
+
+  useEffect(() => {
+    if (sesionesPlanPage > sesionesPlanTotalPages) {
+      setSesionesPlanPage(sesionesPlanTotalPages)
+    }
+  }, [sesionesPlanPage, sesionesPlanTotalPages])
+
+  useEffect(() => {
+    if (empleadosAsistenciaPage > empleadosAsistenciaTotalPages) {
+      setEmpleadosAsistenciaPage(empleadosAsistenciaTotalPages)
+    }
+  }, [empleadosAsistenciaPage, empleadosAsistenciaTotalPages])
 
   const alertas = useMemo(() => {
     const items: { titulo: string; detalle: string; tipo: 'warning' | 'info' | 'success' }[] = []
@@ -913,7 +1016,7 @@ export default function DashboardPage() {
                   <p className="text-sm text-white/55">No hay sesiones del plan hoy.</p>
                 </Card>
               ) : (
-                sesionesPlanHoyCompactas.map((row) => {
+                sesionesPlanHoyPaginadas.map((row) => {
                   const cliente = firstOrNull(row.clientes)
                   const empleado = firstOrNull(row.empleados)
                   const clientePlan = firstOrNull(row.clientes_planes)
@@ -942,6 +1045,21 @@ export default function DashboardPage() {
                           <p className="mt-1 text-xs text-white/45">
                             Estado: {asistenciaLabel(row.asistencia_estado)}
                           </p>
+
+                          {row.cliente_id ? (
+                            <div className="mt-2 space-y-1">
+                              <span
+                                className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${getEstadoCuentaClass(
+                                  mapaEstadoCuentaClientes.get(row.cliente_id)
+                                )}`}
+                              >
+                                {getEstadoCuentaLabel(mapaEstadoCuentaClientes.get(row.cliente_id))}
+                              </span>
+                              <p className="text-[11px] text-white/35">
+                                {getEstadoCuentaDetalle(mapaEstadoCuentaClientes.get(row.cliente_id))}
+                              </p>
+                            </div>
+                          ) : null}
 
                           {actor?.nombre ? (
                             <p className="mt-1 text-[11px] text-white/35">
@@ -1077,6 +1195,34 @@ export default function DashboardPage() {
                 })
               )}
             </div>
+
+            {sesionesPlanHoyCompactas.length > PAGE_SIZE ? (
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <p className="text-xs text-white/45">
+                  Página {sesionesPlanPage} de {sesionesPlanTotalPages} · {sesionesPlanHoyCompactas.length} sesión(es)
+                </p>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={sesionesPlanPage <= 1}
+                    onClick={() => setSesionesPlanPage((prev) => Math.max(prev - 1, 1))}
+                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
+                  >
+                    Anterior
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={sesionesPlanPage >= sesionesPlanTotalPages}
+                    onClick={() => setSesionesPlanPage((prev) => Math.min(prev + 1, sesionesPlanTotalPages))}
+                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
+                  >
+                    Siguiente
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </Section>
         </div>
 
@@ -1101,7 +1247,7 @@ export default function DashboardPage() {
                   <p className="text-sm text-white/55">No hay personal activo.</p>
                 </Card>
               ) : (
-                empleadosActivosNoAdmin.slice(0, 5).map((empleado) => {
+                empleadosActivosNoAdminPaginados.map((empleado) => {
                   const registro = mapaAsistenciaPersonalHoy.get(empleado.id)
                   const actor = firstOrNull(registro?.actualizado_por)
 
@@ -1188,6 +1334,34 @@ export default function DashboardPage() {
                 })
               )}
             </div>
+
+            {empleadosActivosNoAdmin.length > PAGE_SIZE ? (
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <p className="text-xs text-white/45">
+                  Página {empleadosAsistenciaPage} de {empleadosAsistenciaTotalPages} · {empleadosActivosNoAdmin.length} empleado(s)
+                </p>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={empleadosAsistenciaPage <= 1}
+                    onClick={() => setEmpleadosAsistenciaPage((prev) => Math.max(prev - 1, 1))}
+                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
+                  >
+                    Anterior
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={empleadosAsistenciaPage >= empleadosAsistenciaTotalPages}
+                    onClick={() => setEmpleadosAsistenciaPage((prev) => Math.min(prev + 1, empleadosAsistenciaTotalPages))}
+                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
+                  >
+                    Siguiente
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </Section>
         </div>
       </div>

@@ -9,7 +9,6 @@ import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import StatCard from '@/components/ui/StatCard'
-import ActionCard from '@/components/ui/ActionCard'
 
 type AuditorRef = {
   id: string
@@ -113,6 +112,17 @@ type SesionPlan = {
     estado?: string | null
     planes?: { nombre?: string | null } | null
   } | null
+}
+
+
+type EstadoCuentaCliente = {
+  cliente_id: string
+  total_facturado_usd?: number | null
+  total_pagado_usd?: number | null
+  total_pendiente_usd?: number | null
+  credito_disponible_usd?: number | null
+  saldo_pendiente_neto_usd?: number | null
+  saldo_favor_neto_usd?: number | null
 }
 
 function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
@@ -319,6 +329,30 @@ function roleLabel(rol: string | null | undefined) {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
+
+function estadoFinancieroLabel(estado: EstadoCuentaCliente | null) {
+  const pendiente = Number(estado?.saldo_pendiente_neto_usd || 0)
+  const credito = Number(estado?.saldo_favor_neto_usd || 0)
+
+  if (pendiente > 0.01) return 'Debe'
+  if (credito > 0.01) return 'Crédito'
+  return 'Al día'
+}
+
+function estadoFinancieroBadge(estado: EstadoCuentaCliente | null) {
+  const pendiente = Number(estado?.saldo_pendiente_neto_usd || 0)
+  const credito = Number(estado?.saldo_favor_neto_usd || 0)
+
+  if (pendiente > 0.01) {
+    return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+  }
+  if (credito > 0.01) {
+    return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+  }
+  return 'border-white/10 bg-white/[0.05] text-white/70'
+}
+
+
 export default function ClienteDetallePage() {
   const params = useParams()
   const clienteId = Array.isArray(params?.id) ? params.id[0] : params?.id
@@ -332,6 +366,7 @@ export default function ClienteDetallePage() {
   const [citas, setCitas] = useState<Cita[]>([])
   const [eventosPlan, setEventosPlan] = useState<EventoPlan[]>([])
   const [sesionesPlan, setSesionesPlan] = useState<SesionPlan[]>([])
+  const [estadoCuenta, setEstadoCuenta] = useState<EstadoCuentaCliente | null>(null)
 
   const [error, setError] = useState('')
   const [warning, setWarning] = useState('')
@@ -352,6 +387,7 @@ export default function ClienteDetallePage() {
     setCitas([])
     setEventosPlan([])
     setSesionesPlan([])
+    setEstadoCuenta(null)
 
     try {
       const clienteRes = await supabase
@@ -553,6 +589,28 @@ export default function ClienteDetallePage() {
       warnings.push('Sesiones plan: no se pudieron cargar.')
     }
 
+
+    try {
+      const estadoCuentaRes = await supabase
+        .from('v_clientes_estado_cuenta')
+        .select(`
+          cliente_id,
+          total_facturado_usd,
+          total_pagado_usd,
+          total_pendiente_usd,
+          credito_disponible_usd,
+          saldo_pendiente_neto_usd,
+          saldo_favor_neto_usd
+        `)
+        .eq('cliente_id', id)
+        .maybeSingle()
+
+      if (estadoCuentaRes.error) warnings.push(`Estado de cuenta: ${estadoCuentaRes.error.message}`)
+      else setEstadoCuenta((estadoCuentaRes.data || null) as EstadoCuentaCliente | null)
+    } catch {
+      warnings.push('Estado de cuenta: no se pudo cargar.')
+    }
+
     if (warnings.length > 0) setWarning(warnings.join(' | '))
     setLoadingExtras(false)
   }
@@ -632,22 +690,72 @@ export default function ClienteDetallePage() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <ActionCard
-            title="Editar cliente"
-            description="Modificar la información del cliente."
-            href={`/admin/personas/clientes/${cliente.id}/editar`}
-          />
-          <ActionCard
-            title="Gestionar plan"
-            description="Asignar, renovar o cambiar el plan."
-            href={`/admin/personas/clientes/${cliente.id}/plan`}
-          />
-          <ActionCard
-            title="Ver agenda"
-            description="Consultar citas de este cliente."
-            href={`/admin/operaciones/agenda?cliente=${cliente.id}`}
-          />
+        <div className="w-full xl:w-auto">
+          <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl xl:min-w-[340px]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-white/45">
+                  Menú rápido
+                </p>
+                <p className="mt-1 text-sm font-medium text-white">
+                  Estado financiero
+                </p>
+              </div>
+
+              <span
+                className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(estadoCuenta)}`}
+              >
+                {estadoFinancieroLabel(estadoCuenta)}
+              </span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                <p className="text-[11px] uppercase tracking-wide text-white/45">
+                  Pendiente
+                </p>
+                <p className="mt-1 text-sm font-semibold text-rose-300">
+                  {money(estadoCuenta?.saldo_pendiente_neto_usd || 0, 'USD')}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                <p className="text-[11px] uppercase tracking-wide text-white/45">
+                  Saldo a favor
+                </p>
+                <p className="mt-1 text-sm font-semibold text-emerald-300">
+                  {money(estadoCuenta?.saldo_favor_neto_usd || 0, 'USD')}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Link
+                href={`/admin/finanzas/ingresos?cliente=${cliente.id}`}
+                className="rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-center text-sm font-medium text-white/85 transition hover:bg-white/[0.06]"
+              >
+                Ir a ingresos
+              </Link>
+              <Link
+                href={`/admin/finanzas/ingresos?cliente=${cliente.id}&tipoIngreso=saldo`}
+                className="rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-center text-sm font-medium text-white/85 transition hover:bg-white/[0.06]"
+              >
+                Agregar saldo
+              </Link>
+              <Link
+                href={`/admin/personas/clientes/${cliente.id}/plan`}
+                className="rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-center text-sm font-medium text-white/85 transition hover:bg-white/[0.06]"
+              >
+                Gestionar plan
+              </Link>
+              <Link
+                href={`/admin/operaciones/agenda?cliente=${cliente.id}`}
+                className="rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-center text-sm font-medium text-white/85 transition hover:bg-white/[0.06]"
+              >
+                Ver agenda
+              </Link>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -931,6 +1039,33 @@ export default function ClienteDetallePage() {
         </div>
 
         <div className="space-y-6 xl:col-span-1">
+          <Section title="Saldo del cliente" description="Resumen corto de deuda y crédito.">
+            <div className="space-y-3">
+              <Card className="p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-white/45">Pendiente neto</p>
+                    <p className="mt-1 text-sm font-semibold text-rose-300">
+                      {money(estadoCuenta?.saldo_pendiente_neto_usd || 0, 'USD')}
+                    </p>
+                  </div>
+                  <span
+                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(estadoCuenta)}`}
+                  >
+                    {estadoFinancieroLabel(estadoCuenta)}
+                  </span>
+                </div>
+              </Card>
+
+              <Card className="p-3">
+                <p className="text-xs uppercase tracking-wide text-white/45">Crédito disponible</p>
+                <p className="mt-1 text-sm font-semibold text-emerald-300">
+                  {money(estadoCuenta?.credito_disponible_usd || 0, 'USD')}
+                </p>
+              </Card>
+            </div>
+          </Section>
+
           <Section title="Auditoría del cliente" description="Quién lo creó y quién lo editó.">
             <div className="space-y-2">
               {getAuditLines(cliente).map((line, index) => (

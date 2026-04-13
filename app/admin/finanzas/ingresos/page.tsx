@@ -11,10 +11,15 @@ import {
   X,
   Package2,
   User2,
+  Wallet,
+  Receipt,
+  CheckCircle2,
 } from 'lucide-react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import SelectorTasaBCV from '@/components/finanzas/SelectorTasaBCV'
 import { formatearMoneda } from '@/lib/finanzas/tasas'
+import { registrarAbonoMixto } from '@/lib/cobranzas/abonos'
 
 interface Cartera {
   nombre: string
@@ -44,6 +49,31 @@ interface Cliente {
   nombre: string
   telefono?: string | null
   email?: string | null
+}
+
+interface CuentaPendienteResumen {
+  id: string
+  cliente_id: string | null
+  cliente_nombre: string
+  concepto: string
+  monto_total_usd: number | null
+  monto_pagado_usd: number | null
+  saldo_usd: number | null
+  fecha_venta: string
+  fecha_vencimiento?: string | null
+  estado: string
+}
+
+interface EstadoCuentaCliente {
+  cliente_id: string
+  total_pendiente_usd?: number | null
+  credito_disponible_usd?: number | null
+  saldo_pendiente_neto_usd?: number | null
+  saldo_favor_neto_usd?: number | null
+  total_pendiente_bs?: number | null
+  credito_disponible_bs?: number | null
+  saldo_pendiente_neto_bs?: number | null
+  saldo_favor_neto_bs?: number | null
 }
 
 interface TipoCambioRow {
@@ -105,6 +135,7 @@ interface PagoOperacion {
 
 type EstadoUI = 'pagado' | 'pendiente'
 type EstadoFiltro = 'todos' | 'pagado' | 'pendiente' | 'anulado'
+type TipoIngresoUI = 'producto' | 'saldo'
 
 type RawCartera =
   | {
@@ -186,6 +217,35 @@ const softButtonCls =
 
 function r2(v: number) {
   return Math.round(Number(v || 0) * 100) / 100
+}
+
+function formatDateShort(value: string | null | undefined) {
+  if (!value) return '—'
+  try {
+    return new Date(value).toLocaleDateString('es-VE', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    })
+  } catch {
+    return value
+  }
+}
+
+function estadoFinancieroLabel(estado: EstadoCuentaCliente | null) {
+  const pendiente = Number(estado?.saldo_pendiente_neto_usd || 0)
+  const credito = Number(estado?.saldo_favor_neto_usd || 0)
+  if (pendiente > 0.01) return 'Debe'
+  if (credito > 0.01) return 'Crédito'
+  return 'Al día'
+}
+
+function estadoFinancieroBadge(estado: EstadoCuentaCliente | null) {
+  const pendiente = Number(estado?.saldo_pendiente_neto_usd || 0)
+  const credito = Number(estado?.saldo_favor_neto_usd || 0)
+  if (pendiente > 0.01) return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+  if (credito > 0.01) return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+  return 'border-white/10 bg-white/[0.04] text-white/70'
 }
 
 function formatQty(v: number | null | undefined) {
@@ -406,6 +466,10 @@ const PagoBsSelector = memo(function PagoBsSelector({
 })
 
 export default function IngresosPage() {
+  const searchParams = useSearchParams()
+  const clientePrefill = searchParams.get('cliente') || searchParams.get('clienteId') || ''
+  const tipoIngresoPrefill = searchParams.get('tipoIngreso')
+
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -422,6 +486,7 @@ export default function IngresosPage() {
   const [editingOperacionId, setEditingOperacionId] = useState<string | null>(null)
 
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10))
+  const [tipoIngreso, setTipoIngreso] = useState<TipoIngresoUI>('producto')
   const [clienteId, setClienteId] = useState('')
   const [productoId, setProductoId] = useState('')
   const [cantidad, setCantidad] = useState(1)
@@ -429,10 +494,37 @@ export default function IngresosPage() {
   const [estado, setEstado] = useState<EstadoUI>('pagado')
   const [notas, setNotas] = useState('')
   const [pagosMixtos, setPagosMixtos] = useState<PagoMixtoItem[]>([makePagoItem('USD')])
+  const [estadoCuentaCliente, setEstadoCuentaCliente] = useState<EstadoCuentaCliente | null>(null)
+  const [cuentasPendientesCliente, setCuentasPendientesCliente] = useState<CuentaPendienteResumen[]>([])
+  const [cuentaCobrarSeleccionadaId, setCuentaCobrarSeleccionadaId] = useState('')
+  const [modoAplicacionSaldo, setModoAplicacionSaldo] = useState<'credito' | 'deuda'>('credito')
 
   useEffect(() => {
     void cargarDatos()
   }, [])
+
+  useEffect(() => {
+    void cargarEstadoCuentaCliente(clienteId)
+  }, [clienteId])
+
+  useEffect(() => {
+    if (!clientePrefill || clientes.length === 0 || editingId) return
+
+    const clienteExiste = clientes.some((cliente) => cliente.id === clientePrefill)
+    if (!clienteExiste) return
+
+    setClienteId((prev) => (prev ? prev : clientePrefill))
+    setShowForm(true)
+
+    if (tipoIngresoPrefill === 'saldo') {
+      setTipoIngreso('saldo')
+      setEstado('pagado')
+      setConcepto((prev) => prev || 'Recarga de saldo a favor')
+      if (cuentasPendientesCliente.length > 0) {
+        setModoAplicacionSaldo('deuda')
+      }
+    }
+  }, [clientePrefill, tipoIngresoPrefill, clientes, editingId])
 
   async function cargarDatos() {
     setLoading(true)
@@ -467,8 +559,8 @@ export default function IngresosPage() {
           metodos_pago_v2:metodo_pago_v2_id(nombre),
           clientes:cliente_id(nombre)
         `)
-        .eq('categoria', 'producto')
-        .eq('tipo_origen', 'producto')
+        .in('categoria', ['producto', 'saldo_cliente'])
+        .in('tipo_origen', ['producto', 'saldo_cliente'])
         .order('fecha', { ascending: false })
         .order('created_at', { ascending: false }),
 
@@ -523,6 +615,158 @@ export default function IngresosPage() {
     setLoading(false)
   }
 
+  async function cargarEstadoCuentaCliente(id: string) {
+    if (!id) {
+      setEstadoCuentaCliente(null)
+      setCuentasPendientesCliente([])
+      setCuentaCobrarSeleccionadaId('')
+      setModoAplicacionSaldo('credito')
+      return
+    }
+
+    const [estadoRes, cuentasRes] = await Promise.all([
+      supabase
+        .from('v_clientes_estado_cuenta')
+        .select(`
+          cliente_id,
+          total_pendiente_usd,
+          credito_disponible_usd,
+          saldo_pendiente_neto_usd,
+          saldo_favor_neto_usd,
+          total_pendiente_bs,
+          credito_disponible_bs,
+          saldo_pendiente_neto_bs,
+          saldo_favor_neto_bs
+        `)
+        .eq('cliente_id', id)
+        .maybeSingle(),
+      supabase
+        .from('v_cuentas_por_cobrar_resumen')
+        .select(`
+          id,
+          cliente_id,
+          cliente_nombre,
+          concepto,
+          monto_total_usd,
+          monto_pagado_usd,
+          saldo_usd,
+          fecha_venta,
+          fecha_vencimiento,
+          estado
+        `)
+        .eq('cliente_id', id)
+        .in('estado', ['pendiente', 'parcial', 'vencida'])
+        .order('fecha_venta', { ascending: true }),
+    ])
+
+    if (estadoRes.error) {
+      console.error('Error cargando estado de cuenta del cliente', estadoRes.error)
+      setEstadoCuentaCliente(null)
+    } else {
+      setEstadoCuentaCliente((estadoRes.data as EstadoCuentaCliente | null) ?? null)
+    }
+
+    if (cuentasRes.error) {
+      console.error('Error cargando cuentas pendientes del cliente', cuentasRes.error)
+      setCuentasPendientesCliente([])
+      setCuentaCobrarSeleccionadaId('')
+      setModoAplicacionSaldo('credito')
+      return
+    }
+
+    const cuentas = (cuentasRes.data || []) as CuentaPendienteResumen[]
+    setCuentasPendientesCliente(cuentas)
+
+    if (cuentas.length > 0) {
+      setCuentaCobrarSeleccionadaId((prev) => prev || cuentas[0].id)
+      setModoAplicacionSaldo((prev) => (prev === 'credito' ? 'deuda' : prev))
+    } else {
+      setCuentaCobrarSeleccionadaId('')
+      setModoAplicacionSaldo('credito')
+    }
+  }
+
+  async function limpiarCreditosExcedenteOperacion(operacionId: string | null) {
+    if (!operacionId) return
+
+    const { data: creditos, error: creditosError } = await supabase
+      .from('clientes_credito')
+      .select('id, monto_original, monto_disponible')
+      .eq('origen_tipo', 'pago_excedente')
+      .eq('origen_id', operacionId)
+
+    if (creditosError) throw creditosError
+    if (!creditos || creditos.length === 0) return
+
+    for (const credito of creditos) {
+      const montoOriginal = Number(credito.monto_original || 0)
+      const montoDisponible = Number(credito.monto_disponible || 0)
+
+      if (Math.abs(montoDisponible - montoOriginal) > 0.01) {
+        throw new Error(
+          'Esta venta tiene un crédito generado que ya fue usado parcial o totalmente. No se puede editar ni eliminar desde aquí.'
+        )
+      }
+
+      const { data: aplicaciones, error: aplicacionesError } = await supabase
+        .from('clientes_credito_aplicaciones')
+        .select('id')
+        .eq('credito_id', String(credito.id))
+        .limit(1)
+
+      if (aplicacionesError) throw aplicacionesError
+      if (aplicaciones && aplicaciones.length > 0) {
+        throw new Error(
+          'Esta venta tiene un crédito aplicado a otra deuda. No se puede editar ni eliminar desde aquí.'
+        )
+      }
+    }
+
+    const ids = creditos.map((credito) => String(credito.id))
+    const { error: deleteError } = await supabase
+      .from('clientes_credito')
+      .delete()
+      .in('id', ids)
+
+    if (deleteError) throw deleteError
+  }
+
+  async function crearCreditoCliente(args: {
+    clienteId: string
+    operacionPagoId: string
+    excedenteUsd: number
+    descripcion: string
+    origenTipo?: string
+  }) {
+    const excedenteUsd = r2(args.excedenteUsd)
+    if (excedenteUsd <= 0) return
+
+    const tasaReferencia =
+      resumenPagos.totalUsd > 0 && resumenPagos.totalBs > 0
+        ? r2(resumenPagos.totalBs / resumenPagos.totalUsd)
+        : null
+
+    const montoBs = tasaReferencia ? r2(excedenteUsd * tasaReferencia) : null
+
+    const { error } = await supabase.from('clientes_credito').insert({
+      cliente_id: args.clienteId,
+      origen_tipo: args.origenTipo || 'pago_excedente',
+      origen_id: args.operacionPagoId,
+      moneda: 'USD',
+      monto_original: excedenteUsd,
+      monto_disponible: excedenteUsd,
+      tasa_bcv: tasaReferencia,
+      monto_original_bs: montoBs,
+      monto_disponible_bs: montoBs,
+      descripcion: args.descripcion,
+      fecha,
+      estado: 'activo',
+      registrado_por: null,
+    })
+
+    if (error) throw error
+  }
+
   const clienteSeleccionado = useMemo(
     () => clientes.find((c) => c.id === clienteId) || null,
     [clientes, clienteId]
@@ -533,11 +777,30 @@ export default function IngresosPage() {
     [productos, productoId]
   )
 
+  const cuentaPendienteSeleccionada = useMemo(
+    () =>
+      cuentasPendientesCliente.find((cuenta) => cuenta.id === cuentaCobrarSeleccionadaId) || null,
+    [cuentasPendientesCliente, cuentaCobrarSeleccionadaId]
+  )
+
+  const clienteTieneDeuda = useMemo(
+    () => Number(estadoCuentaCliente?.total_pendiente_usd || 0) > 0.01,
+    [estadoCuentaCliente]
+  )
+
   const precioUnitarioUSD = Number(productoSeleccionado?.precio_venta_usd || 0)
 
   const totalUSD = useMemo(() => {
     return r2(Number((cantidad || 0) * precioUnitarioUSD))
   }, [cantidad, precioUnitarioUSD])
+
+  const totalObjetivoUSD = useMemo(() => {
+    if (tipoIngreso === 'saldo' && modoAplicacionSaldo === 'deuda') {
+      return r2(Number(cuentaPendienteSeleccionada?.saldo_usd || 0))
+    }
+
+    return totalUSD
+  }, [tipoIngreso, modoAplicacionSaldo, cuentaPendienteSeleccionada, totalUSD])
 
   const stockInsuficiente = useMemo(() => {
     if (!productoSeleccionado) return false
@@ -717,9 +980,10 @@ export default function IngresosPage() {
     const totalBs = r2(
       items.reduce((acc, item) => acc + Number(item.monto_equivalente_bs || 0), 0)
     )
-    const faltanteUsd = r2(Math.max(totalUSD - totalUsd, 0))
-    const excedenteUsd = r2(Math.max(totalUsd - totalUSD, 0))
-    const diferenciaUsd = r2(totalUSD - totalUsd)
+    const faltanteUsd = r2(Math.max(totalObjetivoUSD - totalUsd, 0))
+    const excedenteUsd = r2(Math.max(totalUsd - totalObjetivoUSD, 0))
+    const diferenciaUsd = r2(totalObjetivoUSD - totalUsd)
+    const cubreTotal = totalObjetivoUSD > 0 && diferenciaUsd <= 0.01
 
     return {
       items,
@@ -728,10 +992,11 @@ export default function IngresosPage() {
       faltanteUsd,
       excedenteUsd,
       diferenciaUsd,
-      cuadra: Math.abs(diferenciaUsd) < 0.01 && totalUSD > 0,
+      cubreTotal,
+      tieneExcedente: excedenteUsd > 0.01,
       todosValidos: items.every((item) => item.valido),
     }
-  }, [pagosMixtos, totalUSD])
+  }, [pagosMixtos, totalObjetivoUSD])
 
   async function registrarPagoMixtoProducto(args: {
     fecha: string
@@ -780,31 +1045,65 @@ export default function IngresosPage() {
     return operacionPagoId
   }
 
+
+  async function registrarPagoMixtoSaldo(args: {
+    fecha: string
+    concepto: string
+    clienteId: string
+    notasGenerales: string | null
+  }) {
+    const { data, error } = await supabase.rpc('registrar_pagos_mixtos', {
+      p_fecha: args.fecha,
+      p_tipo_origen: 'saldo_cliente',
+      p_categoria: 'saldo_cliente',
+      p_concepto: args.concepto,
+      p_cliente_id: args.clienteId,
+      p_cita_id: null,
+      p_cliente_plan_id: null,
+      p_cuenta_cobrar_id: null,
+      p_inventario_id: null,
+      p_registrado_por: null,
+      p_notas_generales: args.notasGenerales,
+      p_pagos: resumenPagos.items.map((item) => ({
+        metodo_pago_v2_id: item.metodo_pago_v2_id,
+        moneda_pago: item.moneda_pago,
+        monto: item.monto_insertar,
+        tasa_bcv: item.moneda_pago === 'BS' ? item.tasa_bcv : null,
+        referencia: item.referencia || null,
+        notas: item.notas || null,
+      })),
+    })
+
+    if (error) throw error
+
+    return data?.operacion_pago_id || null
+  }
+
+  async function registrarPagoMixtoDeuda(args: {
+    cuentaCobrarId: string
+    fecha: string
+    notasGenerales: string | null
+  }) {
+    await registrarAbonoMixto({
+      cuenta_cobrar_id: args.cuentaCobrarId,
+      fecha: args.fecha,
+      notas_generales: args.notasGenerales,
+      pagos: resumenPagos.items.map((item) => ({
+        metodo_pago_v2_id: item.metodo_pago_v2_id,
+        moneda_pago: item.moneda_pago,
+        monto: item.monto_insertar,
+        tasa_bcv: item.moneda_pago === 'BS' ? item.tasa_bcv : null,
+        referencia: item.referencia || null,
+        notas: item.notas || null,
+      })),
+    })
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
 
-    if (!productoId) {
-      alert('Selecciona un producto')
-      return
-    }
-
     if (!clienteId) {
       alert('Selecciona un cliente')
-      return
-    }
-
-    if (cantidad <= 0) {
-      alert('La cantidad debe ser mayor a 0')
-      return
-    }
-
-    if (!editingId && stockInsuficiente) {
-      alert('No hay suficiente stock disponible')
-      return
-    }
-
-    if (!productoSeleccionado) {
-      alert('Producto inválido')
       return
     }
 
@@ -813,12 +1112,113 @@ export default function IngresosPage() {
       return
     }
 
+    if (tipoIngreso === 'producto') {
+      if (!productoId) {
+        alert('Selecciona un producto')
+        return
+      }
+
+      if (cantidad <= 0) {
+        alert('La cantidad debe ser mayor a 0')
+        return
+      }
+
+      if (!editingId && stockInsuficiente) {
+        alert('No hay suficiente stock disponible')
+        return
+      }
+
+      if (!productoSeleccionado) {
+        alert('Producto inválido')
+        return
+      }
+    }
+
+    if (tipoIngreso === 'saldo' && estado !== 'pagado') {
+      alert('La recarga de saldo solo se puede registrar como pagada.')
+      return
+    }
+
     const conceptoFinal =
-      concepto.trim() || `Venta de ${productoSeleccionado.nombre} x${cantidad}`
+      tipoIngreso === 'saldo'
+        ? concepto.trim() || 'Recarga de saldo a favor'
+        : concepto.trim() || `Venta de ${productoSeleccionado?.nombre || ''} x${cantidad}`
 
     setSaving(true)
 
     try {
+      if (tipoIngreso === 'saldo') {
+        if (editingId) {
+          alert('Las recargas de saldo no se editan desde aquí. Registra una nueva o elimina la anterior si no ha sido usada.')
+          setSaving(false)
+          return
+        }
+
+        if (!resumenPagos.todosValidos) {
+          alert('Completa correctamente todos los fragmentos del pago.')
+          setSaving(false)
+          return
+        }
+
+        if (resumenPagos.totalUsd <= 0) {
+          alert('Debes indicar un monto válido para la recarga.')
+          setSaving(false)
+          return
+        }
+
+        if (modoAplicacionSaldo === 'deuda' && cuentaPendienteSeleccionada) {
+          const objetivo = Number(cuentaPendienteSeleccionada.saldo_usd || 0)
+
+          if (Math.abs(resumenPagos.totalUsd - objetivo) > 0.01) {
+            alert(
+              `El pago debe cubrir exactamente la deuda seleccionada. Deuda: ${formatearMoneda(
+                objetivo,
+                'USD'
+              )} | Registrado: ${formatearMoneda(resumenPagos.totalUsd, 'USD')}`
+            )
+            setSaving(false)
+            return
+          }
+
+          await registrarPagoMixtoDeuda({
+            cuentaCobrarId: cuentaPendienteSeleccionada.id,
+            fecha,
+            notasGenerales: notas.trim() || null,
+          })
+
+          alert(`✅ Deuda aplicada por ${formatearMoneda(objetivo, 'USD')}.`)
+          resetForm()
+          await cargarDatos()
+          await cargarEstadoCuentaCliente(clienteSeleccionado.id)
+          return
+        }
+
+        const operacionPagoId = await registrarPagoMixtoSaldo({
+          fecha,
+          concepto: conceptoFinal,
+          clienteId: clienteSeleccionado.id,
+          notasGenerales: notas.trim() || null,
+        })
+
+        if (!operacionPagoId) {
+          throw new Error('No se pudo generar la operación de recarga de saldo')
+        }
+
+        await crearCreditoCliente({
+          clienteId: clienteSeleccionado.id,
+          operacionPagoId,
+          excedenteUsd: resumenPagos.totalUsd,
+          descripcion: conceptoFinal,
+          origenTipo: 'saldo_cliente',
+        })
+
+        alert(`✅ Saldo agregado. Se acreditó ${formatearMoneda(resumenPagos.totalUsd, 'USD')} al cliente.`)
+        resetForm()
+        await cargarDatos()
+        await cargarEstadoCuentaCliente(clienteSeleccionado.id)
+        return
+      }
+
       if (editingId) {
         if (estado === 'pendiente') {
           alert('Una operación pagada no se puede convertir a pendiente desde aquí.')
@@ -832,9 +1232,9 @@ export default function IngresosPage() {
           return
         }
 
-        if (!resumenPagos.cuadra) {
+        if (!resumenPagos.cubreTotal) {
           alert(
-            `La suma de pagos no cuadra. Objetivo: ${formatearMoneda(totalUSD, 'USD')} | Registrado: ${formatearMoneda(
+            `La suma de pagos no cubre el total. Objetivo: ${formatearMoneda(totalUSD, 'USD')} | Registrado: ${formatearMoneda(
               resumenPagos.totalUsd,
               'USD'
             )} | Faltante: ${formatearMoneda(resumenPagos.faltanteUsd, 'USD')}`
@@ -842,6 +1242,8 @@ export default function IngresosPage() {
           setSaving(false)
           return
         }
+
+        await limpiarCreditosExcedenteOperacion(editingOperacionId)
 
         if (editingOperacionId) {
           const { error: deleteError } = await supabase
@@ -859,7 +1261,7 @@ export default function IngresosPage() {
           if (deleteError) throw deleteError
         }
 
-        await registrarPagoMixtoProducto({
+        const nuevaOperacionPagoId = await registrarPagoMixtoProducto({
           fecha,
           concepto: conceptoFinal,
           clienteId: clienteSeleccionado.id,
@@ -868,9 +1270,23 @@ export default function IngresosPage() {
           notasGenerales: notas.trim() || null,
         })
 
-        alert('✅ Ingreso actualizado')
+        if (nuevaOperacionPagoId && resumenPagos.excedenteUsd > 0.01) {
+          await crearCreditoCliente({
+            clienteId: clienteSeleccionado.id,
+            operacionPagoId: nuevaOperacionPagoId,
+            excedenteUsd: resumenPagos.excedenteUsd,
+            descripcion: `Crédito por excedente en ${conceptoFinal}`,
+          })
+        }
+
+        alert(
+          resumenPagos.excedenteUsd > 0.01
+            ? `✅ Ingreso actualizado. Se generó crédito por ${formatearMoneda(resumenPagos.excedenteUsd, 'USD')}`
+            : '✅ Ingreso actualizado'
+        )
         resetForm()
         await cargarDatos()
+        await cargarEstadoCuentaCliente(clienteSeleccionado.id)
         return
       }
 
@@ -903,6 +1319,7 @@ export default function IngresosPage() {
         alert('✅ Venta enviada a cobranzas')
         resetForm()
         await cargarDatos()
+        await cargarEstadoCuentaCliente(clienteSeleccionado.id)
         return
       }
 
@@ -912,9 +1329,9 @@ export default function IngresosPage() {
         return
       }
 
-      if (!resumenPagos.cuadra) {
+      if (!resumenPagos.cubreTotal) {
         alert(
-          `La suma de pagos no cuadra. Objetivo: ${formatearMoneda(totalUSD, 'USD')} | Registrado: ${formatearMoneda(
+          `La suma de pagos no cubre el total. Objetivo: ${formatearMoneda(totalUSD, 'USD')} | Registrado: ${formatearMoneda(
             resumenPagos.totalUsd,
             'USD'
           )} | Faltante: ${formatearMoneda(resumenPagos.faltanteUsd, 'USD')}`
@@ -923,7 +1340,7 @@ export default function IngresosPage() {
         return
       }
 
-      await registrarPagoMixtoProducto({
+      const operacionPagoId = await registrarPagoMixtoProducto({
         fecha,
         concepto: conceptoFinal,
         clienteId: clienteSeleccionado.id,
@@ -931,6 +1348,15 @@ export default function IngresosPage() {
         cantidad,
         notasGenerales: notas.trim() || null,
       })
+
+      if (operacionPagoId && resumenPagos.excedenteUsd > 0.01) {
+        await crearCreditoCliente({
+          clienteId: clienteSeleccionado.id,
+          operacionPagoId,
+          excedenteUsd: resumenPagos.excedenteUsd,
+          descripcion: `Crédito por excedente en ${conceptoFinal}`,
+        })
+      }
 
       const cantidadAnterior = Number(productoSeleccionado.cantidad_actual || 0)
       const cantidadNueva = cantidadAnterior - cantidad
@@ -946,9 +1372,14 @@ export default function IngresosPage() {
         conceptoMovimiento: `Venta a ${clienteSeleccionado.nombre}`,
       })
 
-      alert('✅ Ingreso registrado')
+      alert(
+        resumenPagos.excedenteUsd > 0.01
+          ? `✅ Ingreso registrado. Se generó crédito por ${formatearMoneda(resumenPagos.excedenteUsd, 'USD')}`
+          : '✅ Ingreso registrado'
+      )
       resetForm()
       await cargarDatos()
+      await cargarEstadoCuentaCliente(clienteSeleccionado.id)
     } catch (err: any) {
       alert('Error: ' + (err.message || 'No se pudo guardar'))
     } finally {
@@ -957,6 +1388,7 @@ export default function IngresosPage() {
   }
 
   function resetForm() {
+    setTipoIngreso('producto')
     setProductoId('')
     setClienteId('')
     setCantidad(1)
@@ -967,10 +1399,13 @@ export default function IngresosPage() {
     setPagosMixtos([makePagoItem('USD')])
     setEditingId(null)
     setEditingOperacionId(null)
+    setCuentaCobrarSeleccionadaId('')
+    setModoAplicacionSaldo('credito')
     setShowForm(false)
   }
 
   function startEdit(operacion: PagoOperacion) {
+    setTipoIngreso('producto')
     setEditingId(operacion.id_representativo)
     setEditingOperacionId(operacion.operacion_pago_id)
     setFecha(operacion.fecha)
@@ -1008,6 +1443,8 @@ export default function IngresosPage() {
     if (!confirm('¿Eliminar este ingreso?')) return
 
     try {
+      await limpiarCreditosExcedenteOperacion(operacion.operacion_pago_id)
+
       let query = supabase.from('pagos').delete()
 
       if (operacion.operacion_pago_id) {
@@ -1021,6 +1458,9 @@ export default function IngresosPage() {
 
       alert('✅ Ingreso eliminado')
       await cargarDatos()
+      if (operacion.cliente_id) {
+        await cargarEstadoCuentaCliente(operacion.cliente_id)
+      }
     } catch (err: any) {
       alert('Error: ' + (err.message || 'No se pudo eliminar'))
     }
@@ -1082,10 +1522,10 @@ export default function IngresosPage() {
 
             <p className="mt-4 text-sm text-white/55">Finanzas</p>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-              Ingresos por productos
+              Ingresos y saldo de clientes
             </h1>
             <p className="mt-2 text-sm text-white/55">
-              Registra ventas del inventario y, si queda pendiente, se envía a cobranzas con el cliente correcto.
+              Registra ventas del inventario o recargas de saldo a favor del cliente desde un solo lugar.
             </p>
           </div>
 
@@ -1124,7 +1564,7 @@ export default function IngresosPage() {
               "
             >
               <Plus className="h-4 w-4" />
-              Nueva venta
+              Nuevo ingreso
             </button>
           </div>
         )}
@@ -1136,10 +1576,10 @@ export default function IngresosPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="text-lg font-semibold text-white">
-                      {editingId ? 'Editar ingreso' : 'Nueva venta'}
+                      {editingId ? 'Editar ingreso' : 'Nuevo ingreso'}
                     </h2>
                     <p className="mt-1 text-xs text-white/45">
-                      Completa los datos de la venta del inventario.
+                      Completa los datos del ingreso, ya sea venta o recarga de saldo.
                     </p>
                   </div>
 
@@ -1163,6 +1603,38 @@ export default function IngresosPage() {
                   />
                 </div>
 
+                <div>
+                  <label className={labelCls}>Tipo de ingreso *</label>
+                  <select
+                    value={tipoIngreso}
+                    onChange={(e) => {
+                      const next = e.target.value as TipoIngresoUI
+                      setTipoIngreso(next)
+                      setProductoId('')
+                      setCantidad(1)
+                      setConcepto(next === 'saldo' ? 'Recarga de saldo a favor' : '')
+                      setEstado('pagado')
+                      if (next === 'saldo' && cuentasPendientesCliente.length > 0) {
+                        setCuentaCobrarSeleccionadaId((prev) => prev || cuentasPendientesCliente[0].id)
+                      }
+                    }}
+                    className={inputCls}
+                    disabled={!!editingId}
+                  >
+                    <option value="producto" className="bg-[#11131a]">
+                      Venta de producto
+                    </option>
+                    <option value="saldo" className="bg-[#11131a]">
+                      Recarga de saldo
+                    </option>
+                  </select>
+                  {editingId && (
+                    <p className="mt-2 text-xs text-amber-300">
+                      Al editar, el tipo de ingreso se mantiene como venta de producto.
+                    </p>
+                  )}
+                </div>
+
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                   <label className={labelCls}>Cliente *</label>
                   <select
@@ -1181,22 +1653,203 @@ export default function IngresosPage() {
                     ))}
                   </select>
 
+                  {clientePrefill && clienteSeleccionado && (
+                    <p className="mt-3 text-xs text-cyan-300">
+                      Cliente cargado automáticamente desde su ficha para agilizar el registro.
+                    </p>
+                  )}
+
                   {clienteSeleccionado && (
-                    <div className="mt-3 flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2">
-                        <User2 className="h-4 w-4 text-white/70" />
+                    <div className="mt-3 space-y-3">
+                      <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                        <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2">
+                          <User2 className="h-4 w-4 text-white/70" />
+                        </div>
+                        <div className="min-w-0 text-xs text-white/60">
+                          <p className="truncate font-medium text-white">
+                            {clienteSeleccionado.nombre}
+                          </p>
+                          {clienteSeleccionado.telefono ? <p>{clienteSeleccionado.telefono}</p> : null}
+                          {clienteSeleccionado.email ? <p className="truncate">{clienteSeleccionado.email}</p> : null}
+                        </div>
                       </div>
-                      <div className="min-w-0 text-xs text-white/60">
-                        <p className="truncate font-medium text-white">
-                          {clienteSeleccionado.nombre}
-                        </p>
-                        {clienteSeleccionado.telefono ? <p>{clienteSeleccionado.telefono}</p> : null}
-                        {clienteSeleccionado.email ? <p className="truncate">{clienteSeleccionado.email}</p> : null}
-                      </div>
+
+                      {estadoCuentaCliente && (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
+                            <div>
+                              <p className="text-[11px] uppercase tracking-wide text-white/45">
+                                Estado del cliente
+                              </p>
+                              <p className="mt-1 text-sm font-medium text-white">
+                                Resumen financiero
+                              </p>
+                            </div>
+                            <span
+                              className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(estadoCuentaCliente)}`}
+                            >
+                              {estadoFinancieroLabel(estadoCuentaCliente)}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                              <p className="text-[11px] uppercase tracking-wide text-white/45">
+                                Deuda total
+                              </p>
+                              <p className="mt-1 text-sm font-semibold text-white">
+                                {formatearMoneda(Number(estadoCuentaCliente.total_pendiente_usd || 0), 'USD')}
+                              </p>
+                              <p className="mt-1 text-[11px] text-white/45">
+                                {formatearMoneda(Number(estadoCuentaCliente.total_pendiente_bs || 0), 'BS')}
+                              </p>
+                            </div>
+
+                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                              <p className="text-[11px] uppercase tracking-wide text-white/45">
+                                Crédito disponible
+                              </p>
+                              <p className="mt-1 text-sm font-semibold text-white">
+                                {formatearMoneda(Number(estadoCuentaCliente.credito_disponible_usd || 0), 'USD')}
+                              </p>
+                              <p className="mt-1 text-[11px] text-white/45">
+                                {formatearMoneda(Number(estadoCuentaCliente.credito_disponible_bs || 0), 'BS')}
+                              </p>
+                            </div>
+
+                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                              <p className="text-[11px] uppercase tracking-wide text-white/45">
+                                Pendiente neto
+                              </p>
+                              <p className="mt-1 text-sm font-semibold text-white">
+                                {formatearMoneda(Number(estadoCuentaCliente.saldo_pendiente_neto_usd || 0), 'USD')}
+                              </p>
+                              <p className="mt-1 text-[11px] text-white/45">
+                                {formatearMoneda(Number(estadoCuentaCliente.saldo_pendiente_neto_bs || 0), 'BS')}
+                              </p>
+                            </div>
+                          </div>
+
+                          {clienteTieneDeuda && (
+                            <div className="rounded-2xl border border-rose-400/20 bg-rose-400/10 p-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-[11px] uppercase tracking-wide text-rose-300/90">
+                                    Este cliente tiene deudas activas
+                                  </p>
+                                  <p className="mt-1 text-sm font-medium text-white">
+                                    Puedes cobrar una deuda específica desde aquí mismo.
+                                  </p>
+                                </div>
+                                <Receipt className="h-4 w-4 text-rose-300" />
+                              </div>
+                            </div>
+                          )}
+
+                          {clienteTieneDeuda && (
+                            <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-[11px] uppercase tracking-wide text-white/45">
+                                    Mini menú de deudas
+                                  </p>
+                                  <p className="mt-1 text-sm font-medium text-white">
+                                    Elige si este pago va a crédito o a una deuda concreta
+                                  </p>
+                                </div>
+                                <Wallet className="h-4 w-4 text-white/45" />
+                              </div>
+
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setModoAplicacionSaldo('deuda')}
+                                  className={`rounded-2xl border px-3 py-3 text-left text-sm transition ${
+                                    modoAplicacionSaldo === 'deuda'
+                                      ? 'border-white/20 bg-white/[0.08] text-white'
+                                      : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.05]'
+                                  }`}
+                                >
+                                  <p className="font-medium">Aplicar a deuda</p>
+                                  <p className="mt-1 text-xs text-white/45">
+                                    Cobra una cuenta pendiente específica.
+                                  </p>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setModoAplicacionSaldo('credito')}
+                                  className={`rounded-2xl border px-3 py-3 text-left text-sm transition ${
+                                    modoAplicacionSaldo === 'credito'
+                                      ? 'border-white/20 bg-white/[0.08] text-white'
+                                      : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.05]'
+                                  }`}
+                                >
+                                  <p className="font-medium">Guardar como crédito</p>
+                                  <p className="mt-1 text-xs text-white/45">
+                                    Deja el dinero como saldo a favor del cliente.
+                                  </p>
+                                </button>
+                              </div>
+
+                              {modoAplicacionSaldo === 'deuda' && (
+                                <div className="space-y-2">
+                                  {cuentasPendientesCliente.map((cuenta) => {
+                                    const activa = cuenta.id === cuentaCobrarSeleccionadaId
+
+                                    return (
+                                      <button
+                                        key={cuenta.id}
+                                        type="button"
+                                        onClick={() => {
+                                          setCuentaCobrarSeleccionadaId(cuenta.id)
+                                          setConcepto(`Abono a deuda: ${cuenta.concepto}`)
+                                          setTipoIngreso('saldo')
+                                          setEstado('pagado')
+                                        }}
+                                        className={`w-full rounded-2xl border p-3 text-left transition ${
+                                          activa
+                                            ? 'border-white/20 bg-white/[0.08]'
+                                            : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.05]'
+                                        }`}
+                                      >
+                                        <div className="flex items-start justify-between gap-3">
+                                          <div className="min-w-0">
+                                            <p className="truncate text-sm font-medium text-white">
+                                              {cuenta.concepto}
+                                            </p>
+                                            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/45">
+                                              <span>{formatDateShort(cuenta.fecha_venta)}</span>
+                                              <span>•</span>
+                                              <span>{cuenta.estado}</span>
+                                            </div>
+                                          </div>
+
+                                          <div className="text-right">
+                                            <p className="text-sm font-semibold text-white">
+                                              {formatearMoneda(Number(cuenta.saldo_usd || 0), 'USD')}
+                                            </p>
+                                            {activa ? (
+                                              <span className="mt-1 inline-flex rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[11px] text-white/70">
+                                                Seleccionada
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                        </div>
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
 
+                {tipoIngreso === 'producto' && (
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                   <label className={labelCls}>Producto *</label>
                   <select
@@ -1252,6 +1905,9 @@ export default function IngresosPage() {
                   )}
                 </div>
 
+                )}
+
+                {tipoIngreso === 'producto' && (
                 <div>
                   <label className={labelCls}>Cantidad *</label>
                   <input
@@ -1278,6 +1934,8 @@ export default function IngresosPage() {
                   )}
                 </div>
 
+                )}
+
                 <div>
                   <label className={labelCls}>Concepto</label>
                   <input
@@ -1289,6 +1947,7 @@ export default function IngresosPage() {
                   />
                 </div>
 
+                {tipoIngreso === 'producto' ? (
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-white/55">Precio unitario USD</span>
@@ -1311,6 +1970,35 @@ export default function IngresosPage() {
                   )}
                 </div>
 
+                ) : (
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-white/55">
+                        {modoAplicacionSaldo === 'deuda' ? 'Deuda seleccionada USD' : 'Total a acreditar USD'}
+                      </span>
+                      <span className="font-semibold text-white">
+                        {formatearMoneda(
+                          modoAplicacionSaldo === 'deuda'
+                            ? Number(cuentaPendienteSeleccionada?.saldo_usd || 0)
+                            : resumenPagos.totalUsd,
+                          'USD'
+                        )}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-sm">
+                      <span className="text-white/55">Total registrado Bs</span>
+                      <span className="font-semibold text-white">
+                        {formatearMoneda(resumenPagos.totalBs, 'BS')}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-xs text-white/70">
+                      {modoAplicacionSaldo === 'deuda'
+                        ? 'Este pago se aplicará directamente a la deuda seleccionada.'
+                        : 'Esta operación deja el dinero como saldo a favor del cliente.'}
+                    </p>
+                  </div>
+                )}
+
                 <div>
                   <label className={labelCls}>Estado</label>
                   <select
@@ -1322,9 +2010,11 @@ export default function IngresosPage() {
                     <option value="pagado" className="bg-[#11131a]">
                       Pagado
                     </option>
-                    <option value="pendiente" className="bg-[#11131a]">
-                      Pendiente
-                    </option>
+                    {tipoIngreso === 'producto' && (
+                      <option value="pendiente" className="bg-[#11131a]">
+                        Pendiente
+                      </option>
+                    )}
                   </select>
 
                   {editingId && (
@@ -1530,7 +2220,7 @@ export default function IngresosPage() {
                         <div>
                           <p className="text-xs text-white/45">Objetivo</p>
                           <p className="mt-1 font-semibold text-white">
-                            {formatearMoneda(totalUSD, 'USD')}
+                            {formatearMoneda(totalObjetivoUSD, 'USD')}
                           </p>
                         </div>
                         <div>
@@ -1548,7 +2238,7 @@ export default function IngresosPage() {
                       </div>
 
                       <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                        {!resumenPagos.cuadra ? (
+                        {!resumenPagos.cubreTotal ? (
                           <div className="space-y-1">
                             <div className="flex justify-between text-sm">
                               <span className="text-white/55">Faltante USD:</span>
@@ -1556,22 +2246,23 @@ export default function IngresosPage() {
                                 {formatearMoneda(resumenPagos.faltanteUsd, 'USD')}
                               </span>
                             </div>
-
-                            {resumenPagos.excedenteUsd > 0 && (
+                          </div>
+                        ) : (
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-sm">
+                              <span className="text-white/55">Estado:</span>
+                              <span className="font-semibold text-emerald-300">
+                                Pago cubierto
+                              </span>
+                            </div>
+                            {resumenPagos.tieneExcedente && (
                               <div className="flex justify-between text-sm">
-                                <span className="text-white/55">Excedente USD:</span>
-                                <span className="font-semibold text-rose-300">
+                                <span className="text-white/55">Crédito a generar:</span>
+                                <span className="font-semibold text-cyan-300">
                                   {formatearMoneda(resumenPagos.excedenteUsd, 'USD')}
                                 </span>
                               </div>
                             )}
-                          </div>
-                        ) : (
-                          <div className="flex justify-between text-sm">
-                            <span className="text-white/55">Estado:</span>
-                            <span className="font-semibold text-emerald-300">
-                              Pago completo
-                            </span>
                           </div>
                         )}
                       </div>
@@ -1590,7 +2281,7 @@ export default function IngresosPage() {
                   />
                 </div>
 
-                {stockInsuficiente && !editingId && (
+                {tipoIngreso === 'producto' && stockInsuficiente && !editingId && (
                   <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3">
                     <p className="text-sm text-rose-300">
                       No hay suficiente stock para esta venta.
@@ -1601,7 +2292,7 @@ export default function IngresosPage() {
                 <div className="flex flex-col gap-3 sm:flex-row">
                   <button
                     type="submit"
-                    disabled={saving || (!!stockInsuficiente && !editingId)}
+                    disabled={saving || (tipoIngreso === 'producto' && !!stockInsuficiente && !editingId)}
                     className="
                       flex-1 rounded-2xl border border-white/10 bg-white/[0.03]
                       px-6 py-3.5 text-sm font-medium text-white transition

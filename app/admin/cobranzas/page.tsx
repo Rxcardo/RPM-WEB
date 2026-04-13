@@ -12,6 +12,7 @@ import {
   Search,
   Wallet,
 } from 'lucide-react'
+import { supabase } from '@/lib/supabase/client'
 import { obtenerCuentasPorCobrar, type CuentaPorCobrar } from '@/lib/cobranzas/cuentas'
 
 function Card({
@@ -38,10 +39,10 @@ function Badge({
   variant?: 'default' | 'danger' | 'warning' | 'success'
 }) {
   const variants = {
-    default: 'bg-white/10 text-white/80 border-white/15',
-    danger: 'bg-rose-400/10 text-rose-300 border-rose-400/20',
-    warning: 'bg-amber-400/10 text-amber-300 border-amber-400/20',
-    success: 'bg-emerald-400/10 text-emerald-300 border-emerald-400/20',
+    default: 'bg-white/[0.04] text-white/75 border-white/10',
+    danger: 'bg-white/[0.04] text-rose-300 border-rose-400/20',
+    warning: 'bg-white/[0.04] text-amber-300 border-amber-400/20',
+    success: 'bg-white/[0.04] text-emerald-300 border-emerald-400/20',
   }
 
   return (
@@ -51,6 +52,18 @@ function Badge({
       {children}
     </span>
   )
+}
+
+type EstadoCuentaCliente = {
+  cliente_id: string
+  total_pendiente_usd?: number | null
+  total_pendiente_bs?: number | null
+  credito_disponible_usd?: number | null
+  saldo_pendiente_neto_usd?: number | null
+  saldo_favor_neto_usd?: number | null
+  credito_disponible_bs?: number | null
+  saldo_pendiente_neto_bs?: number | null
+  saldo_favor_neto_bs?: number | null
 }
 
 function formatMoney(value: number | string | null | undefined) {
@@ -153,8 +166,8 @@ function ResumenCard({
 }) {
   const tones = {
     default: 'from-white/[0.05] to-white/[0.02]',
-    warning: 'from-amber-500/10 to-rose-500/10',
-    success: 'from-emerald-500/10 to-cyan-500/10',
+    warning: 'from-white/[0.05] to-white/[0.02]',
+    success: 'from-white/[0.05] to-white/[0.02]',
   }
 
   return (
@@ -177,102 +190,114 @@ function ResumenCard({
 
 function CuentaRow({
   cuenta,
-  hrefLabel = 'Abrir detalle',
+  estadoCuenta,
 }: {
   cuenta: CuentaPorCobrar
-  hrefLabel?: string
+  estadoCuenta?: EstadoCuentaCliente | null
 }) {
   const diasVencidos = calcularDiasVencidos(cuenta.fecha_vencimiento)
   const montoTotal = Number(cuenta.monto_total_usd || 0)
   const montoPagado = Number(cuenta.monto_pagado_usd || 0)
   const saldo = Number(cuenta.saldo_usd || 0)
   const progreso = montoTotal > 0 ? Math.min(100, Math.round((montoPagado / montoTotal) * 100)) : 0
+  const creditoDisponible = Number(estadoCuenta?.credito_disponible_usd || 0)
 
   return (
-    <Link href={`/admin/cobranzas/${cuenta.id}`} className="block">
-      <Card className="group p-5 hover:bg-white/[0.05] hover:border-white/15">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-start">
-          <div className="flex min-w-0 flex-1 flex-col gap-3">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="truncate text-lg font-semibold text-white">{cuenta.cliente_nombre}</h3>
-                  <Badge variant={getEstadoBadgeVariant(cuenta)}>{getEstadoLabel(cuenta.estado)}</Badge>
-                  {diasVencidos > 0 && isPendienteEstado(cuenta.estado) && (
-                    <Badge variant="danger">
-                      <Clock3 className="h-3 w-3" />
-                      {diasVencidos} día{diasVencidos !== 1 ? 's' : ''} vencido
-                    </Badge>
-                  )}
-                </div>
-
-                <p className="mt-1 text-sm text-white/50">{cuenta.concepto || 'Sin concepto'}</p>
+    <Card className="group p-5 hover:bg-white/[0.05] hover:border-white/15">
+      <div className="flex flex-col gap-5 xl:flex-row xl:items-start">
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="truncate text-lg font-semibold text-white">{cuenta.cliente_nombre}</h3>
+                <Badge variant={getEstadoBadgeVariant(cuenta)}>{getEstadoLabel(cuenta.estado)}</Badge>
+                {diasVencidos > 0 && isPendienteEstado(cuenta.estado) && (
+                  <Badge variant="danger">
+                    <Clock3 className="h-3 w-3" />
+                    {diasVencidos} día{diasVencidos !== 1 ? 's' : ''} vencido
+                  </Badge>
+                )}
               </div>
 
-              <div className="text-right">
-                <p className="text-2xl font-bold text-white">{formatMoney(saldo)}</p>
-                <p className="text-xs text-white/45">Saldo pendiente</p>
-              </div>
+              <p className="mt-1 text-sm text-white/50">{cuenta.concepto || 'Sin concepto'}</p>
             </div>
 
-            <div className="grid gap-3 text-sm text-white/55 sm:grid-cols-2 xl:grid-cols-4">
-              <div>
-                <p className="text-xs text-white/35">Monto total</p>
-                <p className="mt-1 text-white">{formatMoney(montoTotal)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-white/35">Pagado</p>
-                <p className="mt-1 text-white">{formatMoney(montoPagado)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-white/35">Fecha venta</p>
-                <p className="mt-1 text-white">{formatDate(cuenta.fecha_venta || cuenta.created_at)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-white/35">Vencimiento</p>
-                <p className="mt-1 text-white">{formatDate(cuenta.fecha_vencimiento)}</p>
-              </div>
-            </div>
-
-            <div>
-              <div className="mb-2 flex items-center justify-between text-xs text-white/45">
-                <span>Progreso de cobro</span>
-                <span>{progreso}%</span>
-              </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
-                <div
-                  className="h-2 rounded-full bg-gradient-to-r from-violet-500 to-emerald-400 transition-all duration-500"
-                  style={{ width: `${progreso}%` }}
-                />
-              </div>
+            <div className="text-right">
+              <p className="text-2xl font-bold text-white">{formatMoney(saldo)}</p>
+              <p className="text-xs text-white/45">Deuda de esta cuenta</p>
             </div>
           </div>
 
-          <div className="flex shrink-0 flex-col justify-between gap-3 xl:items-end">
-            <div className="text-xs text-white/40">
-              {hrefLabel}
+          <div className="grid gap-3 text-sm text-white/55 sm:grid-cols-3">
+            <div>
+              <p className="text-xs text-white/35">Monto total</p>
+              <p className="mt-1 text-white">{formatMoney(montoTotal)}</p>
             </div>
-            <div className="flex flex-wrap gap-2 text-xs text-white/45">
-              {cuenta.tipo_origen ? (
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
-                  {cuenta.tipo_origen}
-                </span>
-              ) : null}
-              {cuenta.notas ? (
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
-                  Con notas
-                </span>
-              ) : null}
+            <div>
+              <p className="text-xs text-white/35">Pagado</p>
+              <p className="mt-1 text-white">{formatMoney(montoPagado)}</p>
             </div>
+            <div>
+              <p className="text-xs text-white/35">Saldo de esta cuenta</p>
+              <p className="mt-1 text-white">{formatMoney(saldo)}</p>
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between text-xs text-white/45">
+              <span>Progreso de cobro</span>
+              <span>{progreso}%</span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-2 rounded-full bg-gradient-to-r from-violet-500 to-emerald-400 transition-all duration-500"
+                style={{ width: `${progreso}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2 text-xs text-white/45">
+            {cuenta.tipo_origen ? (
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
+                {cuenta.tipo_origen}
+              </span>
+            ) : null}
+            {cuenta.notas ? (
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
+                Con notas
+              </span>
+            ) : null}
+            {creditoDisponible > 0.01 ? (
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
+                Este cliente tiene crédito disponible: {formatMoney(creditoDisponible)}
+              </span>
+            ) : null}
           </div>
         </div>
-      </Card>
-    </Link>
+
+        <div className="flex shrink-0 flex-col gap-3 xl:w-[220px]">
+          <Link
+            href={`/admin/finanzas/ingresos?cliente=${cuenta.cliente_id}`}
+            className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-center text-sm font-medium text-white/85 transition hover:bg-white/[0.06]"
+          >
+            Cobrar en ingresos
+          </Link>
+
+          <Link
+            href={`/admin/finanzas/ingresos?cliente=${cuenta.cliente_id}&tipoIngreso=saldo`}
+            className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-center text-sm font-medium text-white/85 transition hover:bg-white/[0.06]"
+          >
+            Agregar saldo
+          </Link>
+        </div>
+      </div>
+    </Card>
   )
 }
 
 export default function CobranzasDashboardPage() {
   const [cuentas, setCuentas] = useState<CuentaPorCobrar[]>([])
+  const [estadoCuentaMap, setEstadoCuentaMap] = useState<Record<string, EstadoCuentaCliente>>({})
   const [cargando, setCargando] = useState(true)
   const [busqueda, setBusqueda] = useState('')
   const [tab, setTab] = useState<'pendientes' | 'historial'>('pendientes')
@@ -284,10 +309,51 @@ export default function CobranzasDashboardPage() {
   async function cargarCuentas() {
     try {
       const data = await obtenerCuentasPorCobrar()
-      setCuentas(data || [])
+      const cuentasData = data || []
+      setCuentas(cuentasData)
+
+      const clienteIds = Array.from(
+        new Set(
+          cuentasData
+            .map((cuenta) => String(cuenta.cliente_id || '').trim())
+            .filter(Boolean)
+        )
+      )
+
+      if (clienteIds.length > 0) {
+        const { data: estados, error } = await supabase
+          .from('v_clientes_estado_cuenta')
+          .select(`
+            cliente_id,
+            total_pendiente_usd,
+            total_pendiente_bs,
+            credito_disponible_usd,
+            saldo_pendiente_neto_usd,
+            saldo_favor_neto_usd,
+            credito_disponible_bs,
+            saldo_pendiente_neto_bs,
+            saldo_favor_neto_bs
+          `)
+          .in('cliente_id', clienteIds)
+
+        if (error) {
+          console.error('Error cargando estado de cuenta en cobranzas:', error)
+          setEstadoCuentaMap({})
+        } else {
+          const nextMap: Record<string, EstadoCuentaCliente> = {}
+          for (const item of estados || []) {
+            const row = item as EstadoCuentaCliente
+            nextMap[row.cliente_id] = row
+          }
+          setEstadoCuentaMap(nextMap)
+        }
+      } else {
+        setEstadoCuentaMap({})
+      }
     } catch (error) {
       console.error('Error cargando cobranzas:', error)
       setCuentas([])
+      setEstadoCuentaMap({})
     } finally {
       setCargando(false)
     }
@@ -397,29 +463,24 @@ export default function CobranzasDashboardPage() {
 
             <h1 className="text-3xl font-bold tracking-tight text-white">Cobranzas</h1>
             <p className="mt-2 text-base text-white/55">
-              Vista unificada de pendientes e historial. Sin módulo aparte de vencidos.
+              Aquí se muestra solo la deuda de cada cuenta. El saldo neto general del cliente se trabaja en ingresos.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Link
-              href="/admin/cobranzas/pendientes"
-              className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm font-medium text-amber-300 transition hover:bg-amber-400/15"
+              href="/admin/finanzas/ingresos"
+              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
             >
-              Ver pendientes
+              Ir a ingresos
             </Link>
-            <Link
-              href="/admin/cobranzas/historial"
-              className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm font-medium text-cyan-300 transition hover:bg-cyan-400/15"
+            <button
+              type="button"
+              onClick={() => setTab('pendientes')}
+              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
             >
-              Ver historial
-            </Link>
-            <Link
-              href="/admin/cobranzas/pendientes"
-              className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-300 transition hover:bg-emerald-400/15"
-            >
-              Registrar cobro
-            </Link>
+              Ver cuentas pendientes aquí
+            </button>
           </div>
         </div>
 
@@ -460,11 +521,11 @@ export default function CobranzasDashboardPage() {
                 onClick={() => setTab('pendientes')}
                 className={`rounded-2xl border px-4 py-2 text-sm font-medium transition ${
                   tab === 'pendientes'
-                    ? 'border-amber-400/25 bg-amber-400/10 text-amber-300'
+                    ? 'border-white/20 bg-white/[0.08] text-white'
                     : 'border-white/10 bg-white/[0.03] text-white/65 hover:bg-white/[0.06]'
                 }`}
               >
-                Pendientes ({pendientesFiltradas.length})
+                Cuentas pendientes ({pendientesFiltradas.length})
               </button>
 
               <button
@@ -472,11 +533,11 @@ export default function CobranzasDashboardPage() {
                 onClick={() => setTab('historial')}
                 className={`rounded-2xl border px-4 py-2 text-sm font-medium transition ${
                   tab === 'historial'
-                    ? 'border-cyan-400/25 bg-cyan-400/10 text-cyan-300'
+                    ? 'border-white/20 bg-white/[0.08] text-white'
                     : 'border-white/10 bg-white/[0.03] text-white/65 hover:bg-white/[0.06]'
                 }`}
               >
-                Historial ({historialFiltrado.length})
+                Cuentas cerradas ({historialFiltrado.length})
               </button>
             </div>
 
@@ -506,7 +567,11 @@ export default function CobranzasDashboardPage() {
               </Card>
             ) : (
               pendientesFiltradas.map((cuenta) => (
-                <CuentaRow key={cuenta.id} cuenta={cuenta} hrefLabel="Abrir cuenta pendiente" />
+                <CuentaRow
+                  key={cuenta.id}
+                  cuenta={cuenta}
+                  estadoCuenta={estadoCuentaMap[String(cuenta.cliente_id || '')] || null}
+                />
               ))
             )}
           </div>
@@ -526,7 +591,11 @@ export default function CobranzasDashboardPage() {
               </Card>
             ) : (
               historialFiltrado.map((cuenta) => (
-                <CuentaRow key={cuenta.id} cuenta={cuenta} hrefLabel="Abrir registro histórico" />
+                <CuentaRow
+                  key={cuenta.id}
+                  cuenta={cuenta}
+                  estadoCuenta={estadoCuentaMap[String(cuenta.cliente_id || '')] || null}
+                />
               ))
             )}
           </div>

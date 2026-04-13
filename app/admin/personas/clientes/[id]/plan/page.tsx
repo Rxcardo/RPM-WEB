@@ -207,6 +207,12 @@ function formatBs(v: number) {
   }).format(v)
 }
 
+function getMontoDiferenciaLabel(delta: number) {
+  if (delta > 0.009) return 'Debe pagar diferencia'
+  if (delta < -0.009) return 'Queda saldo a favor'
+  return 'Sin diferencia'
+}
+
 function timeToMinutes(t: string) {
   const [h, m] = t.slice(0, 5).split(':').map(Number)
   return h * 60 + m
@@ -567,6 +573,7 @@ export default function ClientePlanPage() {
   const [creandoPlan, setCreandoPlan] = useState(false)
 
   const [renovarConPendientes, setRenovarConPendientes] = useState<OpcionArrastreSesiones>('si')
+  const [registrarAjustePlan, setRegistrarAjustePlan] = useState(true)
 
   const fetchAll = useCallback(async () => {
     if (!id) return
@@ -711,6 +718,27 @@ export default function ClientePlanPage() {
       : selectedPlan.sesiones_totales
   }, [selectedPlan, modo, renovarConPendientes, sesionesRestantes])
 
+  const precioPlanActual = Number(planActivo?.planes?.precio || 0)
+  const precioPlanNuevo = Number(selectedPlan?.precio || 0)
+
+  const ajusteFinancieroPlan = useMemo(() => {
+    if (modo !== 'asignar' || !planActivo || !selectedPlan) return 0
+    return r2(precioPlanNuevo - precioPlanActual)
+  }, [modo, planActivo, selectedPlan, precioPlanActual, precioPlanNuevo])
+
+  const montoObjetivoPago = useMemo(() => {
+    if (modo === 'asignar' && planActivo && selectedPlan) {
+      return r2(Math.max(ajusteFinancieroPlan, 0))
+    }
+    return r2(montoBase)
+  }, [modo, planActivo, selectedPlan, ajusteFinancieroPlan, montoBase])
+
+  useEffect(() => {
+    if (modo === 'asignar' && planActivo && selectedPlan) {
+      setRegistrarPago(montoObjetivoPago > 0.009)
+    }
+  }, [modo, planActivo, selectedPlan, montoObjetivoPago])
+
   const planificacionPreview = useMemo(() => {
     if (!selectedPlan || !fechaInicio || !diasSemana.length || !totalPreviewSesiones) return null
     return calcularPlanificacionSesiones(fechaInicio, diasSemana, totalPreviewSesiones, selectedPlan.vigencia_valor, selectedPlan.vigencia_tipo)
@@ -747,6 +775,7 @@ export default function ClientePlanPage() {
     setErrorMsg('')
     setSuccessMsg('')
     setRenovarConPendientes('si')
+    setRegistrarAjustePlan(true)
   }
 
   async function crearPlanInline() {
@@ -1015,9 +1044,9 @@ export default function ClientePlanPage() {
     const totalBs = r2(
       items.reduce((acc, item) => acc + Number(item.monto_equivalente_bs || 0), 0)
     )
-    const faltanteUsd = r2(Math.max(montoBase - totalUsd, 0))
-    const excedenteUsd = r2(Math.max(totalUsd - montoBase, 0))
-    const diferenciaUsd = r2(montoBase - totalUsd)
+    const faltanteUsd = r2(Math.max(montoObjetivoPago - totalUsd, 0))
+    const excedenteUsd = r2(Math.max(totalUsd - montoObjetivoPago, 0))
+    const diferenciaUsd = r2(montoObjetivoPago - totalUsd)
 
     return {
       items,
@@ -1026,10 +1055,10 @@ export default function ClientePlanPage() {
       faltanteUsd,
       excedenteUsd,
       diferenciaUsd,
-      cuadra: Math.abs(diferenciaUsd) < 0.01 && montoBase > 0,
+      cuadra: Math.abs(diferenciaUsd) < 0.01 && montoObjetivoPago >= 0,
       todosValidos: items.every((item) => item.valido),
     }
-  }, [pagosMixtos, montoBase])
+  }, [pagosMixtos, montoObjetivoPago])
 
   async function registrarPagoMixtoPlan(params: {
     fecha: string
@@ -1066,6 +1095,57 @@ export default function ClientePlanPage() {
     if (error) throw new Error(`Pago: ${error.message}`)
   }
 
+  async function registrarCuentaPorCobrarAjustePlan(params: {
+    montoUsd: number
+    concepto: string
+    fecha: string
+    notas?: string | null
+  }) {
+    if (params.montoUsd <= 0.009) return
+
+    const { error } = await supabase.from('cuentas_por_cobrar').insert({
+      cliente_id: id,
+      cliente_nombre: cliente?.nombre || 'Cliente',
+      concepto: params.concepto,
+      tipo_origen: 'otro',
+      monto_total_usd: params.montoUsd,
+      monto_pagado_usd: 0,
+      saldo_usd: params.montoUsd,
+      fecha_venta: params.fecha,
+      estado: 'pendiente',
+      notas: params.notas || null,
+      registrado_por: null,
+    })
+
+    if (error) throw new Error(`Ajuste financiero: ${error.message}`)
+  }
+
+  async function registrarCreditoClienteCambioPlan(params: {
+    montoUsd: number
+    descripcion: string
+    fecha: string
+  }) {
+    if (params.montoUsd <= 0.009) return
+
+    const { error } = await supabase.from('clientes_credito').insert({
+      cliente_id: id,
+      origen_tipo: 'ajuste_plan',
+      origen_id: planActivo?.id || null,
+      moneda: 'USD',
+      monto_original: params.montoUsd,
+      monto_disponible: params.montoUsd,
+      tasa_bcv: null,
+      monto_original_bs: null,
+      monto_disponible_bs: null,
+      descripcion: params.descripcion,
+      fecha: params.fecha,
+      estado: 'activo',
+      registrado_por: null,
+    })
+
+    if (error) throw new Error(`Crédito: ${error.message}`)
+  }
+
   async function handleAsignar(e: React.FormEvent) {
     e.preventDefault()
     if (assigningRef.current || saving) return
@@ -1094,8 +1174,12 @@ export default function ClientePlanPage() {
       return
     }
 
+    if (registrarPago && montoObjetivoPago <= 0.009) {
+      setRegistrarPago(false)
+    }
+
     if (registrarPago) {
-      if (montoBase <= 0) {
+      if (montoObjetivoPago <= 0) {
         setErrorMsg('El monto del plan debe ser mayor a 0.')
         return
       }
@@ -1105,7 +1189,7 @@ export default function ClientePlanPage() {
       }
       if (!resumenPagos.cuadra) {
         setErrorMsg(
-          `La suma de pagos no cuadra. Objetivo: ${formatMoney(montoBase)} | Registrado: ${formatMoney(
+          `La suma de pagos no cuadra. Objetivo: ${formatMoney(montoObjetivoPago)} | Registrado: ${formatMoney(
             resumenPagos.totalUsd
           )} | Faltante: ${formatMoney(resumenPagos.faltanteUsd)}`
         )
@@ -1155,7 +1239,7 @@ export default function ClientePlanPage() {
 
       await ensureEntrenamientos(np.id, planificacion.fechas, empleadoId, hiN, hfN, recursoId)
 
-      if (registrarPago && montoBase > 0) {
+      if (registrarPago && montoObjetivoPago > 0.009) {
         const concepto = `Plan: ${plan.nombre} — ${cliente?.nombre || 'Cliente'}`
         await registrarPagoMixtoPlan({
           fecha: fechaInicio,
@@ -1180,7 +1264,35 @@ export default function ClientePlanPage() {
         })
         .eq('id', np.id)
 
-      setSuccessMsg(`Plan "${plan.nombre}" asignado. ${planificacion.fechas.length} entrenamientos generados.`)
+      if (registrarAjustePlan && ajusteFinancieroPlan > 0.009 && planActivo) {
+        await registrarCuentaPorCobrarAjustePlan({
+          montoUsd: ajusteFinancieroPlan,
+          concepto: `Ajuste por cambio de plan: ${planActivo.planes?.nombre || 'Plan actual'} → ${plan.nombre}`,
+          fecha: fechaInicio,
+          notas: 'Generado automáticamente por cambio de plan desde clientes/id/plan',
+        })
+      }
+
+      if (ajusteFinancieroPlan < -0.009 && planActivo) {
+        await registrarCreditoClienteCambioPlan({
+          montoUsd: Math.abs(ajusteFinancieroPlan),
+          descripcion: `Saldo a favor por cambio de plan: ${planActivo.planes?.nombre || 'Plan actual'} → ${plan.nombre}`,
+          fecha: fechaInicio,
+        })
+      }
+
+      const mensajeAjuste =
+        ajusteFinancieroPlan > 0.009
+          ? registrarAjustePlan
+            ? ` Se generó una cuenta por cobrar por ${formatMoney(ajusteFinancieroPlan)}.`
+            : ` Queda una diferencia por cobrar de ${formatMoney(ajusteFinancieroPlan)}.`
+          : ajusteFinancieroPlan < -0.009
+            ? ` Se registró un saldo a favor de ${formatMoney(Math.abs(ajusteFinancieroPlan))}.`
+            : planActivo && selectedPlan
+              ? ' El cambio no genera cobro adicional.'
+              : ''
+
+      setSuccessMsg(`Plan "${plan.nombre}" asignado. ${planificacion.fechas.length} entrenamientos generados.${mensajeAjuste}`)
       resetForm()
       setModo(null)
       await fetchAll()
@@ -1231,7 +1343,7 @@ export default function ClientePlanPage() {
       }
       if (!resumenPagos.cuadra) {
         setErrorMsg(
-          `La suma de pagos no cuadra. Objetivo: ${formatMoney(montoBase)} | Registrado: ${formatMoney(
+          `La suma de pagos no cuadra. Objetivo: ${formatMoney(montoObjetivoPago)} | Registrado: ${formatMoney(
             resumenPagos.totalUsd
           )} | Faltante: ${formatMoney(resumenPagos.faltanteUsd)}`
         )
@@ -1432,13 +1544,26 @@ export default function ClientePlanPage() {
         {registrarPago && (
           <>
             <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Monto objetivo USD" helper={usarPrecioPlan ? 'Precio del plan' : 'Monto personalizado'}>
+              <Field
+                label={modo === 'asignar' && planActivo && selectedPlan ? 'Monto a cobrar por diferencia' : 'Monto objetivo USD'}
+                helper={
+                  modo === 'asignar' && planActivo && selectedPlan
+                    ? ajusteFinancieroPlan > 0.009
+                      ? 'Se cobra solo la diferencia restante del nuevo plan.'
+                      : ajusteFinancieroPlan < -0.009
+                        ? 'No se cobra nada. El cambio deja saldo a favor.'
+                        : 'No hay diferencia por cobrar.'
+                    : usarPrecioPlan
+                      ? 'Precio del plan'
+                      : 'Monto personalizado'
+                }
+              >
                 <div className="flex gap-2">
                   <input
                     type="number"
                     min={0}
                     step="0.01"
-                    value={usarPrecioPlan ? (selectedPlan?.precio ?? '') : montoPersonalizado}
+                    value={usarPrecioPlan ? (modo === 'asignar' && planActivo && selectedPlan ? String(montoObjetivoPago) : (selectedPlan?.precio ?? '')) : montoPersonalizado}
                     readOnly={usarPrecioPlan}
                     onChange={(e) => setMontoPersonalizado(e.target.value)}
                     className={`${inputCls} ${usarPrecioPlan ? 'cursor-not-allowed opacity-60' : ''}`}
@@ -1674,7 +1799,7 @@ export default function ClientePlanPage() {
               <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
                 <div>
                   <p className="text-xs text-white/45">Objetivo</p>
-                  <p className="font-semibold text-emerald-400">{formatMoney(montoBase)}</p>
+                  <p className="font-semibold text-emerald-400">{formatMoney(montoObjetivoPago)}</p>
                 </div>
                 <div>
                   <p className="text-xs text-white/45">Total USD</p>
@@ -1869,6 +1994,68 @@ export default function ClientePlanPage() {
                 </p>
               </div>
             )}
+          </Card>
+        )}
+
+        {modo === 'asignar' && planActivo && selectedPlan && (
+          <Card className="border-white/10 bg-white/[0.02] p-4">
+            <p className="text-sm font-medium text-white/80">Impacto financiero del cambio</p>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-3 text-sm">
+              <div>
+                <p className="text-xs text-white/45">Plan actual</p>
+                <p className="font-medium text-white">{planActivo.planes?.nombre || 'Plan actual'}</p>
+                <p className="text-white/65">{formatMoney(precioPlanActual)}</p>
+              </div>
+
+              <div>
+                <p className="text-xs text-white/45">Nuevo plan</p>
+                <p className="font-medium text-white">{selectedPlan.nombre}</p>
+                <p className="text-white/65">{formatMoney(precioPlanNuevo)}</p>
+              </div>
+
+              <div>
+                <p className="text-xs text-white/45">{getMontoDiferenciaLabel(ajusteFinancieroPlan)}</p>
+                <p
+                  className={`font-semibold ${
+                    ajusteFinancieroPlan > 0.009
+                      ? 'text-amber-300'
+                      : ajusteFinancieroPlan < -0.009
+                        ? 'text-emerald-300'
+                        : 'text-white'
+                  }`}
+                >
+                  {ajusteFinancieroPlan === 0
+                    ? formatMoney(0)
+                    : formatMoney(Math.abs(ajusteFinancieroPlan))}
+                </p>
+              </div>
+            </div>
+
+            {ajusteFinancieroPlan > 0.009 ? (
+              <div className="mt-4 space-y-3 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-3">
+                <p className="text-sm text-amber-300">
+                  El cliente no vuelve a pagar el plan completo. Solo debe pagar la diferencia restante: {formatMoney(ajusteFinancieroPlan)}.
+                </p>
+                <label className="flex items-center gap-3 text-sm text-amber-300">
+                  <input
+                    type="checkbox"
+                    checked={registrarAjustePlan}
+                    onChange={(e) => setRegistrarAjustePlan(e.target.checked)}
+                    className="h-4 w-4 accent-amber-400"
+                  />
+                  Crear automáticamente cuenta por cobrar por la diferencia
+                </label>
+              </div>
+            ) : null}
+
+            {ajusteFinancieroPlan < -0.009 ? (
+              <div className="mt-4 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-3">
+                <p className="text-sm text-emerald-300">
+                  Este cambio registrará automáticamente un saldo a favor de {formatMoney(Math.abs(ajusteFinancieroPlan))} en la cuenta del cliente.
+                </p>
+              </div>
+            ) : null}
           </Card>
         )}
 
@@ -2100,7 +2287,17 @@ export default function ClientePlanPage() {
           </div>
         </div>
 
-        {renderPagoMixtoSection()}
+        {modo === 'asignar' && planActivo && selectedPlan && montoObjetivoPago <= 0.009 ? (
+          <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
+            <p className="text-sm text-emerald-300">
+              No hace falta registrar pago para este cambio. {ajusteFinancieroPlan < -0.009
+                ? `El cliente queda con un saldo a favor registrado de ${formatMoney(Math.abs(ajusteFinancieroPlan))}.`
+                : 'El precio del nuevo plan queda cubierto con lo ya pagado.'}
+            </p>
+          </Card>
+        ) : (
+          renderPagoMixtoSection()
+        )}
 
         {errorMsg && <Card className="p-4"><p className="text-sm text-rose-400">{errorMsg}</p></Card>}
         {successMsg && <Card className="p-4"><p className="text-sm text-emerald-400">{successMsg}</p></Card>}
