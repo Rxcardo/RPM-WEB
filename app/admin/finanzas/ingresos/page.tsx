@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase/client'
 import {
   ArrowLeft,
@@ -13,7 +13,6 @@ import {
   User2,
   Wallet,
   Receipt,
-  CheckCircle2,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
@@ -465,7 +464,26 @@ const PagoBsSelector = memo(function PagoBsSelector({
   )
 })
 
+function LoadingIngresos() {
+  return (
+    <div className="min-h-screen p-4 sm:p-6 lg:p-8">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="h-24 animate-pulse rounded-3xl border border-white/10 bg-white/[0.03]" />
+        <div className="h-[500px] animate-pulse rounded-3xl border border-white/10 bg-white/[0.03]" />
+      </div>
+    </div>
+  )
+}
+
 export default function IngresosPage() {
+  return (
+    <Suspense fallback={<LoadingIngresos />}>
+      <IngresosPageContent />
+    </Suspense>
+  )
+}
+
+function IngresosPageContent() {
   const searchParams = useSearchParams()
   const clientePrefill = searchParams.get('cliente') || searchParams.get('clienteId') || ''
   const tipoIngresoPrefill = searchParams.get('tipoIngreso')
@@ -524,7 +542,7 @@ export default function IngresosPage() {
         setModoAplicacionSaldo('deuda')
       }
     }
-  }, [clientePrefill, tipoIngresoPrefill, clientes, editingId])
+  }, [clientePrefill, tipoIngresoPrefill, clientes, editingId, cuentasPendientesCliente.length])
 
   async function cargarDatos() {
     setLoading(true)
@@ -1045,7 +1063,6 @@ export default function IngresosPage() {
     return operacionPagoId
   }
 
-
   async function registrarPagoMixtoSaldo(args: {
     fecha: string
     concepto: string
@@ -1139,10 +1156,12 @@ export default function IngresosPage() {
       return
     }
 
+    const productoActual = tipoIngreso === 'producto' ? productoSeleccionado : null
+
     const conceptoFinal =
       tipoIngreso === 'saldo'
         ? concepto.trim() || 'Recarga de saldo a favor'
-        : concepto.trim() || `Venta de ${productoSeleccionado?.nombre || ''} x${cantidad}`
+        : concepto.trim() || `Venta de ${productoActual?.nombre || ''} x${cantidad}`
 
     setSaving(true)
 
@@ -1291,7 +1310,7 @@ export default function IngresosPage() {
       }
 
       if (estado === 'pendiente') {
-        const cantidadAnterior = Number(productoSeleccionado.cantidad_actual || 0)
+        const cantidadAnterior = Number(productoActual?.cantidad_actual || 0)
         const cantidadNueva = cantidadAnterior - cantidad
 
         await crearCuentaPorCobrar({
@@ -1358,7 +1377,7 @@ export default function IngresosPage() {
         })
       }
 
-      const cantidadAnterior = Number(productoSeleccionado.cantidad_actual || 0)
+      const cantidadAnterior = Number(productoActual?.cantidad_actual || 0)
       const cantidadNueva = cantidadAnterior - cantidad
 
       await descontarInventarioYCrearMovimiento({
@@ -1420,12 +1439,7 @@ export default function IngresosPage() {
         id_local: `${item.id}_${Math.random().toString(36).slice(2, 6)}`,
         moneda_pago: (item.moneda_pago || 'USD') as 'USD' | 'BS',
         metodo_pago_v2_id: item.metodo_pago_v2_id || '',
-        monto_usd:
-          String(
-            item.moneda_pago === 'BS'
-              ? r2(Number(item.monto_equivalente_usd || 0))
-              : r2(Number(item.monto_equivalente_usd || 0))
-          ),
+        monto_usd: String(r2(Number(item.monto_equivalente_usd || 0))),
         monto_bs:
           item.moneda_pago === 'BS'
             ? r2(Number(item.monto_equivalente_bs || item.monto || 0))
@@ -1497,14 +1511,7 @@ export default function IngresosPage() {
   }, [operaciones])
 
   if (loading) {
-    return (
-      <div className="min-h-screen p-4 sm:p-6 lg:p-8">
-        <div className="mx-auto max-w-7xl space-y-6">
-          <div className="h-24 animate-pulse rounded-3xl border border-white/10 bg-white/[0.03]" />
-          <div className="h-[500px] animate-pulse rounded-3xl border border-white/10 bg-white/[0.03]" />
-        </div>
-      </div>
-    )
+    return <LoadingIngresos />
   }
 
   return (
@@ -1850,90 +1857,88 @@ export default function IngresosPage() {
                 </div>
 
                 {tipoIngreso === 'producto' && (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                  <label className={labelCls}>Producto *</label>
-                  <select
-                    value={productoId}
-                    onChange={(e) => {
-                      const id = e.target.value
-                      setProductoId(id)
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                    <label className={labelCls}>Producto *</label>
+                    <select
+                      value={productoId}
+                      onChange={(e) => {
+                        const id = e.target.value
+                        setProductoId(id)
 
-                      const prod = productos.find((p) => p.id === id)
-                      if (prod) {
-                        setConcepto(`Venta de ${prod.nombre} x${cantidad}`)
-                      }
-                    }}
-                    className={inputCls}
-                    required
-                    disabled={!!editingId}
-                  >
-                    <option value="" className="bg-[#11131a]">
-                      Seleccionar producto...
-                    </option>
-                    {productos.map((prod) => (
-                      <option key={prod.id} value={prod.id} className="bg-[#11131a]">
-                        {prod.nombre} - Stock: {prod.cantidad_actual} {prod.unidad_medida}
+                        const prod = productos.find((p) => p.id === id)
+                        if (prod) {
+                          setConcepto(`Venta de ${prod.nombre} x${cantidad}`)
+                        }
+                      }}
+                      className={inputCls}
+                      required
+                      disabled={!!editingId}
+                    >
+                      <option value="" className="bg-[#11131a]">
+                        Seleccionar producto...
                       </option>
-                    ))}
-                  </select>
+                      {productos.map((prod) => (
+                        <option key={prod.id} value={prod.id} className="bg-[#11131a]">
+                          {prod.nombre} - Stock: {prod.cantidad_actual} {prod.unidad_medida}
+                        </option>
+                      ))}
+                    </select>
 
-                  {editingId && (
-                    <p className="mt-2 text-xs text-amber-300">
-                      Al editar, producto y cantidad quedan bloqueados para no desajustar el stock.
-                    </p>
-                  )}
+                    {editingId && (
+                      <p className="mt-2 text-xs text-amber-300">
+                        Al editar, producto y cantidad quedan bloqueados para no desajustar el stock.
+                      </p>
+                    )}
 
-                  {productoSeleccionado && (
-                    <div className="mt-3 flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2">
-                        <Package2 className="h-4 w-4 text-white/70" />
+                    {productoSeleccionado && (
+                      <div className="mt-3 flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                        <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2">
+                          <Package2 className="h-4 w-4 text-white/70" />
+                        </div>
+
+                        <div className="min-w-0 text-xs text-white/60">
+                          <p className="truncate font-medium text-white">
+                            {productoSeleccionado.nombre}
+                          </p>
+                          <p>
+                            Stock: {productoSeleccionado.cantidad_actual} {productoSeleccionado.unidad_medida}
+                          </p>
+                          <p>
+                            Precio venta:{' '}
+                            {formatearMoneda(Number(productoSeleccionado.precio_venta_usd || 0), 'USD')}
+                          </p>
+                        </div>
                       </div>
-
-                      <div className="min-w-0 text-xs text-white/60">
-                        <p className="truncate font-medium text-white">
-                          {productoSeleccionado.nombre}
-                        </p>
-                        <p>
-                          Stock: {productoSeleccionado.cantidad_actual} {productoSeleccionado.unidad_medida}
-                        </p>
-                        <p>
-                          Precio venta:{' '}
-                          {formatearMoneda(Number(productoSeleccionado.precio_venta_usd || 0), 'USD')}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
+                    )}
+                  </div>
                 )}
 
                 {tipoIngreso === 'producto' && (
-                <div>
-                  <label className={labelCls}>Cantidad *</label>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={cantidad}
-                    onChange={(e) => {
-                      const nuevaCantidad = Number(e.target.value) || 1
-                      setCantidad(nuevaCantidad)
+                  <div>
+                    <label className={labelCls}>Cantidad *</label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={cantidad}
+                      onChange={(e) => {
+                        const nuevaCantidad = Number(e.target.value) || 1
+                        setCantidad(nuevaCantidad)
 
-                      if (productoSeleccionado) {
-                        setConcepto(`Venta de ${productoSeleccionado.nombre} x${nuevaCantidad}`)
-                      }
-                    }}
-                    className={inputCls}
-                    required
-                    disabled={!!editingId}
-                  />
-                  {productoSeleccionado && (
-                    <p className="mt-2 text-xs text-white/45">
-                      Disponible: {formatQty(productoSeleccionado.cantidad_actual)} {productoSeleccionado.unidad_medida}
-                    </p>
-                  )}
-                </div>
-
+                        if (productoSeleccionado) {
+                          setConcepto(`Venta de ${productoSeleccionado.nombre} x${nuevaCantidad}`)
+                        }
+                      }}
+                      className={inputCls}
+                      required
+                      disabled={!!editingId}
+                    />
+                    {productoSeleccionado && (
+                      <p className="mt-2 text-xs text-white/45">
+                        Disponible: {formatQty(productoSeleccionado.cantidad_actual)} {productoSeleccionado.unidad_medida}
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 <div>
@@ -1948,28 +1953,27 @@ export default function IngresosPage() {
                 </div>
 
                 {tipoIngreso === 'producto' ? (
-                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-white/55">Precio unitario USD</span>
-                    <span className="font-semibold text-white">
-                      {formatearMoneda(precioUnitarioUSD, 'USD')}
-                    </span>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-white/55">Precio unitario USD</span>
+                      <span className="font-semibold text-white">
+                        {formatearMoneda(precioUnitarioUSD, 'USD')}
+                      </span>
+                    </div>
+
+                    <div className="mt-2 flex items-center justify-between text-sm">
+                      <span className="text-white/55">Total USD</span>
+                      <span className="font-semibold text-white">
+                        {formatearMoneda(totalUSD, 'USD')}
+                      </span>
+                    </div>
+
+                    {estado === 'pendiente' && (
+                      <p className="mt-3 text-xs text-amber-300">
+                        Si no paga, se envía a cobranzas con el cliente seleccionado.
+                      </p>
+                    )}
                   </div>
-
-                  <div className="mt-2 flex items-center justify-between text-sm">
-                    <span className="text-white/55">Total USD</span>
-                    <span className="font-semibold text-white">
-                      {formatearMoneda(totalUSD, 'USD')}
-                    </span>
-                  </div>
-
-                  {estado === 'pendiente' && (
-                    <p className="mt-3 text-xs text-amber-300">
-                      Si no paga, se envía a cobranzas con el cliente seleccionado.
-                    </p>
-                  )}
-                </div>
-
                 ) : (
                   <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                     <div className="flex items-center justify-between text-sm">
@@ -2216,7 +2220,7 @@ export default function IngresosPage() {
                     </div>
 
                     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-                      <div className="grid gap-3 sm:grid-cols-3 text-sm">
+                      <div className="grid gap-3 text-sm sm:grid-cols-3">
                         <div>
                           <p className="text-xs text-white/45">Objetivo</p>
                           <p className="mt-1 font-semibold text-white">
