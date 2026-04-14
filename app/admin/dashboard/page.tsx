@@ -8,6 +8,7 @@ import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import StatCard from '@/components/ui/StatCard'
 import ActionCard from '@/components/ui/ActionCard'
+import Link from 'next/link'
 
 type Cliente = {
   id: string
@@ -51,6 +52,18 @@ type EstadoCuentaCliente = {
   credito_disponible_usd?: number | null
   saldo_pendiente_neto_usd?: number | null
   saldo_favor_neto_usd?: number | null
+}
+
+type CuentaPorCobrar = {
+  id: string
+  cliente_id: string | null
+  cliente_nombre?: string | null
+  concepto?: string | null
+  saldo_usd?: number | null
+  estado?: string | null
+  fecha_venta?: string | null
+  created_at?: string | null
+  notas?: string | null
 }
 
 type EntrenamientoPlanRow = {
@@ -292,6 +305,14 @@ function getEstadoCuentaDetalle(estado: EstadoCuentaCliente | null | undefined) 
   return 'Sin deuda pendiente'
 }
 
+
+function truncateText(value: string | null | undefined, max = 90) {
+  const text = (value || '').trim()
+  if (!text) return 'Sin concepto'
+  if (text.length <= max) return text
+  return `${text.slice(0, max).trimEnd()}…`
+}
+
 const inputClassName = `
   w-full rounded-2xl border border-white/10 bg-white/[0.03]
   px-4 py-3 text-sm text-white outline-none transition
@@ -312,6 +333,7 @@ export default function DashboardPage() {
   const [entrenamientosPlan, setEntrenamientosPlan] = useState<EntrenamientoPlanRow[]>([])
   const [empleadosAsistencia, setEmpleadosAsistencia] = useState<EmpleadoAsistenciaRow[]>([])
   const [estadosCuentaClientes, setEstadosCuentaClientes] = useState<EstadoCuentaCliente[]>([])
+  const [cuentasPorCobrar, setCuentasPorCobrar] = useState<CuentaPorCobrar[]>([])
 
   const [empleadoActualId, setEmpleadoActualId] = useState<string>('')
 
@@ -388,6 +410,7 @@ export default function DashboardPage() {
         entrenamientosPlanRes,
         empleadosAsistenciaRes,
         estadosCuentaRes,
+        cuentasPorCobrarRes,
       ] = await Promise.all([
         supabase.from('clientes').select('id, estado, created_at'),
         supabase.from('citas').select('*'),
@@ -453,6 +476,22 @@ export default function DashboardPage() {
             saldo_pendiente_neto_usd,
             saldo_favor_neto_usd
           `),
+        supabase
+          .from('cuentas_por_cobrar')
+          .select(`
+            id,
+            cliente_id,
+            cliente_nombre,
+            concepto,
+            saldo_usd,
+            estado,
+            fecha_venta,
+            created_at,
+            notas
+          `)
+          .gt('saldo_usd', 0)
+          .neq('estado', 'pagado')
+          .order('created_at', { ascending: false }),
       ])
 
       if (clientesRes.error) throw new Error(clientesRes.error.message)
@@ -463,6 +502,7 @@ export default function DashboardPage() {
       if (entrenamientosPlanRes.error) throw new Error(entrenamientosPlanRes.error.message)
       if (empleadosAsistenciaRes.error) throw new Error(empleadosAsistenciaRes.error.message)
       if (estadosCuentaRes.error) throw new Error(estadosCuentaRes.error.message)
+      if (cuentasPorCobrarRes.error) throw new Error(cuentasPorCobrarRes.error.message)
 
       setClientes((clientesRes.data || []) as Cliente[])
       setCitas((citasRes.data || []) as CitaRaw[])
@@ -472,6 +512,7 @@ export default function DashboardPage() {
       setEntrenamientosPlan((entrenamientosPlanRes.data || []) as unknown as EntrenamientoPlanRow[])
       setEmpleadosAsistencia((empleadosAsistenciaRes.data || []) as unknown as EmpleadoAsistenciaRow[])
       setEstadosCuentaClientes((estadosCuentaRes.data || []) as EstadoCuentaCliente[])
+      setCuentasPorCobrar((cuentasPorCobrarRes.data || []) as CuentaPorCobrar[])
     } catch (err: any) {
       console.error(err)
       setError(err?.message || 'No se pudo cargar el dashboard.')
@@ -483,6 +524,7 @@ export default function DashboardPage() {
       setEntrenamientosPlan([])
       setEmpleadosAsistencia([])
       setEstadosCuentaClientes([])
+      setCuentasPorCobrar([])
     } finally {
       setLoading(false)
     }
@@ -596,6 +638,54 @@ export default function DashboardPage() {
     })
     return map
   }, [estadosCuentaClientes])
+
+  const cuentasPorCobrarPorCliente = useMemo(() => {
+    const map = new Map<string, CuentaPorCobrar[]>()
+
+    cuentasPorCobrar
+      .filter((row) => Number(row.saldo_usd || 0) > 0.009)
+      .forEach((row) => {
+        if (!row.cliente_id) return
+        const key = String(row.cliente_id)
+        const current = map.get(key) || []
+        current.push(row)
+        map.set(key, current)
+      })
+
+    return map
+  }, [cuentasPorCobrar])
+
+  const clientesConSaldoPendiente = useMemo(() => {
+    const rows = Array.from(cuentasPorCobrarPorCliente.entries()).map(([clienteId, items]) => {
+      const estadoCuenta = mapaEstadoCuentaClientes.get(clienteId)
+      const saldoPendiente = Number(estadoCuenta?.saldo_pendiente_neto_usd || 0)
+      const deudaTotal = Number(estadoCuenta?.total_pendiente_usd || 0)
+      const nombreFallback = items.find((x) => (x.cliente_nombre || '').trim())?.cliente_nombre || 'Cliente'
+
+      const razones = items
+        .sort((a, b) => new Date(b.created_at || b.fecha_venta || '').getTime() - new Date(a.created_at || a.fecha_venta || '').getTime())
+        .map((item) => ({
+          id: item.id,
+          concepto: truncateText(item.concepto || item.notas || 'Saldo pendiente', 120),
+          saldo_usd: Number(item.saldo_usd || 0),
+          fecha: item.fecha_venta || item.created_at || null,
+          notas: item.notas || null,
+        }))
+
+      return {
+        cliente_id: clienteId,
+        cliente_nombre: nombreFallback,
+        saldo_pendiente_neto_usd: saldoPendiente,
+        total_pendiente_usd: deudaTotal,
+        razones,
+      }
+    })
+
+    return rows
+      .filter((row) => row.saldo_pendiente_neto_usd > 0.009 || row.razones.length > 0)
+      .sort((a, b) => b.saldo_pendiente_neto_usd - a.saldo_pendiente_neto_usd)
+      .slice(0, 8)
+  }, [cuentasPorCobrarPorCliente, mapaEstadoCuentaClientes])
 
   const sesionesPlanHoyCompactas = useMemo(() => {
     return entrenamientosPlan.filter((row) => {
@@ -1365,6 +1455,76 @@ export default function DashboardPage() {
           </Section>
         </div>
       </div>
+
+
+      <Section
+        title="Clientes con saldo pendiente"
+        description="Muestra cuánto deben y la razón o concepto del saldo pendiente."
+      >
+        <div className="space-y-3">
+          {clientesConSaldoPendiente.length === 0 ? (
+            <Card className="p-4">
+              <p className="text-sm text-white/55">No hay clientes con saldo pendiente.</p>
+            </Card>
+          ) : (
+            clientesConSaldoPendiente.map((row) => (
+              <Card key={row.cliente_id} className="p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-base font-semibold text-white">{row.cliente_nombre}</p>
+                    <p className="mt-1 text-sm text-rose-300">
+                      Debe {money(row.saldo_pendiente_neto_usd || row.total_pendiente_usd || 0)}
+                    </p>
+                    <p className="mt-1 text-xs text-white/45">
+                      Deuda total registrada: {money(row.total_pendiente_usd || 0)}
+                    </p>
+                  </div>
+
+                  <Link
+                    href={`/admin/cobranzas/pendientes?cliente=${row.cliente_id}`}
+                    className="inline-flex rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
+                  >
+                    Ver cobranzas
+                  </Link>
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  {row.razones.length === 0 ? (
+                    <p className="text-sm text-white/55">No hay conceptos disponibles.</p>
+                  ) : (
+                    row.razones.map((razon) => (
+                      <div
+                        key={razon.id}
+                        className="rounded-2xl border border-rose-400/15 bg-rose-400/5 p-3"
+                      >
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-white break-words whitespace-normal">
+                              {razon.concepto}
+                            </p>
+                            {razon.notas ? (
+                              <p className="mt-1 text-xs text-white/45 break-words whitespace-normal">
+                                {razon.notas}
+                              </p>
+                            ) : null}
+                            <p className="mt-1 text-xs text-white/35">
+                              {razon.fecha ? `Fecha: ${formatDate(razon.fecha)}` : 'Fecha: —'}
+                            </p>
+                          </div>
+
+                          <span className="shrink-0 rounded-full border border-rose-400/20 bg-rose-400/10 px-2.5 py-1 text-xs font-medium text-rose-300">
+                            {money(razon.saldo_usd)}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </Card>
+            ))
+          )}
+        </div>
+      </Section>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <Section title="Personal con más citas" description="Top 5 del mes.">

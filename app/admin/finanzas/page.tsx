@@ -954,7 +954,7 @@ export default function FinanzasResumenPage() {
           href="/admin/cobranzas"
           className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-6 py-3 text-sm font-medium text-white transition hover:bg-white/10 active:scale-95"
         >
-          <span>📊</span> Admin Cobranzas
+          <span>📊</span> Cobranzas
         </Link>
 
         <Link

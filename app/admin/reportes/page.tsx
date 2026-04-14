@@ -1,7 +1,7 @@
 'use client'
 export const dynamic = 'force-dynamic'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import ExcelJS from 'exceljs'
 import { saveAs } from 'file-saver'
 import jsPDF from 'jspdf'
@@ -26,11 +26,17 @@ import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import StatCard from '@/components/ui/StatCard'
 
+// ─── Tipos ────────────────────────────────────────────────────────────────────
+
 type ClienteRow = {
   id: string
   nombre: string
   telefono: string | null
   email: string | null
+  fecha_nacimiento: string | null
+  genero: string | null
+  direccion: string | null
+  cedula: string | null
   estado: string
   created_at: string
   terapeuta_id: string | null
@@ -166,6 +172,43 @@ type ConstanciaData = {
   sesiones: Array<{ fecha: string; terapeuta: string; tipoSesion: string }>
 }
 
+
+type DocumentoGeneradoItem = {
+  id: string
+  tipo: 'constancia' | 'informe_sesiones' | 'presupuesto'
+  paciente: string
+  fecha: string
+  detalle: string
+}
+
+type DocumentoClienteOption = {
+  id: string
+  nombre: string
+  cedula?: string | null
+  telefono?: string | null
+  direccion?: string | null
+  fechaNacimiento?: string | null
+  terapeuta?: string | null
+}
+
+// ─── Datos para PDF Presupuesto ───────────────────────────────────────────────
+type LineaPresupuestoPDF = {
+  cantidad: number
+  tipoSesion: string
+  precio: number
+}
+type PresupuestoPDFData = {
+  numero: number
+  fecha: string
+  atencion: string
+  direccion: string
+  rif: string
+  telefono: string
+  lineas: LineaPresupuestoPDF[]
+  observaciones?: string
+  realizadoPor?: string
+}
+
 const TIPOS = [
   { value: 'clientes', label: 'Clientes' },
   { value: 'planes', label: 'Planes' },
@@ -187,6 +230,8 @@ const inputClassName = `
   focus:border-white/20 focus:bg-white/[0.05]
 `
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null
   return value ?? null
@@ -200,7 +245,6 @@ function money(value: number, currency: 'USD' | 'VES' = 'USD') {
       maximumFractionDigits: 2,
     }).format(Number(value || 0))
   }
-
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
@@ -211,68 +255,44 @@ function money(value: number, currency: 'USD' | 'VES' = 'USD') {
 function todayISO() {
   return new Date().toISOString().slice(0, 10)
 }
-
 function firstDayOfMonthISO() {
   const now = new Date()
   return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10)
 }
-
 function firstDayOfYearISO() {
   const now = new Date()
   return new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10)
 }
-
 function daysAgoISO(days: number) {
   const d = new Date()
   d.setDate(d.getDate() - days)
   return d.toISOString().slice(0, 10)
 }
-
 function shortDate(value: string) {
   try {
     return new Date(value).toLocaleDateString('es-ES', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
+      day: '2-digit', month: '2-digit', year: 'numeric',
     })
-  } catch {
-    return value
-  }
+  } catch { return value }
 }
-
 function formatDateTime(value: string) {
   try {
     return new Date(value).toLocaleString('es-ES', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit',
     })
-  } catch {
-    return value
-  }
+  } catch { return value }
 }
-
 function titleCase(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/(^|\s)\S/g, (l) => l.toUpperCase())
+  return value.toLowerCase().replace(/(^|\s)\S/g, (l) => l.toUpperCase())
 }
-
 function formatDateLong(value: string) {
   try {
     return new Date(`${value}T12:00:00`).toLocaleDateString('es-ES', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
     })
-  } catch {
-    return value
-  }
+  } catch { return value }
 }
-
 function getWeekLabel(dateString: string) {
   const date = new Date(dateString)
   const firstDay = new Date(date.getFullYear(), 0, 1)
@@ -280,45 +300,74 @@ function getWeekLabel(dateString: string) {
   const week = Math.ceil((pastDays + firstDay.getDay() + 1) / 7)
   return `${date.getFullYear()}-S${String(week).padStart(2, '0')}`
 }
-
 function getMonthLabel(dateString: string) {
   const d = new Date(dateString)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
-
 function getYearLabel(dateString: string) {
   return String(new Date(dateString).getFullYear())
 }
-
 function normalizeCell(value: unknown) {
   if (value === null || value === undefined) return ''
   if (typeof value === 'number') return value
   return String(value)
 }
 
+function sanitizeFilePart(value: string) {
+  return String(value || '')
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '')
+    .replace(/\s+/g, '_')
+    .slice(0, 80)
+}
+
+function calcularEdadDesdeFecha(fechaNacimiento?: string | null) {
+  if (!fechaNacimiento) return ''
+  const birth = new Date(`${fechaNacimiento}T12:00:00`)
+  if (Number.isNaN(birth.getTime())) return ''
+  const today = new Date()
+  let edad = today.getFullYear() - birth.getFullYear()
+  const monthDiff = today.getMonth() - birth.getMonth()
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+    edad -= 1
+  }
+  return edad > 0 ? String(edad) : ''
+}
+
+function formatBudgetDate(value: string) {
+  try {
+    return new Date(`${value}T12:00:00`).toLocaleDateString('es-ES', {
+      day: '2-digit',
+      month: 'short',
+      year: '2-digit',
+    })
+  } catch {
+    return value
+  }
+}
+
+// ─── Normalize helpers ────────────────────────────────────────────────────────
+
 function normalizeClienteRow(row: any): ClienteRow {
   const empleado = firstOrNull(row?.empleados)
-
   return {
     id: String(row?.id ?? ''),
     nombre: String(row?.nombre ?? ''),
     telefono: row?.telefono ?? null,
     email: row?.email ?? null,
+    fecha_nacimiento: row?.fecha_nacimiento ?? null,
+    genero: row?.genero ?? null,
+    direccion: row?.direccion ?? null,
+    cedula: row?.cedula ?? null,
     estado: String(row?.estado ?? ''),
     created_at: String(row?.created_at ?? ''),
     terapeuta_id: row?.terapeuta_id ?? null,
-    empleados: empleado
-      ? {
-          nombre: String(empleado?.nombre ?? ''),
-        }
-      : null,
+    empleados: empleado ? { nombre: String(empleado?.nombre ?? '') } : null,
   }
 }
-
 function normalizePlanRow(row: any): PlanRow {
   const cliente = firstOrNull(row?.clientes)
   const plan = firstOrNull(row?.planes)
-
   return {
     id: String(row?.id ?? ''),
     fecha_inicio: row?.fecha_inicio ?? null,
@@ -328,24 +377,17 @@ function normalizePlanRow(row: any): PlanRow {
     estado: String(row?.estado ?? ''),
     created_at: String(row?.created_at ?? ''),
     clientes: cliente ? { nombre: String(cliente?.nombre ?? '') } : null,
-    planes: plan
-      ? {
-          nombre: String(plan?.nombre ?? ''),
-          precio: Number(plan?.precio || 0),
-        }
-      : null,
+    planes: plan ? { nombre: String(plan?.nombre ?? ''), precio: Number(plan?.precio || 0) } : null,
     precio_final_usd: row?.precio_final_usd != null ? Number(row.precio_final_usd) : null,
     monto_final_bs: row?.monto_final_bs != null ? Number(row.monto_final_bs) : null,
     moneda_venta: row?.moneda_venta ?? null,
   }
 }
-
 function normalizeCitaRow(row: any): CitaRow {
   const cliente = firstOrNull(row?.clientes)
   const empleado = firstOrNull(row?.empleados)
   const servicio = firstOrNull(row?.servicios)
   const recurso = firstOrNull(row?.recursos)
-
   return {
     id: String(row?.id ?? ''),
     fecha: String(row?.fecha ?? ''),
@@ -354,20 +396,13 @@ function normalizeCitaRow(row: any): CitaRow {
     estado: String(row?.estado ?? ''),
     clientes: cliente ? { nombre: String(cliente?.nombre ?? '') } : null,
     empleados: empleado ? { nombre: String(empleado?.nombre ?? '') } : null,
-    servicios: servicio
-      ? {
-          nombre: String(servicio?.nombre ?? ''),
-          precio: servicio?.precio != null ? Number(servicio.precio) : undefined,
-        }
-      : null,
+    servicios: servicio ? { nombre: String(servicio?.nombre ?? ''), precio: servicio?.precio != null ? Number(servicio.precio) : undefined } : null,
     recursos: recurso ? { nombre: String(recurso?.nombre ?? '') } : null,
   }
 }
-
 function normalizeIngresoRow(row: any): IngresoRow {
   const cliente = firstOrNull(row?.clientes)
   const metodo = firstOrNull(row?.metodos_pago_v2)
-
   return {
     id: String(row?.id ?? ''),
     fecha: String(row?.fecha ?? ''),
@@ -382,19 +417,12 @@ function normalizeIngresoRow(row: any): IngresoRow {
     monto_equivalente_bs: row?.monto_equivalente_bs != null ? Number(row.monto_equivalente_bs) : null,
     referencia: row?.referencia ?? null,
     clientes: cliente ? { nombre: String(cliente?.nombre ?? '') } : null,
-    metodos_pago_v2: metodo
-      ? {
-          nombre: String(metodo?.nombre ?? ''),
-          moneda: metodo?.moneda ?? null,
-        }
-      : null,
+    metodos_pago_v2: metodo ? { nombre: String(metodo?.nombre ?? ''), moneda: metodo?.moneda ?? null } : null,
   }
 }
-
 function normalizeEgresoRow(row: any): EgresoRow {
   const empleado = firstOrNull(row?.empleados)
   const metodo = firstOrNull(row?.metodos_pago_v2)
-
   return {
     id: String(row?.id ?? ''),
     fecha: String(row?.fecha ?? ''),
@@ -408,19 +436,12 @@ function normalizeEgresoRow(row: any): EgresoRow {
     monto_equivalente_usd: row?.monto_equivalente_usd != null ? Number(row.monto_equivalente_usd) : null,
     monto_equivalente_bs: row?.monto_equivalente_bs != null ? Number(row.monto_equivalente_bs) : null,
     referencia: row?.referencia ?? null,
-    metodos_pago_v2: metodo
-      ? {
-          nombre: String(metodo?.nombre ?? ''),
-          moneda: metodo?.moneda ?? null,
-        }
-      : null,
+    metodos_pago_v2: metodo ? { nombre: String(metodo?.nombre ?? ''), moneda: metodo?.moneda ?? null } : null,
     empleados: empleado ? { nombre: String(empleado?.nombre ?? '') } : null,
   }
 }
-
 function normalizeCobranzaRow(row: any): CobranzaRow {
   const cliente = firstOrNull(row?.clientes)
-
   return {
     id: String(row?.id ?? ''),
     cliente_nombre: String(row?.cliente_nombre ?? ''),
@@ -436,10 +457,8 @@ function normalizeCobranzaRow(row: any): CobranzaRow {
     clientes: cliente ? { nombre: String(cliente?.nombre ?? '') } : null,
   }
 }
-
 function normalizeInventarioRow(row: any): InventarioRow {
   const inventario = firstOrNull(row?.inventario)
-
   return {
     id: String(row?.id ?? ''),
     inventario_id: String(row?.inventario_id ?? ''),
@@ -454,11 +473,9 @@ function normalizeInventarioRow(row: any): InventarioRow {
     inventario: inventario ? { nombre: String(inventario?.nombre ?? '') } : null,
   }
 }
-
 function normalizeNominaRow(row: any): NominaRow {
   const empleado = firstOrNull(row?.empleados)
   const metodo = firstOrNull(row?.metodos_pago_v2)
-
   return {
     id: String(row?.id ?? ''),
     empleado_id: String(row?.empleado_id ?? ''),
@@ -477,6 +494,8 @@ function normalizeNominaRow(row: any): NominaRow {
   }
 }
 
+// ─── Fetch image as base64 ────────────────────────────────────────────────────
+
 async function fetchImageAsBase64(src: string) {
   const res = await fetch(src)
   const blob = await res.blob()
@@ -488,6 +507,445 @@ async function fetchImageAsBase64(src: string) {
   })
 }
 
+async function addPdfDocumentWatermark(doc: jsPDF, logoSrc: string, options?: { x?: number; y?: number; w?: number; h?: number; opacity?: number }) {
+  try {
+    const base64 = await fetchImageAsBase64(logoSrc)
+    const x = options?.x ?? 46
+    const y = options?.y ?? 70
+    const w = options?.w ?? 118
+    const h = options?.h ?? 118
+    const opacity = options?.opacity ?? 0.05
+    doc.setGState?.(new (doc as any).GState({ opacity }))
+    doc.addImage(base64, 'PNG', x, y, w, h)
+    doc.setGState?.(new (doc as any).GState({ opacity: 1 }))
+  } catch {}
+}
+
+
+async function addStrongCenteredWatermark(doc: jsPDF, logoSrc: string) {
+  await addPdfDocumentWatermark(doc, logoSrc, { x: 30, y: 55, w: 150, h: 150, opacity: 0.06 })
+  await addPdfDocumentWatermark(doc, logoSrc, { x: 42, y: 68, w: 126, h: 126, opacity: 0.035 })
+}
+
+async function applyCorporateBackground(doc: jsPDF, logoSrc: string) {
+  const totalPages = (doc as any).internal.getNumberOfPages?.() || 1
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i)
+    await addStrongCenteredWatermark(doc, logoSrc)
+  }
+}
+
+async function drawCorporateHeader(args: {
+  doc: jsPDF
+  logoSrc: string
+  title: string
+  subtitle?: string
+  dateText?: string
+}) {
+  const { doc, logoSrc, title, subtitle, dateText } = args
+  try {
+    const base64 = await fetchImageAsBase64(logoSrc)
+    doc.addImage(base64, 'PNG', 15, 10, 28, 28)
+  } catch {}
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(12)
+  doc.setTextColor(20)
+  doc.text('Prehab Carabobo C.A.', 15, 42)
+  doc.setFontSize(10)
+  doc.text('J-504483931', 15, 49)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(13)
+  doc.text(title.toUpperCase(), 105, 18, { align: 'center' })
+  if (subtitle) {
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9)
+    doc.setTextColor(75)
+    doc.text(subtitle, 105, 25, { align: 'center' })
+  }
+
+  if (dateText) {
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(9)
+    doc.setTextColor(40)
+    doc.text(dateText, 188, 24, { align: 'right' })
+  }
+
+  doc.setDrawColor(120)
+  doc.setLineWidth(0.35)
+  doc.line(15, 54, 195, 54)
+}
+
+function drawCorporateFooter(doc: jsPDF) {
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  const footerTop = pageHeight - 34
+
+  doc.setFillColor(112, 112, 112)
+  doc.rect(0, footerTop, pageWidth, 34, 'F')
+
+  doc.setTextColor(255)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8.5)
+  doc.text('Información de contacto', 20, footerTop + 9)
+
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8)
+  doc.text('Complejo Bicentenario, Naguanagua', 20, footerTop + 18)
+  doc.text('Redes sociales: @RPM.VZLA', 80, footerTop + 18)
+  doc.text('Teléfono: 0412-2405745', 145, footerTop + 18)
+}
+
+async function finalizeCorporatePdf(doc: jsPDF, logoSrc: string) {
+  const totalPages = (doc as any).internal.getNumberOfPages?.() || 1
+  await applyCorporateBackground(doc, logoSrc)
+
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i)
+    drawCorporateFooter(doc)
+    doc.setTextColor(255)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(7)
+    doc.text(`Página ${i} de ${totalPages}`, 188, doc.internal.pageSize.getHeight() - 6, { align: 'right' })
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF 1: CIERRE DE CAJA / REPORTE DE INGRESOS
+// Formato: A4 portrait, tabla de ingresos + resumen final
+// ─────────────────────────────────────────────────────────────────────────────
+async function exportCierrePDF(args: {
+  ingresos: IngresoRow[]
+  egresos: EgresoRow[]
+  fechaInicio: string
+  fechaFin: string
+  monedaVista: 'USD' | 'BS'
+  logoSrc?: string
+}) {
+  const { ingresos, egresos, fechaInicio, fechaFin, monedaVista, logoSrc = '/logo-imprimir.png' } = args
+
+  const ingresosValidos = ingresos.filter((x) => x.estado === 'pagado')
+  const egresosValidos = egresos.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')
+
+  if (!ingresosValidos.length && !egresosValidos.length) {
+    alert('No hay movimientos pagados/liquidados para generar el cierre.')
+    return
+  }
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+  const marginX = 15
+  let cursorY = 62
+
+  await drawCorporateHeader({
+    doc,
+    logoSrc,
+    title: 'Cierre de caja',
+    subtitle: `Período ${shortDate(fechaInicio)} al ${shortDate(fechaFin)}`,
+    dateText: `Fecha: ${shortDate(todayISO())}`,
+  })
+
+  const totalIngUsd = ingresosValidos.reduce((a, r) => a + Number(r.monto_equivalente_usd || 0), 0)
+  const totalIngBs = ingresosValidos.reduce((a, r) => a + Number(r.monto_equivalente_bs || 0), 0)
+  const totalEgrUsd = egresosValidos.reduce((a, r) => a + Number(r.monto_equivalente_usd || 0), 0)
+  const totalEgrBs = egresosValidos.reduce((a, r) => a + Number(r.monto_equivalente_bs || 0), 0)
+  const balUsd = totalIngUsd - totalEgrUsd
+  const balBs = totalIngBs - totalEgrBs
+
+  const fmtUsd = (n: number) => `$ ${n.toFixed(2)}`
+  const fmtBs = (n: number) => `Bs. ${n.toFixed(2)}`
+
+  doc.setFillColor(246, 246, 246)
+  doc.roundedRect(marginX, cursorY, 180, 24, 2, 2, 'F')
+  doc.setDrawColor(205)
+  doc.roundedRect(marginX, cursorY, 180, 24, 2, 2, 'S')
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8.5)
+  doc.setTextColor(60)
+  doc.text('INGRESOS', 35, cursorY + 7, { align: 'center' })
+  doc.text('EGRESOS', 90, cursorY + 7, { align: 'center' })
+  doc.text('BALANCE', 145, cursorY + 7, { align: 'center' })
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(10)
+  doc.setTextColor(20)
+  doc.text(fmtUsd(totalIngUsd), 35, cursorY + 14, { align: 'center' })
+  doc.text(fmtUsd(totalEgrUsd), 90, cursorY + 14, { align: 'center' })
+  doc.text(fmtUsd(balUsd), 145, cursorY + 14, { align: 'center' })
+
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8)
+  doc.setTextColor(95)
+  doc.text(fmtBs(totalIngBs), 35, cursorY + 20, { align: 'center' })
+  doc.text(fmtBs(totalEgrBs), 90, cursorY + 20, { align: 'center' })
+  doc.text(fmtBs(balBs), 145, cursorY + 20, { align: 'center' })
+
+  cursorY += 32
+
+  if (ingresosValidos.length > 0) {
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(9)
+    doc.setTextColor(25)
+    doc.text('Detalles del cierre · Ingresos', marginX, cursorY)
+
+    autoTable(doc, {
+      startY: cursorY + 4,
+      margin: { left: marginX, right: marginX, bottom: 40 },
+      head: [['Fecha', 'Concepto', 'Cliente', 'Método', 'Monto USD', 'Monto Bs']],
+      body: ingresosValidos.map((r) => [
+        shortDate(r.fecha),
+        r.concepto,
+        r.clientes?.nombre || '—',
+        r.metodos_pago_v2?.nombre || '—',
+        fmtUsd(Number(r.monto_equivalente_usd || 0)),
+        fmtBs(Number(r.monto_equivalente_bs || 0)),
+      ]),
+      theme: 'grid',
+      styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.4, lineColor: [210, 210, 210], lineWidth: 0.2 },
+      headStyles: { fillColor: [65, 65, 65], textColor: [255, 255, 255], fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [248, 248, 248] },
+      columnStyles: { 4: { halign: 'right' }, 5: { halign: 'right' } },
+    })
+    cursorY = ((doc as any).lastAutoTable?.finalY || cursorY) + 8
+  }
+
+  if (egresosValidos.length > 0) {
+    if (cursorY > 215) {
+      doc.addPage()
+      await drawCorporateHeader({
+        doc,
+        logoSrc,
+        title: 'Cierre de caja',
+        subtitle: `Período ${shortDate(fechaInicio)} al ${shortDate(fechaFin)}`,
+        dateText: `Fecha: ${shortDate(todayISO())}`,
+      })
+      cursorY = 62
+    }
+
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(9)
+    doc.setTextColor(25)
+    doc.text('Detalles del cierre · Egresos', marginX, cursorY)
+
+    autoTable(doc, {
+      startY: cursorY + 4,
+      margin: { left: marginX, right: marginX, bottom: 40 },
+      head: [['Fecha', 'Concepto', 'Categoría', 'Proveedor/Empleado', 'Monto USD', 'Monto Bs']],
+      body: egresosValidos.map((r) => [
+        shortDate(r.fecha),
+        r.concepto,
+        r.categoria,
+        r.empleados?.nombre || r.proveedor || '—',
+        fmtUsd(Number(r.monto_equivalente_usd || 0)),
+        fmtBs(Number(r.monto_equivalente_bs || 0)),
+      ]),
+      theme: 'grid',
+      styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.4, lineColor: [210, 210, 210], lineWidth: 0.2 },
+      headStyles: { fillColor: [65, 65, 65], textColor: [255, 255, 255], fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [248, 248, 248] },
+      columnStyles: { 4: { halign: 'right' }, 5: { halign: 'right' } },
+    })
+  }
+
+  await finalizeCorporatePdf(doc, logoSrc)
+  doc.save(`RPM_Cierre_${sanitizeFilePart(fechaInicio)}_${sanitizeFilePart(fechaFin)}.pdf`)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF 2: PRESUPUESTO — replica exacta del formato de ejemplo
+// ─────────────────────────────────────────────────────────────────────────────
+async function exportPresupuestoPDF(data: PresupuestoPDFData, logoSrc = '/logo-imprimir.png') {
+  if (!data.atencion || !data.lineas.length) {
+    alert('Completa el nombre del cliente y al menos una línea de presupuesto.')
+    return
+  }
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+  const marginX = 15
+  let cursorY = 60
+  const fmtMoney = (n: number) => `$ ${n.toFixed(2)}`
+  const total = data.lineas.reduce((acc, l) => acc + l.cantidad * l.precio, 0)
+
+  await drawCorporateHeader({
+    doc,
+    logoSrc,
+    title: 'Presupuesto',
+    subtitle: `Nº de Presupuesto: ${data.numero}`,
+    dateText: `Fecha: ${data.fecha}`,
+  })
+
+  doc.setDrawColor(195)
+  doc.setLineWidth(0.25)
+  doc.rect(marginX, cursorY, 180, 28)
+
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+  doc.setTextColor(70)
+  doc.text('Atención:', marginX + 3, cursorY + 7)
+  doc.text('Dirección:', marginX + 3, cursorY + 14)
+  doc.text('RIF:', marginX + 3, cursorY + 21)
+  doc.text('Teléfono:', 120, cursorY + 21)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setTextColor(20)
+  doc.text(String(data.atencion || '').toUpperCase(), marginX + 25, cursorY + 7)
+  doc.text(String(data.direccion || '—'), marginX + 25, cursorY + 14)
+  doc.text(String(data.rif || '—'), marginX + 13, cursorY + 21)
+  doc.text(String(data.telefono || '—'), 138, cursorY + 21)
+
+  cursorY += 38
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(10)
+  doc.text('Detalles del Presupuesto', 105, cursorY, { align: 'center' })
+
+  autoTable(doc, {
+    startY: cursorY + 4,
+    margin: { left: marginX, right: marginX, bottom: 42 },
+    head: [['CANTIDAD', 'TIPO DE SESIONES', 'PRECIO', 'SUBTOTAL LINEA']],
+    body: data.lineas.map((l) => [
+      l.cantidad,
+      l.tipoSesion.toUpperCase(),
+      fmtMoney(l.precio),
+      fmtMoney(l.cantidad * l.precio),
+    ]),
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 8.8, cellPadding: 2.8, lineColor: [205, 205, 205], lineWidth: 0.2 },
+    headStyles: { fillColor: [65, 65, 65], textColor: [255, 255, 255], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 248, 248] },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 26 },
+      2: { halign: 'right', cellWidth: 32 },
+      3: { halign: 'right', cellWidth: 38 },
+    },
+    foot: [[
+      '', '',
+      { content: 'TOTAL PRESUPUESTO:', styles: { halign: 'right', fontStyle: 'bold' } },
+      { content: fmtMoney(total), styles: { halign: 'right', fontStyle: 'bold' } },
+    ]],
+    footStyles: { fillColor: [255, 255, 255], textColor: [20, 20, 20] },
+  })
+
+  cursorY = ((doc as any).lastAutoTable?.finalY || cursorY) + 10
+
+  if (data.observaciones) {
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9)
+    doc.setTextColor(70)
+    doc.text('Observaciones:', marginX, cursorY)
+    doc.setTextColor(20)
+    const lines = doc.splitTextToSize(data.observaciones, 145)
+    doc.text(lines, marginX + 26, cursorY)
+    cursorY += lines.length * 5 + 4
+  }
+
+  const firmaY = Math.max(cursorY + 10, 212)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+  doc.setTextColor(20)
+  doc.text('Realizado por:', 105, firmaY, { align: 'center' })
+  doc.line(70, firmaY + 14, 140, firmaY + 14)
+  if (data.realizadoPor) {
+    doc.setFont('helvetica', 'bold')
+    doc.text(String(data.realizadoPor).toUpperCase(), 105, firmaY + 19, { align: 'center' })
+  }
+
+  await finalizeCorporatePdf(doc, logoSrc)
+  doc.save(`RPM_Presupuesto_${sanitizeFilePart(data.atencion)}.pdf`)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF 3: INFORME DE SESIONES — resumen clínico por cliente
+// ─────────────────────────────────────────────────────────────────────────────
+async function exportInformeSesionesPDF(args: {
+  citas: CitaRow[]
+  paciente: string
+  cedula: string
+  terapeuta: string
+  ciudad: string
+  logoSrc?: string
+}) {
+  const { citas, paciente, cedula, terapeuta, ciudad, logoSrc = '/logo-imprimir.png' } = args
+
+  const sesionesValidas = citas
+    .filter((r) => (r.estado || '').toLowerCase() !== 'cancelada')
+    .sort((a, b) => (a.fecha > b.fecha ? 1 : -1))
+
+  if (!paciente || !sesionesValidas.length) {
+    alert('Indica el paciente y asegúrate de tener citas no canceladas en el período.')
+    return
+  }
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+  const marginX = 15
+  let cursorY = 62
+
+  await drawCorporateHeader({
+    doc,
+    logoSrc,
+    title: 'Informe de sesiones',
+    subtitle: ciudad || 'Valencia',
+    dateText: `Fecha: ${shortDate(todayISO())}`,
+  })
+
+  doc.setFont('times', 'bold')
+  doc.setFontSize(11)
+  doc.setTextColor(20)
+  doc.text(`Paciente: ${paciente}`, 25, cursorY)
+  if (cedula) doc.text(`Cédula: ${cedula}`, 120, cursorY)
+  cursorY += 10
+  doc.text(`Terapeuta: ${terapeuta || '—'}`, 25, cursorY)
+  doc.text(`Total sesiones: ${sesionesValidas.length}`, 120, cursorY)
+
+  autoTable(doc, {
+    startY: cursorY + 8,
+    margin: { left: marginX, right: marginX, bottom: 42 },
+    head: [['N°', 'FECHA', 'HORA', 'TERAPEUTA', 'TIPO DE SESIÓN', 'ESTADO']],
+    body: sesionesValidas.map((r, i) => [
+      i + 1,
+      shortDate(r.fecha),
+      `${r.hora_inicio} - ${r.hora_fin}`,
+      (r.empleados?.nombre || terapeuta || '—').toUpperCase(),
+      (r.servicios?.nombre || 'SESIÓN DE FISIOTERAPIA').toUpperCase(),
+      r.estado.toUpperCase(),
+    ]),
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.4, lineColor: [205, 205, 205], lineWidth: 0.2 },
+    headStyles: { fillColor: [65, 65, 65], textColor: [255, 255, 255], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 248, 248] },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 10 },
+      1: { cellWidth: 22 },
+      5: { halign: 'center', cellWidth: 24 },
+    },
+  })
+
+  const finalY = ((doc as any).lastAutoTable?.finalY || (cursorY + 60)) + 8
+  const primera = sesionesValidas[0]?.fecha ? shortDate(sesionesValidas[0].fecha) : '—'
+  const ultima = sesionesValidas[sesionesValidas.length - 1]?.fecha ? shortDate(sesionesValidas[sesionesValidas.length - 1].fecha) : '—'
+
+  doc.setFont('times', 'normal')
+  doc.setFontSize(11)
+  const texto = `Se deja constancia de que el paciente ${String(paciente).toUpperCase()} recibió atención fisioterapéutica desde ${primera} hasta ${ultima}, según el registro de sesiones descrito anteriormente.`
+  const lines = doc.splitTextToSize(texto, 158)
+  doc.text(lines, 25, Math.max(finalY, 205))
+
+  const firmaY = Math.max(finalY + lines.length * 6 + 16, 232)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+  doc.text('Realizado por:', 105, firmaY, { align: 'center' })
+  doc.line(70, firmaY + 14, 140, firmaY + 14)
+  doc.setFont('helvetica', 'bold')
+  doc.text((terapeuta || 'F/T. JORGE MANTILLA').toUpperCase(), 105, firmaY + 19, { align: 'center' })
+
+  await finalizeCorporatePdf(doc, logoSrc)
+  doc.save(`RPM_Informe_Sesiones_${sanitizeFilePart(paciente)}.pdf`)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Export Excel (sin cambios)
+// ─────────────────────────────────────────────────────────────────────────────
 async function exportStyledExcel(args: {
   title: string
   subtitle?: string
@@ -497,41 +955,23 @@ async function exportStyledExcel(args: {
   logoSrc?: string
   accentColor?: string
 }) {
-  const {
-    title,
-    subtitle,
-    sheetName = 'Reporte',
-    filename,
-    rows,
-    logoSrc = '/logo-rpm.png',
-    accentColor = '111827',
-  } = args
+  const { title, subtitle, sheetName = 'Reporte', filename, rows, logoSrc = '/logo-rpm.png', accentColor = '111827' } = args
 
-  if (!rows.length) {
-    alert('No hay datos para exportar.')
-    return
-  }
+  if (!rows.length) { alert('No hay datos para exportar.'); return }
 
   const workbook = new ExcelJS.Workbook()
-  workbook.creator = 'ChatGPT'
+  workbook.creator = 'RPM'
   workbook.created = new Date()
-  workbook.modified = new Date()
-
-  const worksheet = workbook.addWorksheet(sheetName, {
-    views: [{ state: 'frozen', xSplit: 0, ySplit: 5 }],
-  })
-
+  const worksheet = workbook.addWorksheet(sheetName, { views: [{ state: 'frozen', xSplit: 0, ySplit: 5 }] })
   const headers = Object.keys(rows[0])
   const totalCols = Math.max(headers.length, 1)
 
   worksheet.mergeCells(1, 2, 1, Math.min(totalCols, 6))
   worksheet.getCell('B1').value = 'RPM · PREHAB CARABOBO, C.A.'
   worksheet.getCell('B1').font = { name: 'Arial', size: 18, bold: true, color: { argb: '111827' } }
-
   worksheet.mergeCells(2, 2, 2, Math.min(totalCols, 6))
   worksheet.getCell('B2').value = title
   worksheet.getCell('B2').font = { name: 'Arial', size: 13, bold: true, color: { argb: accentColor } }
-
   worksheet.mergeCells(3, 2, 3, Math.min(totalCols, 8))
   worksheet.getCell('B3').value = subtitle || `Generado el ${new Date().toLocaleString('es-VE')}`
   worksheet.getCell('B3').font = { name: 'Arial', size: 10, color: { argb: '6B7280' } }
@@ -540,16 +980,11 @@ async function exportStyledExcel(args: {
     try {
       const base64 = await fetchImageAsBase64(logoSrc)
       const imageId = workbook.addImage({ base64, extension: 'png' })
-      worksheet.addImage(imageId, {
-        tl: { col: 0.15, row: 0.1 },
-        ext: { width: 90, height: 90 },
-      })
+      worksheet.addImage(imageId, { tl: { col: 0.15, row: 0.1 }, ext: { width: 90, height: 90 } })
       worksheet.getRow(1).height = 34
       worksheet.getRow(2).height = 26
       worksheet.getRow(3).height = 22
-    } catch (e) {
-      console.error('No se pudo cargar el logo para Excel:', e)
-    }
+    } catch (e) { console.error('Logo Excel:', e) }
   }
 
   const headerRowIndex = 5
@@ -558,18 +993,9 @@ async function exportStyledExcel(args: {
     const cell = headerRow.getCell(i + 1)
     cell.value = header
     cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFF' } }
-    cell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: accentColor },
-    }
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: accentColor } }
     cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true }
-    cell.border = {
-      top: { style: 'thin', color: { argb: 'D1D5DB' } },
-      left: { style: 'thin', color: { argb: 'D1D5DB' } },
-      bottom: { style: 'thin', color: { argb: 'D1D5DB' } },
-      right: { style: 'thin', color: { argb: 'D1D5DB' } },
-    }
+    cell.border = { top: { style: 'thin', color: { argb: 'D1D5DB' } }, left: { style: 'thin', color: { argb: 'D1D5DB' } }, bottom: { style: 'thin', color: { argb: 'D1D5DB' } }, right: { style: 'thin', color: { argb: 'D1D5DB' } } }
   })
   headerRow.height = 22
 
@@ -580,19 +1006,8 @@ async function exportStyledExcel(args: {
       cell.value = normalizeCell(row[header]) as string | number
       cell.font = { name: 'Arial', size: 10, color: { argb: '111827' } }
       cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true }
-      cell.border = {
-        top: { style: 'thin', color: { argb: 'E5E7EB' } },
-        left: { style: 'thin', color: { argb: 'E5E7EB' } },
-        bottom: { style: 'thin', color: { argb: 'E5E7EB' } },
-        right: { style: 'thin', color: { argb: 'E5E7EB' } },
-      }
-      if (rowIndex % 2 === 0) {
-        cell.fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'F9FAFB' },
-        }
-      }
+      cell.border = { top: { style: 'thin', color: { argb: 'E5E7EB' } }, left: { style: 'thin', color: { argb: 'E5E7EB' } }, bottom: { style: 'thin', color: { argb: 'E5E7EB' } }, right: { style: 'thin', color: { argb: 'E5E7EB' } } }
+      if (rowIndex % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F9FAFB' } }
     })
   })
 
@@ -602,28 +1017,16 @@ async function exportStyledExcel(args: {
     worksheet.getColumn(index + 1).width = Math.min(Math.max(maxContent + 2, 14), 32)
   })
 
-  worksheet.pageSetup = {
-    orientation: 'landscape',
-    fitToPage: true,
-    fitToWidth: 1,
-    fitToHeight: 0,
-    paperSize: 9,
-    margins: {
-      left: 0.3,
-      right: 0.3,
-      top: 0.5,
-      bottom: 0.5,
-      header: 0.2,
-      footer: 0.2,
-    },
-  }
-
+  worksheet.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9, margins: { left: 0.3, right: 0.3, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } }
   worksheet.headerFooter.oddFooter = '&LPrehab Carabobo, C.A.&RPágina &P de &N'
 
   const buffer = await workbook.xlsx.writeBuffer()
   saveAs(new Blob([buffer]), filename)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Export PDF genérico de reportes (sin cambios)
+// ─────────────────────────────────────────────────────────────────────────────
 async function exportReportePDF(args: {
   title: string
   subtitle?: string
@@ -632,66 +1035,39 @@ async function exportReportePDF(args: {
   logoSrc?: string
 }) {
   const { title, subtitle, rows, filename, logoSrc = '/logo-rpm.png' } = args
-
-  if (!rows.length) {
-    alert('No hay datos para exportar.')
-    return
-  }
+  if (!rows.length) { alert('No hay datos para exportar.'); return }
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
-
-  try {
-    const base64 = await fetchImageAsBase64(logoSrc)
-    doc.addImage(base64, 'PNG', 10, 8, 24, 24)
-  } catch (e) {
-    console.error('No se pudo cargar el logo para PDF:', e)
-  }
-
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(16)
-  doc.text('PREHAB CARABOBO, C.A.', 40, 15)
-  doc.setFontSize(12)
-  doc.text(title.toUpperCase(), 40, 22)
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(9)
-  doc.text(subtitle || `Generado el ${new Date().toLocaleString('es-VE')}`, 40, 28)
+  await drawCorporateHeader({
+    doc,
+    logoSrc,
+    title,
+    subtitle: subtitle || `Generado el ${new Date().toLocaleString('es-VE')}`,
+    dateText: `Fecha: ${shortDate(todayISO())}`,
+  })
 
   const headers = Object.keys(rows[0])
   const body = rows.map((row) => headers.map((header) => normalizeCell(row[header])))
 
   autoTable(doc, {
-    startY: 35,
+    startY: 62,
     head: [headers],
     body,
     theme: 'grid',
-    styles: {
-      font: 'helvetica',
-      fontSize: 8,
-      cellPadding: 2.2,
-      lineColor: [220, 220, 220],
-      lineWidth: 0.2,
-      overflow: 'linebreak',
-    },
-    headStyles: {
-      fillColor: [17, 24, 39],
-      textColor: [255, 255, 255],
-      fontStyle: 'bold',
-    },
-    alternateRowStyles: {
-      fillColor: [249, 250, 251],
-    },
-    margin: { top: 35, right: 10, bottom: 15, left: 10 },
-    didDrawPage: () => {
-      const pageHeight = doc.internal.pageSize.getHeight()
-      doc.setFontSize(8)
-      doc.text('Prehab Carabobo, C.A. · Reporte generado desde RPM', 10, pageHeight - 6)
-      doc.text(`Página ${doc.getCurrentPageInfo().pageNumber}`, 285, pageHeight - 6, { align: 'right' })
-    },
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.2, lineColor: [220, 220, 220], lineWidth: 0.2, overflow: 'linebreak' },
+    headStyles: { fillColor: [65, 65, 65], textColor: [255, 255, 255], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [249, 250, 251] },
+    margin: { top: 62, right: 10, bottom: 40, left: 10 },
   })
 
+  await finalizeCorporatePdf(doc, logoSrc)
   doc.save(filename)
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Export Constancia PDF (sin cambios)
+// ─────────────────────────────────────────────────────────────────────────────
 async function exportConstanciaPDF(data: ConstanciaData, logoSrc = '/logo-rpm.png') {
   if (!data.paciente || !data.sesiones.length) {
     alert('Debes indicar el paciente y al menos una sesión para emitir la constancia.')
@@ -699,45 +1075,29 @@ async function exportConstanciaPDF(data: ConstanciaData, logoSrc = '/logo-rpm.pn
   }
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-  const marginX = 15
-  let cursorY = 14
+  let cursorY = 62
 
-  try {
-    const base64 = await fetchImageAsBase64(logoSrc)
-    doc.addImage(base64, 'PNG', marginX, cursorY, 28, 28)
-  } catch (e) {
-    console.error('No se pudo cargar el logo para constancia:', e)
-  }
+  await drawCorporateHeader({
+    doc,
+    logoSrc,
+    title: 'Constancia de asistencia',
+    subtitle: data.ciudad || 'Valencia',
+    dateText: `Fecha: ${data.fechaEmision || shortDate(todayISO())}`,
+  })
 
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(12)
-  doc.text('PREHAB CARABOBO, C.A.', 105, 18, { align: 'center' })
+  doc.setFont('times', 'bold')
   doc.setFontSize(11)
-  doc.text('CONTROL DE ASISTENCIAS', 105, 26, { align: 'center' })
-  doc.setDrawColor(190)
-  doc.line(55, 30, 195, 30)
-
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(9)
-  doc.text(`${data.ciudad || 'VALENCIA'}: ${data.fechaEmision || shortDate(todayISO())}`, 195, 36, { align: 'right' })
-
-  cursorY = 48
-  doc.setFontSize(9)
-  doc.text('Atención:', marginX, cursorY)
-  doc.setFont('helvetica', 'bold')
-  doc.text('A QUIEN PUEDA INTERESAR', 36, cursorY)
+  doc.text(`Paciente: ${String(data.paciente)}`, 25, cursorY)
+  if (data.cedula) doc.text(`Cédula: ${String(data.cedula)}`, 120, cursorY)
 
   cursorY += 12
-  const intro = `POR MEDIO DE LA PRESENTE HACEMOS CONSTANCIA DE QUE AL PACIENTE: ${String(data.paciente).toUpperCase()}${data.cedula ? `, TITULAR DE LA CÉDULA DE IDENTIDAD N°: ${String(data.cedula).toUpperCase()}` : ''}, SE LE EFECTUÓ TRATAMIENTO EN LOS DÍAS Y HORAS A CONTINUACIÓN DETALLADOS:`
-  const introLines = doc.splitTextToSize(intro, 175)
-  doc.setFont('helvetica', 'bold')
-  doc.text(introLines, marginX, cursorY)
-
-  const afterIntroY = cursorY + introLines.length * 5 + 4
+  const intro = `Por medio de la presente se hace constar que el paciente ${String(data.paciente).toUpperCase()}${data.cedula ? `, titular de la cédula de identidad Nº ${String(data.cedula).toUpperCase()}` : ''}, recibió tratamiento en las fechas que se indican a continuación:`
+  const introLines = doc.splitTextToSize(intro, 158)
+  doc.text(introLines, 25, cursorY)
 
   autoTable(doc, {
-    startY: afterIntroY,
-    margin: { left: marginX, right: marginX },
+    startY: cursorY + introLines.length * 6 + 4,
+    margin: { left: 15, right: 15, bottom: 42 },
     head: [['FECHA', 'TERAPEUTA', 'TIPO DE SESIÓN']],
     body: data.sesiones.map((s) => [
       titleCase(formatDateLong(s.fecha)),
@@ -745,56 +1105,36 @@ async function exportConstanciaPDF(data: ConstanciaData, logoSrc = '/logo-rpm.pn
       (s.tipoSesion || 'SESIÓN DE FISIOTERAPIA').toUpperCase(),
     ]),
     theme: 'grid',
-    styles: {
-      font: 'helvetica',
-      fontSize: 8.5,
-      lineColor: [210, 210, 210],
-      lineWidth: 0.2,
-      cellPadding: 2,
-      textColor: [20, 20, 20],
-    },
-    headStyles: {
-      fillColor: [224, 224, 224],
-      textColor: [40, 40, 40],
-      fontStyle: 'bold',
-    },
+    styles: { font: 'helvetica', fontSize: 8.5, lineColor: [210, 210, 210], lineWidth: 0.2, cellPadding: 2.2, textColor: [20, 20, 20] },
+    headStyles: { fillColor: [65, 65, 65], textColor: [255, 255, 255], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 248, 248] },
   })
 
   const finalY = (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY || 120
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(9)
   const primera = data.sesiones[0]?.fecha ? shortDate(data.sesiones[0].fecha) : '—'
   const ultima = data.sesiones[data.sesiones.length - 1]?.fecha ? shortDate(data.sesiones[data.sesiones.length - 1].fecha) : '—'
-  doc.text(`Sesiones atendidas desde el ${primera} hasta el ${ultima}`, marginX, finalY + 8)
 
-  const cierre = `CONSTANCIA QUE SE EMITE A PETICIÓN DE LA PARTE INTERESADA, EN LA CIUDAD DE ${String(data.ciudad || 'VALENCIA').toUpperCase()} EL ${data.fechaEmision || shortDate(todayISO())}`
-  const cierreLines = doc.splitTextToSize(cierre, 175)
-  doc.text(cierreLines, marginX, finalY + 18)
+  doc.setFont('times', 'normal')
+  doc.setFontSize(11)
+  const cierre = `Constancia que se emite a petición de la parte interesada, dejando registro de sesiones atendidas desde ${primera} hasta ${ultima}.`
+  const cierreLines = doc.splitTextToSize(cierre, 158)
+  doc.text(cierreLines, 25, Math.max(finalY + 12, 208))
 
-  try {
-    const base64 = await fetchImageAsBase64(logoSrc)
-    doc.addImage(base64, 'PNG', 128, 180, 28, 28)
-  } catch {}
-
+  const firmaY = Math.max(finalY + cierreLines.length * 6 + 24, 240)
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(8)
-  doc.text('Prehab Carabobo, C.A.', 142, 211, { align: 'center' })
-  doc.text('J-504483931', 142, 215, { align: 'center' })
-
-  doc.text('Realizado por:', 105, 244, { align: 'center' })
-  doc.line(70, 258, 140, 258)
+  doc.setFontSize(9)
+  doc.text('Realizado por:', 105, firmaY, { align: 'center' })
+  doc.line(70, firmaY + 14, 140, firmaY + 14)
   doc.setFont('helvetica', 'bold')
-  doc.text((data.terapeuta || 'F/T. JORGE MANTILLA').toUpperCase(), 105, 263, { align: 'center' })
+  doc.text((data.terapeuta || 'F/T. JORGE MANTILLA').toUpperCase(), 105, firmaY + 19, { align: 'center' })
 
-  doc.setDrawColor(130)
-  doc.line(15, 276, 195, 276)
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(7)
-  doc.text('DIRECCIÓN: Naguanagua, complejo Bicentenario Asociación de Tenis de Carabobo ATEC, VALENCIA - ESTADO CARABOBO', 105, 281, { align: 'center' })
-  doc.text('Teléfonos:  ·  rpmcarabobo@gmail.com', 105, 285, { align: 'center' })
-
-  doc.save(`RPM_Constancia_${String(data.paciente).replace(/\s+/g, '_')}.pdf`)
+  await finalizeCorporatePdf(doc, logoSrc)
+  doc.save(`RPM_Constancia_${sanitizeFilePart(String(data.paciente))}.pdf`)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPONENTE PRINCIPAL
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function ReportesPage() {
   const [loading, setLoading] = useState(false)
@@ -817,78 +1157,126 @@ export default function ReportesPage() {
   const [inventario, setInventario] = useState<InventarioRow[]>([])
   const [nomina, setNomina] = useState<NominaRow[]>([])
 
+  // ── Constancia (existente) ──
   const [constanciaPaciente, setConstanciaPaciente] = useState('')
   const [constanciaCedula, setConstanciaCedula] = useState('')
   const [constanciaTerapeuta, setConstanciaTerapeuta] = useState('F/T. JORGE MANTILLA')
   const [constanciaCiudad, setConstanciaCiudad] = useState('VALENCIA')
 
+  // ── Presupuesto PDF ──
+  const [presupNumero, setPresupNumero] = useState(1)
+  const [presupFecha, setPresupFecha] = useState(todayISO())
+  const [presupAtencion, setPresupAtencion] = useState('')
+  const [presupDireccion, setPresupDireccion] = useState('')
+  const [presupRif, setPresupRif] = useState('')
+  const [presupTelefono, setPresupTelefono] = useState('')
+  const [presupObservaciones, setPresupObservaciones] = useState('')
+  const [presupRealizadoPor, setPresupRealizadoPor] = useState('')
+  // Líneas del presupuesto
+  const [presupLineas, setPresupLineas] = useState<LineaPresupuestoPDF[]>([
+    { cantidad: 1, tipoSesion: '', precio: 0 },
+  ])
+
+  const [documentoAbierto, setDocumentoAbierto] = useState<'constancia' | 'informe_sesiones' | 'historial' | null>(null)
+  const [historialDocumentos, setHistorialDocumentos] = useState<DocumentoGeneradoItem[]>([])
+  const [documentoClientes, setDocumentoClientes] = useState<DocumentoClienteOption[]>([])
+  const [documentoClienteId, setDocumentoClienteId] = useState('')
+  const [presupuestoPanelOpen, setPresupuestoPanelOpen] = useState(false)
+  const [presupuestoClienteSearch, setPresupuestoClienteSearch] = useState('')
+
+
   const [totalGlobal, setTotalGlobal] = useState({
-    clientes: 0,
-    clientesActivos: 0,
-    planes: 0,
-    planesActivos: 0,
-    citas: 0,
-    inventarioItems: 0,
+    clientes: 0, clientesActivos: 0,
+    planes: 0, planesActivos: 0,
+    citas: 0, inventarioItems: 0,
   })
 
+  useEffect(() => { aplicarPeriodo(periodo) }, [])
+  useEffect(() => { if (periodo !== 'personalizado') aplicarPeriodo(periodo) }, [periodo])
+  useEffect(() => { void loadTotalesGlobales() }, [])
+  useEffect(() => { void loadReporte() }, [tipo, fechaInicio, fechaFin])
+
   useEffect(() => {
-    aplicarPeriodo(periodo)
+    try {
+      const raw = window.localStorage.getItem('rpm-reportes-historial')
+      if (raw) setHistorialDocumentos(JSON.parse(raw))
+    } catch {}
   }, [])
 
   useEffect(() => {
-    if (periodo !== 'personalizado') aplicarPeriodo(periodo)
-  }, [periodo])
+    try {
+      window.localStorage.setItem('rpm-reportes-historial', JSON.stringify(historialDocumentos.slice(0, 20)))
+    } catch {}
+  }, [historialDocumentos])
 
-  useEffect(() => {
-    void loadTotalesGlobales()
-  }, [])
 
-  useEffect(() => {
-    void loadReporte()
-  }, [tipo, fechaInicio, fechaFin])
+  useEffect(() => { void loadDocumentoClientes() }, [])
+
+  async function loadDocumentoClientes() {
+    try {
+      const { data, error } = await supabase
+        .from('clientes')
+        .select('id,nombre,cedula,telefono,direccion,fecha_nacimiento,terapeuta_id,empleados:terapeuta_id(nombre)')
+        .order('nombre', { ascending: true })
+
+      if (error) throw error
+
+      const mapped = ((data || []) as any[]).map((row) => {
+        const empleado = firstOrNull(row?.empleados)
+        return {
+          id: String(row?.id ?? ''),
+          nombre: String(row?.nombre ?? ''),
+          cedula: row?.cedula ?? null,
+          telefono: row?.telefono ?? null,
+          direccion: row?.direccion ?? null,
+          fechaNacimiento: row?.fecha_nacimiento ?? null,
+          terapeuta: empleado ? String(empleado?.nombre ?? '') : null,
+        } satisfies DocumentoClienteOption
+      })
+
+      setDocumentoClientes(mapped.filter((item) => item.id && item.nombre))
+    } catch (err) {
+      console.error('No se pudieron cargar clientes para documentos:', err)
+      setDocumentoClientes([])
+    }
+  }
+
+  function syncDocumentoConCliente(clienteId: string) {
+    setDocumentoClienteId(clienteId)
+
+    const cliente = documentoClientes.find((item) => item.id === clienteId)
+    if (!cliente) return
+
+    const edadCalculada = calcularEdadDesdeFecha(cliente.fechaNacimiento)
+
+    setConstanciaPaciente(cliente.nombre)
+    setConstanciaCedula(cliente.cedula || '')
+    setPresupAtencion(cliente.nombre)
+    setPresupRif(cliente.cedula || '')
+    setPresupTelefono(cliente.telefono || '')
+    setPresupDireccion(cliente.direccion || '')
+
+    if (cliente.terapeuta) {
+      setConstanciaTerapeuta(cliente.terapeuta)
+      setPresupRealizadoPor(cliente.terapeuta)
+    }
+  }
 
   function aplicarPeriodo(p: PeriodoRapido) {
     const hoy = todayISO()
-    if (p === 'hoy') {
-      setFechaInicio(hoy)
-      setFechaFin(hoy)
-      setAgrupacion('dia')
-      return
-    }
-    if (p === '7d') {
-      setFechaInicio(daysAgoISO(6))
-      setFechaFin(hoy)
-      setAgrupacion('dia')
-      return
-    }
-    if (p === '30d') {
-      setFechaInicio(daysAgoISO(29))
-      setFechaFin(hoy)
-      setAgrupacion('semana')
-      return
-    }
-    if (p === 'este_mes') {
-      setFechaInicio(firstDayOfMonthISO())
-      setFechaFin(hoy)
-      setAgrupacion('dia')
-      return
-    }
-    if (p === 'este_ano') {
-      setFechaInicio(firstDayOfYearISO())
-      setFechaFin(hoy)
-      setAgrupacion('mes')
-    }
+    if (p === 'hoy') { setFechaInicio(hoy); setFechaFin(hoy); setAgrupacion('dia'); return }
+    if (p === '7d') { setFechaInicio(daysAgoISO(6)); setFechaFin(hoy); setAgrupacion('dia'); return }
+    if (p === '30d') { setFechaInicio(daysAgoISO(29)); setFechaFin(hoy); setAgrupacion('semana'); return }
+    if (p === 'este_mes') { setFechaInicio(firstDayOfMonthISO()); setFechaFin(hoy); setAgrupacion('dia'); return }
+    if (p === 'este_ano') { setFechaInicio(firstDayOfYearISO()); setFechaFin(hoy); setAgrupacion('mes') }
   }
 
   async function loadTotalesGlobales() {
     try {
       const [
-        { count: totalClientes },
-        { count: clientesActivos },
-        { count: totalPlanes },
-        { count: planesActivos },
-        { count: totalCitas },
-        { count: inventarioItems },
+        { count: totalClientes }, { count: clientesActivos },
+        { count: totalPlanes }, { count: planesActivos },
+        { count: totalCitas }, { count: inventarioItems },
       ] = await Promise.all([
         supabase.from('clientes').select('*', { count: 'exact', head: true }),
         supabase.from('clientes').select('*', { count: 'exact', head: true }).eq('estado', 'activo'),
@@ -897,125 +1285,76 @@ export default function ReportesPage() {
         supabase.from('citas').select('*', { count: 'exact', head: true }),
         supabase.from('inventario').select('*', { count: 'exact', head: true }),
       ])
-
       setTotalGlobal({
-        clientes: totalClientes || 0,
-        clientesActivos: clientesActivos || 0,
-        planes: totalPlanes || 0,
-        planesActivos: planesActivos || 0,
-        citas: totalCitas || 0,
-        inventarioItems: inventarioItems || 0,
+        clientes: totalClientes || 0, clientesActivos: clientesActivos || 0,
+        planes: totalPlanes || 0, planesActivos: planesActivos || 0,
+        citas: totalCitas || 0, inventarioItems: inventarioItems || 0,
       })
-    } catch (err) {
-      console.error(err)
-    }
+    } catch (err) { console.error(err) }
   }
 
   function limpiarDatos() {
-    setClientes([])
-    setPlanes([])
-    setCitas([])
-    setIngresos([])
-    setEgresos([])
-    setCobranzas([])
-    setInventario([])
-    setNomina([])
+    setClientes([]); setPlanes([]); setCitas([])
+    setIngresos([]); setEgresos([]); setCobranzas([])
+    setInventario([]); setNomina([])
   }
 
   async function loadReporte() {
     try {
-      setLoading(true)
-      setError('')
-      limpiarDatos()
+      setLoading(true); setError(''); limpiarDatos()
 
       if (tipo === 'clientes') {
-        const { data, error } = await supabase
-          .from('clientes')
-          .select(`id,nombre,telefono,email,estado,created_at,terapeuta_id,empleados:terapeuta_id(nombre)`)
-          .order('created_at', { ascending: false })
+        const { data, error } = await supabase.from('clientes').select(`id,nombre,telefono,email,fecha_nacimiento,genero,direccion,cedula,estado,created_at,terapeuta_id,empleados:terapeuta_id(nombre)`).order('created_at', { ascending: false })
         if (error) throw error
         setClientes(((data || []) as any[]).map(normalizeClienteRow))
       }
-
       if (tipo === 'planes') {
-        const { data, error } = await supabase
-          .from('clientes_planes')
-          .select(`id,fecha_inicio,fecha_fin,sesiones_totales,sesiones_usadas,estado,created_at,precio_final_usd,monto_final_bs,moneda_venta,clientes:cliente_id(nombre),planes:plan_id(nombre,precio)`)
-          .order('created_at', { ascending: false })
+        const { data, error } = await supabase.from('clientes_planes').select(`id,fecha_inicio,fecha_fin,sesiones_totales,sesiones_usadas,estado,created_at,precio_final_usd,monto_final_bs,moneda_venta,clientes:cliente_id(nombre),planes:plan_id(nombre,precio)`).order('created_at', { ascending: false })
         if (error) throw error
         setPlanes(((data || []) as any[]).map(normalizePlanRow))
       }
-
       if (tipo === 'citas') {
-        let query = supabase
-          .from('citas')
-          .select(`id,fecha,hora_inicio,hora_fin,estado,clientes:cliente_id(nombre),empleados:terapeuta_id(nombre),servicios:servicio_id(nombre,precio),recursos:recurso_id(nombre)`)
-          .order('fecha', { ascending: false })
-          .order('hora_inicio', { ascending: false })
+        let query = supabase.from('citas').select(`id,fecha,hora_inicio,hora_fin,estado,clientes:cliente_id(nombre),empleados:terapeuta_id(nombre),servicios:servicio_id(nombre,precio),recursos:recurso_id(nombre)`).order('fecha', { ascending: false }).order('hora_inicio', { ascending: false })
         if (fechaInicio) query = query.gte('fecha', fechaInicio)
         if (fechaFin) query = query.lte('fecha', fechaFin)
         const { data, error } = await query
         if (error) throw error
         setCitas(((data || []) as any[]).map(normalizeCitaRow))
       }
-
       if (tipo === 'ingresos' || tipo === 'financiero') {
-        let query = supabase
-          .from('pagos')
-          .select(`id,fecha,concepto,categoria,monto,estado,tipo_origen,created_at,moneda_pago,monto_equivalente_usd,monto_equivalente_bs,referencia,clientes:cliente_id(nombre),metodos_pago_v2:metodo_pago_v2_id(nombre,moneda)`)
-          .order('fecha', { ascending: false })
-          .order('created_at', { ascending: false })
+        let query = supabase.from('pagos').select(`id,fecha,concepto,categoria,monto,estado,tipo_origen,created_at,moneda_pago,monto_equivalente_usd,monto_equivalente_bs,referencia,clientes:cliente_id(nombre),metodos_pago_v2:metodo_pago_v2_id(nombre,moneda)`).order('fecha', { ascending: false }).order('created_at', { ascending: false })
         if (fechaInicio) query = query.gte('fecha', fechaInicio)
         if (fechaFin) query = query.lte('fecha', fechaFin)
         const { data, error } = await query
         if (error) throw error
         setIngresos(((data || []) as any[]).map(normalizeIngresoRow))
       }
-
       if (tipo === 'egresos' || tipo === 'financiero') {
-        let query = supabase
-          .from('egresos')
-          .select(`id,fecha,concepto,categoria,proveedor,monto,estado,created_at,moneda,monto_equivalente_usd,monto_equivalente_bs,referencia,metodos_pago_v2:metodo_pago_v2_id(nombre,moneda),empleados:empleado_id(nombre)`)
-          .order('fecha', { ascending: false })
-          .order('created_at', { ascending: false })
+        let query = supabase.from('egresos').select(`id,fecha,concepto,categoria,proveedor,monto,estado,created_at,moneda,monto_equivalente_usd,monto_equivalente_bs,referencia,metodos_pago_v2:metodo_pago_v2_id(nombre,moneda),empleados:empleado_id(nombre)`).order('fecha', { ascending: false }).order('created_at', { ascending: false })
         if (fechaInicio) query = query.gte('fecha', fechaInicio)
         if (fechaFin) query = query.lte('fecha', fechaFin)
         const { data, error } = await query
         if (error) throw error
         setEgresos(((data || []) as any[]).map(normalizeEgresoRow))
       }
-
       if (tipo === 'cobranzas') {
-        let query = supabase
-          .from('cuentas_por_cobrar')
-          .select(`id,cliente_nombre,concepto,tipo_origen,monto_total_usd,monto_pagado_usd,saldo_usd,fecha_venta,fecha_vencimiento,estado,created_at,clientes:cliente_id(nombre)`)
-          .order('fecha_venta', { ascending: false })
-          .order('created_at', { ascending: false })
+        let query = supabase.from('cuentas_por_cobrar').select(`id,cliente_nombre,concepto,tipo_origen,monto_total_usd,monto_pagado_usd,saldo_usd,fecha_venta,fecha_vencimiento,estado,created_at,clientes:cliente_id(nombre)`).order('fecha_venta', { ascending: false }).order('created_at', { ascending: false })
         if (fechaInicio) query = query.gte('fecha_venta', fechaInicio)
         if (fechaFin) query = query.lte('fecha_venta', fechaFin)
         const { data, error } = await query
         if (error) throw error
         setCobranzas(((data || []) as any[]).map(normalizeCobranzaRow))
       }
-
       if (tipo === 'inventario') {
-        let query = supabase
-          .from('movimientos_inventario')
-          .select(`id,inventario_id,tipo,cantidad,cantidad_anterior,cantidad_nueva,concepto,precio_unitario_usd,monto_total_usd,created_at,inventario:inventario_id(nombre)`)
-          .order('created_at', { ascending: false })
+        let query = supabase.from('movimientos_inventario').select(`id,inventario_id,tipo,cantidad,cantidad_anterior,cantidad_nueva,concepto,precio_unitario_usd,monto_total_usd,created_at,inventario:inventario_id(nombre)`).order('created_at', { ascending: false })
         if (fechaInicio) query = query.gte('created_at', `${fechaInicio}T00:00:00`)
         if (fechaFin) query = query.lte('created_at', `${fechaFin}T23:59:59`)
         const { data, error } = await query
         if (error) throw error
         setInventario(((data || []) as any[]).map(normalizeInventarioRow))
       }
-
       if (tipo === 'nomina') {
-        let query = supabase
-          .from('pagos_empleados')
-          .select(`id,empleado_id,fecha,tipo,moneda_pago,monto_pago,tasa_bcv,monto_equivalente_usd,monto_equivalente_bs,notas,created_at,referencia,empleados:empleado_id(nombre),metodos_pago_v2:metodo_pago_v2_id(nombre)`)
-          .order('fecha', { ascending: false })
-          .order('created_at', { ascending: false })
+        let query = supabase.from('pagos_empleados').select(`id,empleado_id,fecha,tipo,moneda_pago,monto_pago,tasa_bcv,monto_equivalente_usd,monto_equivalente_bs,notas,created_at,referencia,empleados:empleado_id(nombre),metodos_pago_v2:metodo_pago_v2_id(nombre)`).order('fecha', { ascending: false }).order('created_at', { ascending: false })
         if (fechaInicio) query = query.gte('fecha', fechaInicio)
         if (fechaFin) query = query.lte('fecha', fechaFin)
         const { data, error } = await query
@@ -1023,514 +1362,267 @@ export default function ReportesPage() {
         setNomina(((data || []) as any[]).map(normalizeNominaRow))
       }
     } catch (err: any) {
-      console.error(err)
-      setError(err.message || 'No se pudo generar el reporte.')
-      limpiarDatos()
+      console.error(err); setError(err.message || 'No se pudo generar el reporte.'); limpiarDatos()
     } finally {
       setLoading(false)
     }
   }
 
+  // ── Filtros memo ──
   const clientesFiltrados = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return clientes
-    return clientes.filter((row) =>
-      [row.nombre, row.telefono, row.email, row.estado, row.empleados?.nombre]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q))
-    )
+    const q = search.trim().toLowerCase(); if (!q) return clientes
+    return clientes.filter((row) => [row.nombre, row.telefono, row.email, row.estado, row.empleados?.nombre].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
   }, [clientes, search])
 
   const planesFiltrados = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return planes
-    return planes.filter((row) =>
-      [row.clientes?.nombre, row.planes?.nombre, row.estado, row.moneda_venta]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q))
-    )
+    const q = search.trim().toLowerCase(); if (!q) return planes
+    return planes.filter((row) => [row.clientes?.nombre, row.planes?.nombre, row.estado, row.moneda_venta].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
   }, [planes, search])
 
   const citasFiltradas = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return citas
-    return citas.filter((row) =>
-      [row.clientes?.nombre, row.empleados?.nombre, row.servicios?.nombre, row.recursos?.nombre, row.estado]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q))
-    )
+    const q = search.trim().toLowerCase(); if (!q) return citas
+    return citas.filter((row) => [row.clientes?.nombre, row.empleados?.nombre, row.servicios?.nombre, row.recursos?.nombre, row.estado].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
   }, [citas, search])
 
   const ingresosFiltrados = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return ingresos
-    return ingresos.filter((row) =>
-      [row.concepto, row.categoria, row.tipo_origen, row.clientes?.nombre, row.metodos_pago_v2?.nombre, row.estado, row.referencia]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q))
-    )
+    const q = search.trim().toLowerCase(); if (!q) return ingresos
+    return ingresos.filter((row) => [row.concepto, row.categoria, row.tipo_origen, row.clientes?.nombre, row.metodos_pago_v2?.nombre, row.estado, row.referencia].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
   }, [ingresos, search])
 
   const egresosFiltrados = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return egresos
-    return egresos.filter((row) =>
-      [row.concepto, row.categoria, row.proveedor, row.empleados?.nombre, row.metodos_pago_v2?.nombre, row.estado, row.referencia]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q))
-    )
+    const q = search.trim().toLowerCase(); if (!q) return egresos
+    return egresos.filter((row) => [row.concepto, row.categoria, row.proveedor, row.empleados?.nombre, row.metodos_pago_v2?.nombre, row.estado, row.referencia].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
   }, [egresos, search])
 
   const cobranzasFiltradas = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return cobranzas
-    return cobranzas.filter((row) =>
-      [row.cliente_nombre, row.clientes?.nombre, row.concepto, row.tipo_origen, row.estado]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q))
-    )
+    const q = search.trim().toLowerCase(); if (!q) return cobranzas
+    return cobranzas.filter((row) => [row.cliente_nombre, row.clientes?.nombre, row.concepto, row.tipo_origen, row.estado].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
   }, [cobranzas, search])
 
   const inventarioFiltrado = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return inventario
-    return inventario.filter((row) =>
-      [row.inventario?.nombre, row.tipo, row.concepto]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q))
-    )
+    const q = search.trim().toLowerCase(); if (!q) return inventario
+    return inventario.filter((row) => [row.inventario?.nombre, row.tipo, row.concepto].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
   }, [inventario, search])
 
   const nominaFiltrada = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return nomina
-    return nomina.filter((row) =>
-      [row.empleados?.nombre, row.tipo, row.moneda_pago, row.notas, row.referencia]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q))
-    )
+    const q = search.trim().toLowerCase(); if (!q) return nomina
+    return nomina.filter((row) => [row.empleados?.nombre, row.tipo, row.moneda_pago, row.notas, row.referencia].filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
   }, [nomina, search])
 
+  const presupuestoClientesFiltrados = useMemo(() => {
+    const q = presupuestoClienteSearch.trim().toLowerCase()
+    if (!q) return documentoClientes.slice(0, 8)
+    return documentoClientes
+      .filter((row) =>
+        [row.nombre, row.cedula, row.telefono, row.direccion, row.terapeuta]
+          .filter(Boolean)
+          .some((v) => String(v).toLowerCase().includes(q))
+      )
+      .slice(0, 12)
+  }, [documentoClientes, presupuestoClienteSearch])
+
   const resumen = useMemo(() => {
-    const ingresosUsd = ingresosFiltrados
-      .filter((x) => x.estado === 'pagado')
-      .reduce((acc, x) => acc + Number(x.monto_equivalente_usd || 0), 0)
-
-    const ingresosBs = ingresosFiltrados
-      .filter((x) => x.estado === 'pagado')
-      .reduce((acc, x) => acc + Number(x.monto_equivalente_bs || 0), 0)
-
-    const egresosUsd = egresosFiltrados
-      .filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')
-      .reduce((acc, x) => acc + Number(x.monto_equivalente_usd || 0), 0)
-
-    const egresosBs = egresosFiltrados
-      .filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')
-      .reduce((acc, x) => acc + Number(x.monto_equivalente_bs || 0), 0)
-
-    const carteraPendienteUsd = cobranzasFiltradas.reduce(
-      (acc, x) => acc + Number(x.saldo_usd || 0),
-      0
-    )
-
+    const ingresosUsd = ingresosFiltrados.filter((x) => x.estado === 'pagado').reduce((acc, x) => acc + Number(x.monto_equivalente_usd || 0), 0)
+    const ingresosBs = ingresosFiltrados.filter((x) => x.estado === 'pagado').reduce((acc, x) => acc + Number(x.monto_equivalente_bs || 0), 0)
+    const egresosUsd = egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado').reduce((acc, x) => acc + Number(x.monto_equivalente_usd || 0), 0)
+    const egresosBs = egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado').reduce((acc, x) => acc + Number(x.monto_equivalente_bs || 0), 0)
+    const carteraPendienteUsd = cobranzasFiltradas.reduce((acc, x) => acc + Number(x.saldo_usd || 0), 0)
     const citasCompletadas = citasFiltradas.filter((x) => x.estado === 'completada').length
     const citasCanceladas = citasFiltradas.filter((x) => x.estado === 'cancelada').length
-
-    return {
-      ingresosUsd,
-      ingresosBs,
-      egresosUsd,
-      egresosBs,
-      balanceUsd: ingresosUsd - egresosUsd,
-      balanceBs: ingresosBs - egresosBs,
-      carteraPendienteUsd,
-      totalCitasCompletadas: citasCompletadas,
-      totalCitasCanceladas: citasCanceladas,
-    }
+    return { ingresosUsd, ingresosBs, egresosUsd, egresosBs, balanceUsd: ingresosUsd - egresosUsd, balanceBs: ingresosBs - egresosBs, carteraPendienteUsd, totalCitasCompletadas: citasCompletadas, totalCitasCanceladas: citasCanceladas }
   }, [citasFiltradas, ingresosFiltrados, egresosFiltrados, cobranzasFiltradas])
 
   const citasEstadoChart = useMemo(() => {
     const map = new Map<string, number>()
-    for (const row of citasFiltradas) {
-      const key = row.estado || 'sin estado'
-      map.set(key, (map.get(key) || 0) + 1)
-    }
+    for (const row of citasFiltradas) { const key = row.estado || 'sin estado'; map.set(key, (map.get(key) || 0) + 1) }
     return Array.from(map.entries()).map(([name, value]) => ({ name, value }))
   }, [citasFiltradas])
 
   const categoriaChart = useMemo(() => {
     const map = new Map<string, number>()
-
     if (tipo === 'ingresos') {
-      for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) {
-        const key = row.categoria || 'general'
-        const valor =
-          monedaVista === 'USD'
-            ? Number(row.monto_equivalente_usd || 0)
-            : Number(row.monto_equivalente_bs || 0)
-        map.set(key, (map.get(key) || 0) + valor)
-      }
+      for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) { const key = row.categoria || 'general'; const valor = monedaVista === 'USD' ? Number(row.monto_equivalente_usd || 0) : Number(row.monto_equivalente_bs || 0); map.set(key, (map.get(key) || 0) + valor) }
     } else if (tipo === 'egresos') {
-      for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')) {
-        const key = row.categoria || 'operativo'
-        const valor =
-          monedaVista === 'USD'
-            ? Number(row.monto_equivalente_usd || 0)
-            : Number(row.monto_equivalente_bs || 0)
-        map.set(key, (map.get(key) || 0) + valor)
-      }
+      for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')) { const key = row.categoria || 'operativo'; const valor = monedaVista === 'USD' ? Number(row.monto_equivalente_usd || 0) : Number(row.monto_equivalente_bs || 0); map.set(key, (map.get(key) || 0) + valor) }
     } else {
-      for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) {
-        const key = `Ingreso: ${row.categoria || 'general'}`
-        const valor =
-          monedaVista === 'USD'
-            ? Number(row.monto_equivalente_usd || 0)
-            : Number(row.monto_equivalente_bs || 0)
-        map.set(key, (map.get(key) || 0) + valor)
-      }
-      for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')) {
-        const key = `Egreso: ${row.categoria || 'operativo'}`
-        const valor =
-          monedaVista === 'USD'
-            ? Number(row.monto_equivalente_usd || 0)
-            : Number(row.monto_equivalente_bs || 0)
-        map.set(key, (map.get(key) || 0) + valor)
-      }
+      for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) { const key = `Ingreso: ${row.categoria || 'general'}`; const valor = monedaVista === 'USD' ? Number(row.monto_equivalente_usd || 0) : Number(row.monto_equivalente_bs || 0); map.set(key, (map.get(key) || 0) + valor) }
+      for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')) { const key = `Egreso: ${row.categoria || 'operativo'}`; const valor = monedaVista === 'USD' ? Number(row.monto_equivalente_usd || 0) : Number(row.monto_equivalente_bs || 0); map.set(key, (map.get(key) || 0) + valor) }
     }
-
-    return Array.from(map.entries())
-      .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 8)
+    return Array.from(map.entries()).map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 })).sort((a, b) => b.value - a.value).slice(0, 8)
   }, [tipo, ingresosFiltrados, egresosFiltrados, monedaVista])
 
   const financieroAgrupadoChart = useMemo(() => {
-    const map = new Map<
-      string,
-      { label: string; ingresosUsd: number; ingresosBs: number; egresosUsd: number; egresosBs: number }
-    >()
-
-    const getKey = (fecha: string) => {
-      if (agrupacion === 'dia') return fecha
-      if (agrupacion === 'semana') return getWeekLabel(fecha)
-      if (agrupacion === 'mes') return getMonthLabel(fecha)
-      return getYearLabel(fecha)
-    }
-
-    for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) {
-      const key = getKey(row.fecha)
-      const prev = map.get(key) || {
-        label: key,
-        ingresosUsd: 0,
-        ingresosBs: 0,
-        egresosUsd: 0,
-        egresosBs: 0,
-      }
-      prev.ingresosUsd += Number(row.monto_equivalente_usd || 0)
-      prev.ingresosBs += Number(row.monto_equivalente_bs || 0)
-      map.set(key, prev)
-    }
-
-    for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')) {
-      const key = getKey(row.fecha)
-      const prev = map.get(key) || {
-        label: key,
-        ingresosUsd: 0,
-        ingresosBs: 0,
-        egresosUsd: 0,
-        egresosBs: 0,
-      }
-      prev.egresosUsd += Number(row.monto_equivalente_usd || 0)
-      prev.egresosBs += Number(row.monto_equivalente_bs || 0)
-      map.set(key, prev)
-    }
-
-    return Array.from(map.values()).map((row) => ({
-      ...row,
-      ingresos: monedaVista === 'USD' ? row.ingresosUsd : row.ingresosBs,
-      egresos: monedaVista === 'USD' ? row.egresosUsd : row.egresosBs,
-    }))
+    const map = new Map<string, { label: string; ingresosUsd: number; ingresosBs: number; egresosUsd: number; egresosBs: number }>()
+    const getKey = (fecha: string) => { if (agrupacion === 'dia') return fecha; if (agrupacion === 'semana') return getWeekLabel(fecha); if (agrupacion === 'mes') return getMonthLabel(fecha); return getYearLabel(fecha) }
+    for (const row of ingresosFiltrados.filter((x) => x.estado === 'pagado')) { const key = getKey(row.fecha); const prev = map.get(key) || { label: key, ingresosUsd: 0, ingresosBs: 0, egresosUsd: 0, egresosBs: 0 }; prev.ingresosUsd += Number(row.monto_equivalente_usd || 0); prev.ingresosBs += Number(row.monto_equivalente_bs || 0); map.set(key, prev) }
+    for (const row of egresosFiltrados.filter((x) => x.estado === 'pagado' || x.estado === 'liquidado')) { const key = getKey(row.fecha); const prev = map.get(key) || { label: key, ingresosUsd: 0, ingresosBs: 0, egresosUsd: 0, egresosBs: 0 }; prev.egresosUsd += Number(row.monto_equivalente_usd || 0); prev.egresosBs += Number(row.monto_equivalente_bs || 0); map.set(key, prev) }
+    return Array.from(map.values()).map((row) => ({ ...row, ingresos: monedaVista === 'USD' ? row.ingresosUsd : row.ingresosBs, egresos: monedaVista === 'USD' ? row.egresosUsd : row.egresosBs }))
   }, [ingresosFiltrados, egresosFiltrados, monedaVista, agrupacion])
 
   const acumuladoChart = useMemo(() => {
     let acumulado = 0
-    return financieroAgrupadoChart.map((d) => {
-      const saldo = d.ingresos - d.egresos
-      acumulado += saldo
-      return { ...d, saldo, acumulado: Math.round(acumulado * 100) / 100 }
-    })
+    return financieroAgrupadoChart.map((d) => { const saldo = d.ingresos - d.egresos; acumulado += saldo; return { ...d, saldo, acumulado: Math.round(acumulado * 100) / 100 } })
   }, [financieroAgrupadoChart])
 
+  // ── Build export rows ──
   function buildExportRows() {
-    if (tipo === 'clientes') {
-      return {
-        title: 'Reporte de clientes',
-        filenameBase: 'RPM_Clientes',
-        rows: clientesFiltrados.map((row) => ({
-          ID: row.id,
-          Nombre: row.nombre,
-          Teléfono: row.telefono || '',
-          Email: row.email || '',
-          Terapeuta: row.empleados?.nombre || '',
-          Estado: row.estado,
-          'Fecha Creación': formatDateTime(row.created_at),
-        })),
-      }
-    }
-
-    if (tipo === 'planes') {
-      return {
-        title: 'Reporte de planes',
-        filenameBase: 'RPM_Planes',
-        rows: planesFiltrados.map((row) => ({
-          ID: row.id,
-          Cliente: row.clientes?.nombre || '',
-          Plan: row.planes?.nombre || '',
-          'Precio Base Plan': Number(row.planes?.precio || 0),
-          'Precio Final USD': Number(row.precio_final_usd || 0),
-          'Precio Final BS': Number(row.monto_final_bs || 0),
-          'Moneda Venta': row.moneda_venta || '',
-          'Fecha Inicio': row.fecha_inicio || '',
-          'Fecha Fin': row.fecha_fin || '',
-          'Sesiones Totales': row.sesiones_totales,
-          'Sesiones Usadas': row.sesiones_usadas,
-          'Sesiones Restantes': Number(row.sesiones_totales || 0) - Number(row.sesiones_usadas || 0),
-          Estado: row.estado,
-        })),
-      }
-    }
-
-    if (tipo === 'citas') {
-      return {
-        title: 'Reporte de citas',
-        filenameBase: 'RPM_Citas',
-        rows: citasFiltradas.map((row) => ({
-          ID: row.id,
-          Fecha: row.fecha,
-          'Hora Inicio': row.hora_inicio,
-          'Hora Fin': row.hora_fin,
-          Cliente: row.clientes?.nombre || '',
-          Terapeuta: row.empleados?.nombre || '',
-          Servicio: row.servicios?.nombre || '',
-          Recurso: row.recursos?.nombre || '',
-          Estado: row.estado,
-        })),
-      }
-    }
-
-    if (tipo === 'ingresos') {
-      return {
-        title: 'Reporte de ingresos',
-        filenameBase: 'RPM_Ingresos',
-        rows: ingresosFiltrados.map((row) => ({
-          ID: row.id,
-          Fecha: row.fecha,
-          Concepto: row.concepto,
-          Categoría: row.categoria,
-          'Tipo Origen': row.tipo_origen,
-          Cliente: row.clientes?.nombre || '',
-          'Método Pago': row.metodos_pago_v2?.nombre || '',
-          'Moneda Pago': row.moneda_pago || '',
-          Referencia: row.referencia || '',
-          'Monto Original': Number(row.monto || 0),
-          'Monto USD': Number(row.monto_equivalente_usd || 0),
-          'Monto BS': Number(row.monto_equivalente_bs || 0),
-          Estado: row.estado,
-        })),
-      }
-    }
-
-    if (tipo === 'egresos') {
-      return {
-        title: 'Reporte de egresos',
-        filenameBase: 'RPM_Egresos',
-        rows: egresosFiltrados.map((row) => ({
-          ID: row.id,
-          Fecha: row.fecha,
-          Concepto: row.concepto,
-          Categoría: row.categoria,
-          Proveedor: row.proveedor || '',
-          Empleado: row.empleados?.nombre || '',
-          'Método Pago': row.metodos_pago_v2?.nombre || '',
-          Moneda: row.moneda || '',
-          Referencia: row.referencia || '',
-          'Monto Original': Number(row.monto || 0),
-          'Monto USD': Number(row.monto_equivalente_usd || 0),
-          'Monto BS': Number(row.monto_equivalente_bs || 0),
-          Estado: row.estado,
-        })),
-      }
-    }
-
-    if (tipo === 'cobranzas') {
-      return {
-        title: 'Reporte de cobranzas',
-        filenameBase: 'RPM_Cobranzas',
-        rows: cobranzasFiltradas.map((row) => ({
-          ID: row.id,
-          Cliente: row.clientes?.nombre || row.cliente_nombre || '',
-          Concepto: row.concepto,
-          'Tipo Origen': row.tipo_origen,
-          'Monto Total USD': Number(row.monto_total_usd || 0),
-          'Monto Pagado USD': Number(row.monto_pagado_usd || 0),
-          'Saldo USD': Number(row.saldo_usd || 0),
-          'Fecha Venta': row.fecha_venta,
-          'Fecha Vencimiento': row.fecha_vencimiento || '',
-          Estado: row.estado,
-        })),
-      }
-    }
-
-    if (tipo === 'inventario') {
-      return {
-        title: 'Reporte de inventario',
-        filenameBase: 'RPM_Inventario',
-        rows: inventarioFiltrado.map((row) => ({
-          ID: row.id,
-          Producto: row.inventario?.nombre || '',
-          Tipo: row.tipo,
-          Cantidad: Number(row.cantidad || 0),
-          'Cantidad Anterior': Number(row.cantidad_anterior || 0),
-          'Cantidad Nueva': Number(row.cantidad_nueva || 0),
-          Concepto: row.concepto,
-          'Precio Unitario USD': Number(row.precio_unitario_usd || 0),
-          'Monto Total USD': Number(row.monto_total_usd || 0),
-          'Fecha Creación': formatDateTime(row.created_at),
-        })),
-      }
-    }
-
-    if (tipo === 'nomina') {
-      return {
-        title: 'Reporte de nómina',
-        filenameBase: 'RPM_Nomina',
-        rows: nominaFiltrada.map((row) => ({
-          ID: row.id,
-          Fecha: row.fecha,
-          Empleado: row.empleados?.nombre || '',
-          Tipo: row.tipo,
-          'Moneda Pago': row.moneda_pago,
-          'Monto Pago': Number(row.monto_pago || 0),
-          'Monto USD': Number(row.monto_equivalente_usd || 0),
-          'Monto BS': Number(row.monto_equivalente_bs || 0),
-          'Método Pago': row.metodos_pago_v2?.nombre || '',
-          Referencia: row.referencia || '',
-          Notas: row.notas || '',
-        })),
-      }
-    }
-
-    return {
-      title: 'Reporte financiero',
-      filenameBase: 'RPM_Financiero',
-      rows: [
-        ...ingresosFiltrados.map((row) => ({
-          Fecha: row.fecha,
-          Tipo: 'Ingreso',
-          Concepto: row.concepto,
-          Categoría: row.categoria,
-          Tercero: row.clientes?.nombre || '',
-          'Método Pago': row.metodos_pago_v2?.nombre || '',
-          Referencia: row.referencia || '',
-          'Monto USD': Number(row.monto_equivalente_usd || 0),
-          'Monto BS': Number(row.monto_equivalente_bs || 0),
-          Estado: row.estado,
-        })),
-        ...egresosFiltrados.map((row) => ({
-          Fecha: row.fecha,
-          Tipo: 'Egreso',
-          Concepto: row.concepto,
-          Categoría: row.categoria,
-          Tercero: row.empleados?.nombre || row.proveedor || '',
-          'Método Pago': row.metodos_pago_v2?.nombre || '',
-          Referencia: row.referencia || '',
-          'Monto USD': Number(row.monto_equivalente_usd || 0),
-          'Monto BS': Number(row.monto_equivalente_bs || 0),
-          Estado: row.estado,
-        })),
-      ],
-    }
+    if (tipo === 'clientes') return { title: 'Reporte de clientes', filenameBase: 'RPM_Clientes', rows: clientesFiltrados.map((row) => ({ ID: row.id, Nombre: row.nombre, Cédula: row.cedula || '', Teléfono: row.telefono || '', Email: row.email || '', Dirección: row.direccion || '', Terapeuta: row.empleados?.nombre || '', Estado: row.estado, 'Fecha Creación': formatDateTime(row.created_at) })) }
+    if (tipo === 'planes') return { title: 'Reporte de planes', filenameBase: 'RPM_Planes', rows: planesFiltrados.map((row) => ({ ID: row.id, Cliente: row.clientes?.nombre || '', Plan: row.planes?.nombre || '', 'Precio Final USD': Number(row.precio_final_usd || 0), 'Precio Final BS': Number(row.monto_final_bs || 0), 'Moneda Venta': row.moneda_venta || '', 'Fecha Inicio': row.fecha_inicio || '', 'Fecha Fin': row.fecha_fin || '', 'Sesiones Totales': row.sesiones_totales, 'Sesiones Usadas': row.sesiones_usadas, 'Sesiones Restantes': Number(row.sesiones_totales || 0) - Number(row.sesiones_usadas || 0), Estado: row.estado })) }
+    if (tipo === 'citas') return { title: 'Reporte de citas', filenameBase: 'RPM_Citas', rows: citasFiltradas.map((row) => ({ ID: row.id, Fecha: row.fecha, 'Hora Inicio': row.hora_inicio, 'Hora Fin': row.hora_fin, Cliente: row.clientes?.nombre || '', Terapeuta: row.empleados?.nombre || '', Servicio: row.servicios?.nombre || '', Recurso: row.recursos?.nombre || '', Estado: row.estado })) }
+    if (tipo === 'ingresos') return { title: 'Reporte de ingresos', filenameBase: 'RPM_Ingresos', rows: ingresosFiltrados.map((row) => ({ ID: row.id, Fecha: row.fecha, Concepto: row.concepto, Categoría: row.categoria, 'Tipo Origen': row.tipo_origen, Cliente: row.clientes?.nombre || '', 'Método Pago': row.metodos_pago_v2?.nombre || '', 'Moneda Pago': row.moneda_pago || '', Referencia: row.referencia || '', 'Monto Original': Number(row.monto || 0), 'Monto USD': Number(row.monto_equivalente_usd || 0), 'Monto BS': Number(row.monto_equivalente_bs || 0), Estado: row.estado })) }
+    if (tipo === 'egresos') return { title: 'Reporte de egresos', filenameBase: 'RPM_Egresos', rows: egresosFiltrados.map((row) => ({ ID: row.id, Fecha: row.fecha, Concepto: row.concepto, Categoría: row.categoria, Proveedor: row.proveedor || '', Empleado: row.empleados?.nombre || '', 'Método Pago': row.metodos_pago_v2?.nombre || '', Moneda: row.moneda || '', Referencia: row.referencia || '', 'Monto Original': Number(row.monto || 0), 'Monto USD': Number(row.monto_equivalente_usd || 0), 'Monto BS': Number(row.monto_equivalente_bs || 0), Estado: row.estado })) }
+    if (tipo === 'cobranzas') return { title: 'Reporte de cobranzas', filenameBase: 'RPM_Cobranzas', rows: cobranzasFiltradas.map((row) => ({ ID: row.id, Cliente: row.clientes?.nombre || row.cliente_nombre || '', Concepto: row.concepto, 'Tipo Origen': row.tipo_origen, 'Monto Total USD': Number(row.monto_total_usd || 0), 'Monto Pagado USD': Number(row.monto_pagado_usd || 0), 'Saldo USD': Number(row.saldo_usd || 0), 'Fecha Venta': row.fecha_venta, 'Fecha Vencimiento': row.fecha_vencimiento || '', Estado: row.estado })) }
+    if (tipo === 'inventario') return { title: 'Reporte de inventario', filenameBase: 'RPM_Inventario', rows: inventarioFiltrado.map((row) => ({ ID: row.id, Producto: row.inventario?.nombre || '', Tipo: row.tipo, Cantidad: Number(row.cantidad || 0), 'Cantidad Anterior': Number(row.cantidad_anterior || 0), 'Cantidad Nueva': Number(row.cantidad_nueva || 0), Concepto: row.concepto, 'Precio Unitario USD': Number(row.precio_unitario_usd || 0), 'Monto Total USD': Number(row.monto_total_usd || 0), 'Fecha Creación': formatDateTime(row.created_at) })) }
+    if (tipo === 'nomina') return { title: 'Reporte de nómina', filenameBase: 'RPM_Nomina', rows: nominaFiltrada.map((row) => ({ ID: row.id, Fecha: row.fecha, Empleado: row.empleados?.nombre || '', Tipo: row.tipo, 'Moneda Pago': row.moneda_pago, 'Monto Pago': Number(row.monto_pago || 0), 'Monto USD': Number(row.monto_equivalente_usd || 0), 'Monto BS': Number(row.monto_equivalente_bs || 0), 'Método Pago': row.metodos_pago_v2?.nombre || '', Referencia: row.referencia || '', Notas: row.notas || '' })) }
+    return { title: 'Reporte financiero', filenameBase: 'RPM_Financiero', rows: [...ingresosFiltrados.map((row) => ({ Fecha: row.fecha, Tipo: 'Ingreso', Concepto: row.concepto, Categoría: row.categoria, Tercero: row.clientes?.nombre || '', 'Método Pago': row.metodos_pago_v2?.nombre || '', Referencia: row.referencia || '', 'Monto USD': Number(row.monto_equivalente_usd || 0), 'Monto BS': Number(row.monto_equivalente_bs || 0), Estado: row.estado })), ...egresosFiltrados.map((row) => ({ Fecha: row.fecha, Tipo: 'Egreso', Concepto: row.concepto, Categoría: row.categoria, Tercero: row.empleados?.nombre || row.proveedor || '', 'Método Pago': row.metodos_pago_v2?.nombre || '', Referencia: row.referencia || '', 'Monto USD': Number(row.monto_equivalente_usd || 0), 'Monto BS': Number(row.monto_equivalente_bs || 0), Estado: row.estado }))] }
   }
 
   async function handleExportExcel() {
     const data = buildExportRows()
     const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
-    await exportStyledExcel({
-      title: data.title,
-      subtitle: `Período: ${fechaInicio} a ${fechaFin}`,
-      sheetName: data.title,
-      filename: `${data.filenameBase}_${stamp}.xlsx`,
-      rows: data.rows,
-      logoSrc: '/logo-rpm.png',
-      accentColor: '111827',
-    })
+    await exportStyledExcel({ title: data.title, subtitle: `Período: ${fechaInicio} a ${fechaFin}`, sheetName: data.title, filename: `${data.filenameBase}_${stamp}.xlsx`, rows: data.rows, logoSrc: '/logo-rpm.png', accentColor: '111827' })
   }
 
   async function handleExportPDF() {
     const data = buildExportRows()
     const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
-    await exportReportePDF({
-      title: data.title,
-      subtitle: `Período: ${fechaInicio} a ${fechaFin}`,
-      rows: data.rows,
-      filename: `${data.filenameBase}_${stamp}.pdf`,
-      logoSrc: '/logo-rpm.png',
+    await exportReportePDF({ title: data.title, subtitle: `Período: ${fechaInicio} a ${fechaFin}`, rows: data.rows, filename: `${data.filenameBase}_${stamp}.pdf`, logoSrc: '/logo-rpm.png' })
+  }
+
+  // ── NUEVO: Cierre PDF ──
+  async function handleCierrePDF() {
+    await exportCierrePDF({
+      ingresos: ingresosFiltrados,
+      egresos: egresosFiltrados,
+      fechaInicio,
+      fechaFin,
+      monedaVista,
+      logoSrc: '/logo-imprimir.png',
     })
+  }
+
+  // ── NUEVO: Presupuesto PDF ──
+  async function handlePresupuestoPDF() {
+    await exportPresupuestoPDF({
+      numero: presupNumero,
+      fecha: formatBudgetDate(presupFecha),
+      atencion: presupAtencion,
+      direccion: presupDireccion,
+      rif: presupRif,
+      telefono: presupTelefono,
+      lineas: presupLineas,
+      observaciones: presupObservaciones || undefined,
+      realizadoPor: presupRealizadoPor || undefined,
+    })
+    registrarDocumento('presupuesto', presupAtencion || 'Sin cliente', `Presupuesto #${presupNumero}`)
+  }
+
+  // ── NUEVO: Informe de sesiones PDF ──
+  async function handleInformeSesionesPDF() {
+    await exportInformeSesionesPDF({
+      citas: citasFiltradas,
+      paciente: constanciaPaciente || citasFiltradas[0]?.clientes?.nombre || '',
+      cedula: constanciaCedula,
+      terapeuta: constanciaTerapeuta,
+      ciudad: constanciaCiudad,
+      logoSrc: '/logo-imprimir.png',
+    })
+    registrarDocumento('informe_sesiones', constanciaPaciente || citasFiltradas[0]?.clientes?.nombre || 'Sin paciente', `Informe de sesiones · ${citasFiltradas.length} citas`)
   }
 
   async function handleConstanciaPDF() {
     const sesiones = citasFiltradas
       .filter((row) => (row.estado || '').toLowerCase() !== 'cancelada')
-      .map((row) => ({
-        fecha: row.fecha,
-        terapeuta: row.empleados?.nombre || constanciaTerapeuta,
-        tipoSesion: row.servicios?.nombre || 'Sesión de fisioterapia',
-      }))
+      .map((row) => ({ fecha: row.fecha, terapeuta: row.empleados?.nombre || constanciaTerapeuta, tipoSesion: row.servicios?.nombre || 'Sesión de fisioterapia' }))
       .sort((a, b) => (a.fecha > b.fecha ? 1 : -1))
-
-    await exportConstanciaPDF({
-      paciente: constanciaPaciente || citasFiltradas[0]?.clientes?.nombre || '',
-      cedula: constanciaCedula,
-      terapeuta: constanciaTerapeuta,
-      ciudad: constanciaCiudad,
-      fechaEmision: shortDate(todayISO()),
-      sesiones,
-    })
+    await exportConstanciaPDF({ paciente: constanciaPaciente || citasFiltradas[0]?.clientes?.nombre || '', cedula: constanciaCedula, terapeuta: constanciaTerapeuta, ciudad: constanciaCiudad, fechaEmision: shortDate(todayISO()), sesiones })
+    registrarDocumento('constancia', constanciaPaciente || citasFiltradas[0]?.clientes?.nombre || 'Sin paciente', `Constancia con ${sesiones.length} sesiones`)
   }
+
+  // ── Helper para manejar líneas del presupuesto ──
+  function updateLinea(index: number, field: keyof LineaPresupuestoPDF, value: string | number) {
+    setPresupLineas((prev) => prev.map((l, i) => i === index ? { ...l, [field]: field === 'tipoSesion' ? value : Number(value) } : l))
+  }
+  function addLinea() {
+    setPresupLineas((prev) => [...prev, { cantidad: 1, tipoSesion: '', precio: 0 }])
+  }
+  function removeLinea(index: number) {
+    setPresupLineas((prev) => prev.filter((_, i) => i !== index))
+  }
+
+
+  function toggleDocumento(key: 'constancia' | 'informe_sesiones' | 'historial') {
+    setDocumentoAbierto((prev) => prev === key ? null : key)
+  }
+
+  function registrarDocumento(tipoDoc: DocumentoGeneradoItem['tipo'], paciente: string, detalle: string) {
+    setHistorialDocumentos((prev) => [
+      {
+        id: `${tipoDoc}-${Date.now()}`,
+        tipo: tipoDoc,
+        paciente: paciente || 'Sin paciente',
+        detalle,
+        fecha: new Date().toISOString(),
+      },
+      ...prev,
+    ].slice(0, 20))
+    setDocumentoAbierto('historial')
+  }
+
+
+  function renderDocumentoItem(args: {
+    keyName: 'constancia' | 'informe_sesiones' | 'historial'
+    title: string
+    description: string
+    accent: string
+    children: ReactNode
+  }) {
+    const abierto = documentoAbierto === args.keyName
+    return (
+      <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#0d1118]/90 backdrop-blur-sm">
+        <button
+          type="button"
+          onClick={() => toggleDocumento(args.keyName)}
+          className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition hover:bg-white/[0.03]"
+        >
+          <div>
+            <p className={`text-sm font-semibold ${args.accent}`}>{args.title}</p>
+            <p className="mt-1 text-sm text-white/45">{args.description}</p>
+          </div>
+          <div className={`rounded-full border border-white/10 px-3 py-1 text-xs font-semibold ${abierto ? 'bg-white/10 text-white' : 'bg-white/[0.03] text-white/55'}`}>
+            {abierto ? 'Ocultar' : 'Abrir'}
+          </div>
+        </button>
+
+        {abierto ? <div className="border-t border-white/10 p-5">{args.children}</div> : null}
+      </div>
+    )
+  }
+
+
+  function handleSelectPresupuestoCliente(clienteId: string) {
+    syncDocumentoConCliente(clienteId)
+    setPresupuestoClienteSearch('')
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <p className="text-sm text-white/55">Administración</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">Reportes</h1>
-          <p className="mt-2 text-sm text-white/55">Estadísticas, exportación Excel/PDF y constancias.</p>
+          <p className="mt-2 text-sm text-white/55">Estadísticas, exportación Excel/PDF y documentos.</p>
         </div>
 
         {(tipo === 'ingresos' || tipo === 'egresos' || tipo === 'financiero' || tipo === 'nomina') && (
           <div className="flex gap-1 rounded-2xl border border-white/10 bg-white/[0.02] p-1">
-            <button
-              type="button"
-              onClick={() => setMonedaVista('USD')}
-              className={`rounded-xl px-6 py-2.5 text-sm font-medium transition ${
-                monedaVista === 'USD'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30'
-                  : 'text-white/45 hover:text-white/70'
-              }`}
-            >
-              💵 USD
-            </button>
-            <button
-              type="button"
-              onClick={() => setMonedaVista('BS')}
-              className={`rounded-xl px-6 py-2.5 text-sm font-medium transition ${
-                monedaVista === 'BS'
-                  ? 'bg-amber-500/20 text-amber-300 border border-amber-400/30'
-                  : 'text-white/45 hover:text-white/70'
-              }`}
-            >
-              💰 BS
-            </button>
+            <button type="button" onClick={() => setMonedaVista('USD')} className={`rounded-xl px-6 py-2.5 text-sm font-medium transition ${monedaVista === 'USD' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30' : 'text-white/45 hover:text-white/70'}`}>💵 USD</button>
+            <button type="button" onClick={() => setMonedaVista('BS')} className={`rounded-xl px-6 py-2.5 text-sm font-medium transition ${monedaVista === 'BS' ? 'bg-amber-500/20 text-amber-300 border border-amber-400/30' : 'text-white/45 hover:text-white/70'}`}>💰 BS</button>
           </div>
         )}
       </div>
@@ -1542,19 +1634,15 @@ export default function ReportesPage() {
         </Card>
       ) : null}
 
+      {/* Filtros */}
       <Section title="Filtros del reporte" description="Configura área, período, búsqueda y exportación.">
         <div className="grid gap-3 md:grid-cols-6 xl:grid-cols-8">
           <div>
             <label className="mb-2 block text-sm font-medium text-white/75">Área</label>
             <select value={tipo} onChange={(e) => setTipo(e.target.value as TipoReporte)} className={inputClassName}>
-              {TIPOS.map((item) => (
-                <option key={item.value} value={item.value} className="bg-[#11131a] text-white">
-                  {item.label}
-                </option>
-              ))}
+              {TIPOS.map((item) => (<option key={item.value} value={item.value} className="bg-[#11131a] text-white">{item.label}</option>))}
             </select>
           </div>
-
           <div>
             <label className="mb-2 block text-sm font-medium text-white/75">Período</label>
             <select value={periodo} onChange={(e) => setPeriodo(e.target.value as PeriodoRapido)} className={inputClassName}>
@@ -1566,121 +1654,228 @@ export default function ReportesPage() {
               <option value="personalizado" className="bg-[#11131a]">Personalizado</option>
             </select>
           </div>
-
           <div>
             <label className="mb-2 block text-sm font-medium text-white/75">Desde</label>
-            <input
-              type="date"
-              value={fechaInicio}
-              onChange={(e) => {
-                setPeriodo('personalizado')
-                setFechaInicio(e.target.value)
-              }}
-              className={inputClassName}
-            />
+            <input type="date" value={fechaInicio} onChange={(e) => { setPeriodo('personalizado'); setFechaInicio(e.target.value) }} className={inputClassName} />
           </div>
-
           <div>
             <label className="mb-2 block text-sm font-medium text-white/75">Hasta</label>
-            <input
-              type="date"
-              value={fechaFin}
-              onChange={(e) => {
-                setPeriodo('personalizado')
-                setFechaFin(e.target.value)
-              }}
-              className={inputClassName}
-            />
+            <input type="date" value={fechaFin} onChange={(e) => { setPeriodo('personalizado'); setFechaFin(e.target.value) }} className={inputClassName} />
           </div>
-
           <div>
             <label className="mb-2 block text-sm font-medium text-white/75">Agrupar</label>
-            <select
-              value={agrupacion}
-              onChange={(e) => setAgrupacion(e.target.value as 'dia' | 'semana' | 'mes' | 'anio')}
-              className={inputClassName}
-            >
+            <select value={agrupacion} onChange={(e) => setAgrupacion(e.target.value as 'dia' | 'semana' | 'mes' | 'anio')} className={inputClassName}>
               <option value="dia" className="bg-[#11131a]">Día</option>
               <option value="semana" className="bg-[#11131a]">Semana</option>
               <option value="mes" className="bg-[#11131a]">Mes</option>
               <option value="anio" className="bg-[#11131a]">Año</option>
             </select>
           </div>
-
           <div className="md:col-span-2">
             <label className="mb-2 block text-sm font-medium text-white/75">Buscar</label>
-            <input
-              type="text"
-              placeholder="Buscar..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className={inputClassName}
-            />
+            <input type="text" placeholder="Buscar..." value={search} onChange={(e) => setSearch(e.target.value)} className={inputClassName} />
           </div>
-
           <div className="flex items-end gap-2">
-            <button
-              onClick={() => loadReporte()}
-              disabled={loading}
-              className="flex-1 rounded-2xl border border-white/10 bg-white/[0.08] px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.12] disabled:opacity-60"
-            >
+            <button onClick={() => loadReporte()} disabled={loading} className="flex-1 rounded-2xl border border-white/10 bg-white/[0.08] px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.12] disabled:opacity-60">
               {loading ? 'Cargando...' : '🔄 Generar'}
             </button>
           </div>
         </div>
 
+        {/* Botones de exportación */}
         <div className="mt-4 flex flex-wrap gap-2">
-          <button
-            onClick={handleExportExcel}
-            disabled={loading}
-            className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-400/20 disabled:opacity-60"
-          >
+          <button onClick={handleExportExcel} disabled={loading} className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-400/20 disabled:opacity-60">
             📗 Excel bonito
           </button>
-
-          <button
-            onClick={handleExportPDF}
-            disabled={loading}
-            className="rounded-2xl border border-sky-400/30 bg-sky-400/10 px-4 py-3 text-sm font-semibold text-sky-300 transition hover:bg-sky-400/20 disabled:opacity-60"
-          >
+          <button onClick={handleExportPDF} disabled={loading} className="rounded-2xl border border-sky-400/30 bg-sky-400/10 px-4 py-3 text-sm font-semibold text-sky-300 transition hover:bg-sky-400/20 disabled:opacity-60">
             📄 PDF reporte
           </button>
 
-          {tipo === 'citas' && (
-            <button
-              onClick={handleConstanciaPDF}
-              disabled={loading || citasFiltradas.length === 0}
-              className="rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm font-semibold text-amber-300 transition hover:bg-amber-400/20 disabled:opacity-60"
-            >
-              🧾 Constancia PDF
+          {/* ── NUEVO: Cierre de caja (ingresos + egresos) ── */}
+          {(tipo === 'ingresos' || tipo === 'egresos' || tipo === 'financiero') && (
+            <button onClick={handleCierrePDF} disabled={loading} className="rounded-2xl border border-violet-400/30 bg-violet-400/10 px-4 py-3 text-sm font-semibold text-violet-300 transition hover:bg-violet-400/20 disabled:opacity-60">
+              🧾 Cierre PDF
             </button>
           )}
-        </div>
-      </Section>
 
-      {tipo === 'citas' && (
-        <Section title="Datos para la constancia" description="Estos datos alimentan el PDF con el formato de tu ejemplo.">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div>
-              <label className="mb-2 block text-sm font-medium text-white/75">Paciente</label>
-              <input value={constanciaPaciente} onChange={(e) => setConstanciaPaciente(e.target.value)} placeholder="Nombre del paciente" className={inputClassName} />
+          <button
+            type="button"
+            onClick={() => setPresupuestoPanelOpen((prev) => !prev)}
+            className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-400/20"
+          >
+            📃 Presupuesto
+          </button>
+
+          {/* ── NUEVO: Informe de sesiones ── */}
+          {tipo === 'citas' && (
+            <>
+              <button onClick={handleConstanciaPDF} disabled={loading || citasFiltradas.length === 0} className="rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm font-semibold text-amber-300 transition hover:bg-amber-400/20 disabled:opacity-60">
+                🧾 Constancia PDF
+              </button>
+              <button onClick={handleInformeSesionesPDF} disabled={loading || citasFiltradas.length === 0} className="rounded-2xl border border-teal-400/30 bg-teal-400/10 px-4 py-3 text-sm font-semibold text-teal-300 transition hover:bg-teal-400/20 disabled:opacity-60">
+                📋 Informe Sesiones PDF
+              </button>
+            </>
+          )}
+        </div>
+
+        {presupuestoPanelOpen ? (
+          <div className="mt-4 rounded-[24px] border border-emerald-400/20 bg-emerald-400/5 p-4">
+            <div className="mb-4 grid gap-3 lg:grid-cols-[1.1fr_auto] lg:items-end">
+              <div>
+                <label className="mb-2 block text-sm font-medium text-white/75">Buscar cliente para presupuesto</label>
+                <input
+                  value={presupuestoClienteSearch}
+                  onChange={(e) => setPresupuestoClienteSearch(e.target.value)}
+                  placeholder="Escribe nombre, cédula, teléfono o dirección"
+                  className={inputClassName}
+                />
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-xs text-white/55">
+                Selecciona un cliente y se autocompletan nombre, cédula, teléfono, dirección y terapeuta.
+              </div>
             </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-white/75">Cédula</label>
-              <input value={constanciaCedula} onChange={(e) => setConstanciaCedula(e.target.value)} placeholder="V12345678" className={inputClassName} />
+
+            <div className="mb-4 max-h-56 overflow-y-auto rounded-[22px] border border-white/10 bg-[#0d1118]/80">
+              {presupuestoClientesFiltrados.length === 0 ? (
+                <div className="px-4 py-4 text-sm text-white/45">No hay clientes con ese filtro.</div>
+              ) : (
+                presupuestoClientesFiltrados.map((cliente) => (
+                  <button
+                    key={cliente.id}
+                    type="button"
+                    onClick={() => handleSelectPresupuestoCliente(cliente.id)}
+                    className={`flex w-full items-start justify-between gap-3 border-b border-white/5 px-4 py-3 text-left transition last:border-b-0 hover:bg-white/[0.04] ${
+                      documentoClienteId === cliente.id ? 'bg-emerald-400/10' : ''
+                    }`}
+                  >
+                    <div>
+                      <p className="text-sm font-semibold text-white">{cliente.nombre}</p>
+                      <p className="mt-1 text-xs text-white/45">
+                        {[cliente.cedula, cliente.telefono, cliente.direccion].filter(Boolean).join(' · ') || 'Sin datos adicionales'}
+                      </p>
+                    </div>
+                    <div className="text-right text-xs text-emerald-200">
+                      {cliente.terapeuta || 'Sin terapeuta'}
+                    </div>
+                  </button>
+                ))
+              )}
             </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-white/75">Terapeuta firma</label>
-              <input value={constanciaTerapeuta} onChange={(e) => setConstanciaTerapeuta(e.target.value)} className={inputClassName} />
-            </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-white/75">Ciudad</label>
-              <input value={constanciaCiudad} onChange={(e) => setConstanciaCiudad(e.target.value)} className={inputClassName} />
+
+            <div className="space-y-5">
+              <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">N° Presupuesto</label>
+                  <input type="number" value={presupNumero} onChange={(e) => setPresupNumero(Number(e.target.value))} className={inputClassName} />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Fecha</label>
+                  <input type="date" value={presupFecha} onChange={(e) => setPresupFecha(e.target.value)} className={inputClassName} />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="mb-2 block text-sm font-medium text-white/75">Atención (Cliente)</label>
+                  <input value={presupAtencion} onChange={(e) => setPresupAtencion(e.target.value)} placeholder="Nombre completo" className={inputClassName} />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="mb-2 block text-sm font-medium text-white/75">Dirección</label>
+                  <input value={presupDireccion} onChange={(e) => setPresupDireccion(e.target.value)} placeholder="Ciudad - Estado" className={inputClassName} />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">RIF / Cédula</label>
+                  <input value={presupRif} onChange={(e) => setPresupRif(e.target.value)} placeholder="V12345678" className={inputClassName} />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Teléfono</label>
+                  <input value={presupTelefono} onChange={(e) => setPresupTelefono(e.target.value)} placeholder="04140000000" className={inputClassName} />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="mb-2 block text-sm font-medium text-white/75">Observaciones</label>
+                  <input value={presupObservaciones} onChange={(e) => setPresupObservaciones(e.target.value)} placeholder="Vigente hasta el: DD/MM/YYYY" className={inputClassName} />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="mb-2 block text-sm font-medium text-white/75">Realizado por</label>
+                  <input value={presupRealizadoPor} onChange={(e) => setPresupRealizadoPor(e.target.value)} placeholder="Nombre del terapeuta" className={inputClassName} />
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-white/10 bg-white/[0.03] p-4">
+                <p className="mb-3 text-sm font-medium text-white/75">Líneas de sesiones</p>
+                <div className="space-y-2">
+                  {presupLineas.map((linea, i) => (
+                    <div key={i} className="grid items-center gap-2 md:grid-cols-[90px_1fr_120px_120px_40px]">
+                      <input
+                        type="number"
+                        min={1}
+                        value={linea.cantidad}
+                        onChange={(e) => updateLinea(i, 'cantidad', e.target.value)}
+                        placeholder="Cant."
+                        className={inputClassName}
+                      />
+                      <input
+                        value={linea.tipoSesion}
+                        onChange={(e) => updateLinea(i, 'tipoSesion', e.target.value)}
+                        placeholder="Tipo de sesión"
+                        className={inputClassName}
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={linea.precio}
+                        onChange={(e) => updateLinea(i, 'precio', e.target.value)}
+                        placeholder="$ Precio"
+                        className={inputClassName}
+                      />
+                      <span className="pr-2 text-right text-sm font-semibold text-emerald-300">
+                        ${(linea.cantidad * linea.precio).toFixed(2)}
+                      </span>
+                      <button
+                        onClick={() => removeLinea(i)}
+                        disabled={presupLineas.length === 1}
+                        className="rounded-xl border border-white/10 bg-white/[0.05] px-2 py-2 text-white/40 hover:text-rose-400 disabled:opacity-30"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button onClick={addLinea} className="rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-2 text-sm text-white/60 transition hover:text-white/90">
+                    + Agregar línea
+                  </button>
+                  <span className="text-sm text-white/40">
+                    Total:{' '}
+                    <span className="text-base font-bold text-emerald-300">
+                      ${presupLineas.reduce((a, l) => a + l.cantidad * l.precio, 0).toFixed(2)}
+                    </span>
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={handlePresupuestoPDF}
+                  className="rounded-2xl border border-emerald-400/40 bg-emerald-400/15 px-6 py-3 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-400/25"
+                >
+                  Descargar presupuesto PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPresupuestoPanelOpen(false)}
+                  className="rounded-2xl border border-white/10 bg-white/[0.05] px-6 py-3 text-sm font-semibold text-white/70 transition hover:bg-white/[0.09]"
+                >
+                  Cerrar
+                </button>
+              </div>
             </div>
           </div>
-        </Section>
-      )}
+        ) : null}
+      </Section>
 
+      {/* Stats cards */}
       <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
         <StatCard title="Clientes" value={totalGlobal.clientes} subtitle={`Activos: ${totalGlobal.clientesActivos}`} color="text-sky-400" />
         <StatCard title="Planes" value={totalGlobal.planes} subtitle={`Activos: ${totalGlobal.planesActivos}`} color="text-violet-400" />
@@ -1690,6 +1885,7 @@ export default function ReportesPage() {
         <StatCard title={tipo === 'cobranzas' ? 'Pendiente USD' : `Balance ${monedaVista}`} value={tipo === 'cobranzas' ? money(resumen.carteraPendienteUsd, 'USD') : money(monedaVista === 'USD' ? resumen.balanceUsd : resumen.balanceBs, monedaVista === 'USD' ? 'USD' : 'VES')} color={tipo === 'cobranzas' ? 'text-amber-400' : (monedaVista === 'USD' ? resumen.balanceUsd : resumen.balanceBs) >= 0 ? 'text-cyan-400' : 'text-rose-400'} />
       </div>
 
+      {/* Gráficas */}
       {(tipo === 'citas' || tipo === 'ingresos' || tipo === 'egresos' || tipo === 'financiero' || tipo === 'nomina') && (
         <div className="grid gap-6 xl:grid-cols-2">
           {tipo === 'citas' && citasEstadoChart.length > 0 && (
@@ -1698,18 +1894,14 @@ export default function ReportesPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie data={citasEstadoChart} dataKey="value" nameKey="name" innerRadius={60} outerRadius={100} paddingAngle={3}>
-                      {citasEstadoChart.map((entry, index) => (
-                        <Cell key={`${entry.name}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                      ))}
+                      {citasEstadoChart.map((entry, index) => (<Cell key={`${entry.name}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />))}
                     </Pie>
-                    <Tooltip />
-                    <Legend />
+                    <Tooltip /><Legend />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
             </Section>
           )}
-
           {(tipo === 'financiero' || tipo === 'ingresos' || tipo === 'egresos') && financieroAgrupadoChart.length > 0 && (
             <Section title={`Ingresos vs Egresos (${monedaVista})`} description={`Comparativo por ${agrupacion}.`}>
               <div className="h-80">
@@ -1727,7 +1919,6 @@ export default function ReportesPage() {
               </div>
             </Section>
           )}
-
           {tipo === 'financiero' && acumuladoChart.length > 0 && (
             <Section title={`Flujo acumulado (${monedaVista})`} description={`Evolución del saldo por ${agrupacion}.`}>
               <div className="h-80">
@@ -1749,7 +1940,6 @@ export default function ReportesPage() {
               </div>
             </Section>
           )}
-
           {categoriaChart.length > 0 && (
             <Section title={`Distribución por categoría (${monedaVista})`} description="Top categorías del período.">
               <div className="h-80">
@@ -1768,29 +1958,23 @@ export default function ReportesPage() {
         </div>
       )}
 
+      {/* Tablas — sin cambios desde el original */}
       {tipo === 'clientes' && (
         <Section title="Reporte de clientes" description={`${clientesFiltrados.length} registros`} className="p-0" contentClassName="overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Nombre</th>
-                  <th className="px-4 py-3 text-left font-medium">Teléfono</th>
-                  <th className="px-4 py-3 text-left font-medium">Email</th>
-                  <th className="px-4 py-3 text-left font-medium">Terapeuta</th>
-                  <th className="px-4 py-3 text-left font-medium">Estado</th>
-                  <th className="px-4 py-3 text-left font-medium">Creado</th>
-                </tr>
+                <tr><th className="px-4 py-3 text-left font-medium">Nombre</th><th className="px-4 py-3 text-left font-medium">Cédula</th><th className="px-4 py-3 text-left font-medium">Teléfono</th><th className="px-4 py-3 text-left font-medium">Email</th><th className="px-4 py-3 text-left font-medium">Dirección</th><th className="px-4 py-3 text-left font-medium">Terapeuta</th><th className="px-4 py-3 text-left font-medium">Estado</th><th className="px-4 py-3 text-left font-medium">Creado</th></tr>
               </thead>
               <tbody className="divide-y divide-white/10">
-                {clientesFiltrados.length === 0 ? (
-                  <tr><td colSpan={6} className="px-4 py-6 text-center text-white/55">No hay clientes.</td></tr>
-                ) : (
+                {clientesFiltrados.length === 0 ? (<tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay clientes.</td></tr>) : (
                   clientesFiltrados.map((row) => (
                     <tr key={row.id} className="transition hover:bg-white/[0.03]">
                       <td className="px-4 py-3 font-medium text-white">{row.nombre}</td>
+                      <td className="px-4 py-3 text-white/75">{row.cedula || '—'}</td>
                       <td className="px-4 py-3 text-white/75">{row.telefono || '—'}</td>
                       <td className="px-4 py-3 text-white/75">{row.email || '—'}</td>
+                      <td className="px-4 py-3 text-white/75">{row.direccion || '—'}</td>
                       <td className="px-4 py-3 text-white/75">{row.empleados?.nombre || '—'}</td>
                       <td className="px-4 py-3 text-white/75">{row.estado}</td>
                       <td className="px-4 py-3 text-white/75">{shortDate(row.created_at.slice(0, 10))}</td>
@@ -1808,35 +1992,18 @@ export default function ReportesPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Cliente</th>
-                  <th className="px-4 py-3 text-left font-medium">Plan</th>
-                  <th className="px-4 py-3 text-left font-medium">Precio Final</th>
-                  <th className="px-4 py-3 text-left font-medium">Moneda</th>
-                  <th className="px-4 py-3 text-left font-medium">Inicio</th>
-                  <th className="px-4 py-3 text-left font-medium">Fin</th>
-                  <th className="px-4 py-3 text-left font-medium">Usadas</th>
-                  <th className="px-4 py-3 text-left font-medium">Restantes</th>
-                  <th className="px-4 py-3 text-left font-medium">Estado</th>
-                </tr>
+                <tr><th className="px-4 py-3 text-left font-medium">Cliente</th><th className="px-4 py-3 text-left font-medium">Plan</th><th className="px-4 py-3 text-left font-medium">Precio Final</th><th className="px-4 py-3 text-left font-medium">Moneda</th><th className="px-4 py-3 text-left font-medium">Inicio</th><th className="px-4 py-3 text-left font-medium">Fin</th><th className="px-4 py-3 text-left font-medium">Usadas</th><th className="px-4 py-3 text-left font-medium">Restantes</th><th className="px-4 py-3 text-left font-medium">Estado</th></tr>
               </thead>
               <tbody className="divide-y divide-white/10">
-                {planesFiltrados.length === 0 ? (
-                  <tr><td colSpan={9} className="px-4 py-6 text-center text-white/55">No hay planes.</td></tr>
-                ) : (
+                {planesFiltrados.length === 0 ? (<tr><td colSpan={9} className="px-4 py-6 text-center text-white/55">No hay planes.</td></tr>) : (
                   planesFiltrados.map((row) => {
-                    const precioFinal = row.moneda_venta === 'USD'
-                      ? row.precio_final_usd || row.planes?.precio || 0
-                      : row.monto_final_bs || 0
+                    const precioFinal = row.moneda_venta === 'USD' ? row.precio_final_usd || row.planes?.precio || 0 : row.monto_final_bs || 0
                     const sesionesRestantes = Number(row.sesiones_totales || 0) - Number(row.sesiones_usadas || 0)
-
                     return (
                       <tr key={row.id} className="transition hover:bg-white/[0.03]">
                         <td className="px-4 py-3 font-medium text-white">{row.clientes?.nombre || '—'}</td>
                         <td className="px-4 py-3 text-white/75">{row.planes?.nombre || '—'}</td>
-                        <td className="px-4 py-3 text-white/75">
-                          {row.moneda_venta === 'BS' ? money(precioFinal, 'VES') : money(precioFinal, 'USD')}
-                        </td>
+                        <td className="px-4 py-3 text-white/75">{row.moneda_venta === 'BS' ? money(precioFinal, 'VES') : money(precioFinal, 'USD')}</td>
                         <td className="px-4 py-3 text-white/75">{row.moneda_venta || '—'}</td>
                         <td className="px-4 py-3 text-white/75">{row.fecha_inicio ? shortDate(row.fecha_inicio) : '—'}</td>
                         <td className="px-4 py-3 text-white/75">{row.fecha_fin ? shortDate(row.fecha_fin) : '—'}</td>
@@ -1858,21 +2025,10 @@ export default function ReportesPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Fecha</th>
-                  <th className="px-4 py-3 text-left font-medium">Hora</th>
-                  <th className="px-4 py-3 text-left font-medium">Cliente</th>
-                  <th className="px-4 py-3 text-left font-medium">Terapeuta</th>
-                  <th className="px-4 py-3 text-left font-medium">Servicio</th>
-                  <th className="px-4 py-3 text-left font-medium">Recurso</th>
-                  <th className="px-4 py-3 text-left font-medium">Precio</th>
-                  <th className="px-4 py-3 text-left font-medium">Estado</th>
-                </tr>
+                <tr><th className="px-4 py-3 text-left font-medium">Fecha</th><th className="px-4 py-3 text-left font-medium">Hora</th><th className="px-4 py-3 text-left font-medium">Cliente</th><th className="px-4 py-3 text-left font-medium">Terapeuta</th><th className="px-4 py-3 text-left font-medium">Servicio</th><th className="px-4 py-3 text-left font-medium">Recurso</th><th className="px-4 py-3 text-left font-medium">Precio</th><th className="px-4 py-3 text-left font-medium">Estado</th></tr>
               </thead>
               <tbody className="divide-y divide-white/10">
-                {citasFiltradas.length === 0 ? (
-                  <tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay citas.</td></tr>
-                ) : (
+                {citasFiltradas.length === 0 ? (<tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay citas.</td></tr>) : (
                   citasFiltradas.map((row) => (
                     <tr key={row.id} className="transition hover:bg-white/[0.03]">
                       <td className="px-4 py-3 text-white/75">{shortDate(row.fecha)}</td>
@@ -1897,21 +2053,10 @@ export default function ReportesPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Fecha</th>
-                  <th className="px-4 py-3 text-left font-medium">Concepto</th>
-                  <th className="px-4 py-3 text-left font-medium">Categoría</th>
-                  <th className="px-4 py-3 text-left font-medium">Cliente</th>
-                  <th className="px-4 py-3 text-left font-medium">Método</th>
-                  <th className="px-4 py-3 text-left font-medium">Monto USD</th>
-                  <th className="px-4 py-3 text-left font-medium">Monto BS</th>
-                  <th className="px-4 py-3 text-left font-medium">Estado</th>
-                </tr>
+                <tr><th className="px-4 py-3 text-left font-medium">Fecha</th><th className="px-4 py-3 text-left font-medium">Concepto</th><th className="px-4 py-3 text-left font-medium">Categoría</th><th className="px-4 py-3 text-left font-medium">Cliente</th><th className="px-4 py-3 text-left font-medium">Método</th><th className="px-4 py-3 text-left font-medium">Monto USD</th><th className="px-4 py-3 text-left font-medium">Monto BS</th><th className="px-4 py-3 text-left font-medium">Estado</th></tr>
               </thead>
               <tbody className="divide-y divide-white/10">
-                {ingresosFiltrados.length === 0 ? (
-                  <tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay ingresos.</td></tr>
-                ) : (
+                {ingresosFiltrados.length === 0 ? (<tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay ingresos.</td></tr>) : (
                   ingresosFiltrados.map((row) => (
                     <tr key={row.id} className="transition hover:bg-white/[0.03]">
                       <td className="px-4 py-3 text-white/75">{shortDate(row.fecha)}</td>
@@ -1936,21 +2081,10 @@ export default function ReportesPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Fecha</th>
-                  <th className="px-4 py-3 text-left font-medium">Concepto</th>
-                  <th className="px-4 py-3 text-left font-medium">Categoría</th>
-                  <th className="px-4 py-3 text-left font-medium">Proveedor / Empleado</th>
-                  <th className="px-4 py-3 text-left font-medium">Método</th>
-                  <th className="px-4 py-3 text-left font-medium">Monto USD</th>
-                  <th className="px-4 py-3 text-left font-medium">Monto BS</th>
-                  <th className="px-4 py-3 text-left font-medium">Estado</th>
-                </tr>
+                <tr><th className="px-4 py-3 text-left font-medium">Fecha</th><th className="px-4 py-3 text-left font-medium">Concepto</th><th className="px-4 py-3 text-left font-medium">Categoría</th><th className="px-4 py-3 text-left font-medium">Proveedor / Empleado</th><th className="px-4 py-3 text-left font-medium">Método</th><th className="px-4 py-3 text-left font-medium">Monto USD</th><th className="px-4 py-3 text-left font-medium">Monto BS</th><th className="px-4 py-3 text-left font-medium">Estado</th></tr>
               </thead>
               <tbody className="divide-y divide-white/10">
-                {egresosFiltrados.length === 0 ? (
-                  <tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay egresos.</td></tr>
-                ) : (
+                {egresosFiltrados.length === 0 ? (<tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay egresos.</td></tr>) : (
                   egresosFiltrados.map((row) => (
                     <tr key={row.id} className="transition hover:bg-white/[0.03]">
                       <td className="px-4 py-3 text-white/75">{shortDate(row.fecha)}</td>
@@ -1975,21 +2109,10 @@ export default function ReportesPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Cliente</th>
-                  <th className="px-4 py-3 text-left font-medium">Concepto</th>
-                  <th className="px-4 py-3 text-left font-medium">Tipo origen</th>
-                  <th className="px-4 py-3 text-left font-medium">Total USD</th>
-                  <th className="px-4 py-3 text-left font-medium">Pagado USD</th>
-                  <th className="px-4 py-3 text-left font-medium">Saldo USD</th>
-                  <th className="px-4 py-3 text-left font-medium">Vence</th>
-                  <th className="px-4 py-3 text-left font-medium">Estado</th>
-                </tr>
+                <tr><th className="px-4 py-3 text-left font-medium">Cliente</th><th className="px-4 py-3 text-left font-medium">Concepto</th><th className="px-4 py-3 text-left font-medium">Tipo origen</th><th className="px-4 py-3 text-left font-medium">Total USD</th><th className="px-4 py-3 text-left font-medium">Pagado USD</th><th className="px-4 py-3 text-left font-medium">Saldo USD</th><th className="px-4 py-3 text-left font-medium">Vence</th><th className="px-4 py-3 text-left font-medium">Estado</th></tr>
               </thead>
               <tbody className="divide-y divide-white/10">
-                {cobranzasFiltradas.length === 0 ? (
-                  <tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay cobranzas.</td></tr>
-                ) : (
+                {cobranzasFiltradas.length === 0 ? (<tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay cobranzas.</td></tr>) : (
                   cobranzasFiltradas.map((row) => (
                     <tr key={row.id} className="transition hover:bg-white/[0.03]">
                       <td className="px-4 py-3 font-medium text-white">{row.clientes?.nombre || row.cliente_nombre || '—'}</td>
@@ -2014,21 +2137,10 @@ export default function ReportesPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Producto</th>
-                  <th className="px-4 py-3 text-left font-medium">Tipo</th>
-                  <th className="px-4 py-3 text-left font-medium">Cantidad</th>
-                  <th className="px-4 py-3 text-left font-medium">Anterior</th>
-                  <th className="px-4 py-3 text-left font-medium">Nueva</th>
-                  <th className="px-4 py-3 text-left font-medium">Concepto</th>
-                  <th className="px-4 py-3 text-left font-medium">Monto Total USD</th>
-                  <th className="px-4 py-3 text-left font-medium">Fecha</th>
-                </tr>
+                <tr><th className="px-4 py-3 text-left font-medium">Producto</th><th className="px-4 py-3 text-left font-medium">Tipo</th><th className="px-4 py-3 text-left font-medium">Cantidad</th><th className="px-4 py-3 text-left font-medium">Anterior</th><th className="px-4 py-3 text-left font-medium">Nueva</th><th className="px-4 py-3 text-left font-medium">Concepto</th><th className="px-4 py-3 text-left font-medium">Monto Total USD</th><th className="px-4 py-3 text-left font-medium">Fecha</th></tr>
               </thead>
               <tbody className="divide-y divide-white/10">
-                {inventarioFiltrado.length === 0 ? (
-                  <tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay movimientos.</td></tr>
-                ) : (
+                {inventarioFiltrado.length === 0 ? (<tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay movimientos.</td></tr>) : (
                   inventarioFiltrado.map((row) => (
                     <tr key={row.id} className="transition hover:bg-white/[0.03]">
                       <td className="px-4 py-3 font-medium text-white">{row.inventario?.nombre || '—'}</td>
@@ -2053,21 +2165,10 @@ export default function ReportesPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Fecha</th>
-                  <th className="px-4 py-3 text-left font-medium">Empleado</th>
-                  <th className="px-4 py-3 text-left font-medium">Tipo</th>
-                  <th className="px-4 py-3 text-left font-medium">Moneda</th>
-                  <th className="px-4 py-3 text-left font-medium">Monto USD</th>
-                  <th className="px-4 py-3 text-left font-medium">Monto BS</th>
-                  <th className="px-4 py-3 text-left font-medium">Método</th>
-                  <th className="px-4 py-3 text-left font-medium">Referencia</th>
-                </tr>
+                <tr><th className="px-4 py-3 text-left font-medium">Fecha</th><th className="px-4 py-3 text-left font-medium">Empleado</th><th className="px-4 py-3 text-left font-medium">Tipo</th><th className="px-4 py-3 text-left font-medium">Moneda</th><th className="px-4 py-3 text-left font-medium">Monto USD</th><th className="px-4 py-3 text-left font-medium">Monto BS</th><th className="px-4 py-3 text-left font-medium">Método</th><th className="px-4 py-3 text-left font-medium">Referencia</th></tr>
               </thead>
               <tbody className="divide-y divide-white/10">
-                {nominaFiltrada.length === 0 ? (
-                  <tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay pagos de nómina.</td></tr>
-                ) : (
+                {nominaFiltrada.length === 0 ? (<tr><td colSpan={8} className="px-4 py-6 text-center text-white/55">No hay pagos de nómina.</td></tr>) : (
                   nominaFiltrada.map((row) => (
                     <tr key={row.id} className="transition hover:bg-white/[0.03]">
                       <td className="px-4 py-3 text-white/75">{shortDate(row.fecha)}</td>
@@ -2092,49 +2193,15 @@ export default function ReportesPage() {
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium">Fecha</th>
-                  <th className="px-4 py-3 text-left font-medium">Tipo</th>
-                  <th className="px-4 py-3 text-left font-medium">Concepto</th>
-                  <th className="px-4 py-3 text-left font-medium">Categoría</th>
-                  <th className="px-4 py-3 text-left font-medium">Tercero</th>
-                  <th className="px-4 py-3 text-left font-medium">Método</th>
-                  <th className="px-4 py-3 text-left font-medium">Monto USD</th>
-                  <th className="px-4 py-3 text-left font-medium">Monto BS</th>
-                  <th className="px-4 py-3 text-left font-medium">Estado</th>
-                </tr>
+                <tr><th className="px-4 py-3 text-left font-medium">Fecha</th><th className="px-4 py-3 text-left font-medium">Tipo</th><th className="px-4 py-3 text-left font-medium">Concepto</th><th className="px-4 py-3 text-left font-medium">Categoría</th><th className="px-4 py-3 text-left font-medium">Tercero</th><th className="px-4 py-3 text-left font-medium">Método</th><th className="px-4 py-3 text-left font-medium">Monto USD</th><th className="px-4 py-3 text-left font-medium">Monto BS</th><th className="px-4 py-3 text-left font-medium">Estado</th></tr>
               </thead>
               <tbody className="divide-y divide-white/10">
                 {ingresosFiltrados.length === 0 && egresosFiltrados.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="px-4 py-6 text-center text-white/55">No hay movimientos financieros.</td>
-                  </tr>
+                  <tr><td colSpan={9} className="px-4 py-6 text-center text-white/55">No hay movimientos financieros.</td></tr>
                 ) : (
                   [
-                    ...ingresosFiltrados.map((row) => ({
-                      id: `ing-${row.id}`,
-                      fecha: row.fecha,
-                      tipo: 'Ingreso',
-                      concepto: row.concepto,
-                      categoria: row.categoria,
-                      tercero: row.clientes?.nombre || '—',
-                      metodo: row.metodos_pago_v2?.nombre || '—',
-                      montoUsd: Number(row.monto_equivalente_usd || 0),
-                      montoBs: Number(row.monto_equivalente_bs || 0),
-                      estado: row.estado,
-                    })),
-                    ...egresosFiltrados.map((row) => ({
-                      id: `egr-${row.id}`,
-                      fecha: row.fecha,
-                      tipo: 'Egreso',
-                      concepto: row.concepto,
-                      categoria: row.categoria,
-                      tercero: row.empleados?.nombre || row.proveedor || '—',
-                      metodo: row.metodos_pago_v2?.nombre || '—',
-                      montoUsd: Number(row.monto_equivalente_usd || 0),
-                      montoBs: Number(row.monto_equivalente_bs || 0),
-                      estado: row.estado,
-                    })),
+                    ...ingresosFiltrados.map((row) => ({ id: `ing-${row.id}`, fecha: row.fecha, tipo: 'Ingreso', concepto: row.concepto, categoria: row.categoria, tercero: row.clientes?.nombre || '—', metodo: row.metodos_pago_v2?.nombre || '—', montoUsd: Number(row.monto_equivalente_usd || 0), montoBs: Number(row.monto_equivalente_bs || 0), estado: row.estado })),
+                    ...egresosFiltrados.map((row) => ({ id: `egr-${row.id}`, fecha: row.fecha, tipo: 'Egreso', concepto: row.concepto, categoria: row.categoria, tercero: row.empleados?.nombre || row.proveedor || '—', metodo: row.metodos_pago_v2?.nombre || '—', montoUsd: Number(row.monto_equivalente_usd || 0), montoBs: Number(row.monto_equivalente_bs || 0), estado: row.estado })),
                   ]
                     .sort((a, b) => (a.fecha < b.fecha ? 1 : -1))
                     .map((row) => (

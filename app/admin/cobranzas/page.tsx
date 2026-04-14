@@ -6,142 +6,104 @@ import {
   ArrowLeft,
   Calendar,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   DollarSign,
   History,
   Search,
+  User,
   Wallet,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase/client'
 import { obtenerCuentasPorCobrar, type CuentaPorCobrar } from '@/lib/cobranzas/cuentas'
 
-function Card({
-  children,
-  className = '',
-}: {
-  children: React.ReactNode
-  className?: string
-}) {
+// ─── UI primitivos ────────────────────────────────────────────────────────────
+
+function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <div
-      className={`rounded-3xl border border-white/10 bg-white/[0.03] backdrop-blur-xl transition-all duration-200 ${className}`}
-    >
+    <div className={`rounded-3xl border border-white/10 bg-white/[0.03] backdrop-blur-xl transition-all duration-200 ${className}`}>
       {children}
     </div>
   )
 }
 
-function Badge({
-  children,
-  variant = 'default',
-}: {
-  children: React.ReactNode
-  variant?: 'default' | 'danger' | 'warning' | 'success'
-}) {
+function Badge({ children, variant = 'default' }: { children: React.ReactNode; variant?: 'default' | 'danger' | 'warning' | 'success' }) {
   const variants = {
     default: 'bg-white/[0.04] text-white/75 border-white/10',
     danger: 'bg-white/[0.04] text-rose-300 border-rose-400/20',
     warning: 'bg-white/[0.04] text-amber-300 border-amber-400/20',
     success: 'bg-white/[0.04] text-emerald-300 border-emerald-400/20',
   }
-
   return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs ${variants[variant]}`}
-    >
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs ${variants[variant]}`}>
       {children}
     </span>
   )
 }
 
+// ─── Tipos ────────────────────────────────────────────────────────────────────
+
 type EstadoCuentaCliente = {
   cliente_id: string
   total_pendiente_usd?: number | null
-  total_pendiente_bs?: number | null
   credito_disponible_usd?: number | null
   saldo_pendiente_neto_usd?: number | null
   saldo_favor_neto_usd?: number | null
-  credito_disponible_bs?: number | null
-  saldo_pendiente_neto_bs?: number | null
-  saldo_favor_neto_bs?: number | null
 }
 
+type ClienteAgrupado = {
+  cliente_id: string
+  cliente_nombre: string
+  cuentas: CuentaPorCobrar[]
+  total_deuda: number
+  total_pagado: number
+  cuentas_vencidas: number
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function formatMoney(value: number | string | null | undefined) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(Number(value || 0))
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(value || 0))
 }
 
 function formatDate(value: string | null | undefined) {
   if (!value) return '—'
-
   try {
-    return new Date(value).toLocaleDateString('es-VE', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    })
-  } catch {
-    return value
-  }
+    return new Date(value).toLocaleDateString('es-VE', { day: 'numeric', month: 'short', year: 'numeric' })
+  } catch { return value }
 }
 
 function calcularDiasVencidos(fechaVencimiento: string | null | undefined) {
   if (!fechaVencimiento) return 0
-
-  const hoy = new Date()
-  hoy.setHours(0, 0, 0, 0)
-
-  const venc = new Date(fechaVencimiento)
-  venc.setHours(0, 0, 0, 0)
-
-  const diff = hoy.getTime() - venc.getTime()
-  return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0)
+  const venc = new Date(fechaVencimiento); venc.setHours(0, 0, 0, 0)
+  return Math.max(0, Math.ceil((hoy.getTime() - venc.getTime()) / (1000 * 60 * 60 * 24)))
 }
 
 function normalizeEstado(estado: string | null | undefined) {
-  return String(estado || '')
-    .trim()
-    .toLowerCase()
+  return String(estado || '').trim().toLowerCase()
 }
 
 function isPendienteEstado(estado: string | null | undefined) {
   const e = normalizeEstado(estado)
-  return (
-    e === 'pendiente' ||
-    e === 'parcial' ||
-    e === 'vencida' ||
-    e === 'por_cobrar' ||
-    e === 'pendiente_de_pago'
-  )
+  return e === 'pendiente' || e === 'parcial' || e === 'vencida' || e === 'por_cobrar' || e === 'pendiente_de_pago'
 }
 
 function isHistorialEstado(estado: string | null | undefined) {
   const e = normalizeEstado(estado)
-  return (
-    e === 'pagado' ||
-    e === 'cancelada' ||
-    e === 'cancelado' ||
-    e === 'anulada' ||
-    e === 'anulado' ||
-    e === 'cerrada' ||
-    e === 'cerrado'
-  )
+  return e === 'pagado' || e === 'cancelada' || e === 'cancelado' || e === 'anulada' || e === 'anulado' || e === 'cerrada' || e === 'cerrado'
 }
 
 function getEstadoBadgeVariant(cuenta: CuentaPorCobrar): 'default' | 'danger' | 'warning' | 'success' {
-  const estado = normalizeEstado(cuenta.estado)
-
-  if (estado === 'pagado' || estado === 'cancelada' || estado === 'cancelado') return 'success'
-  if (estado === 'vencida') return 'danger'
-  if (estado === 'parcial' || estado === 'pendiente') return 'warning'
+  const e = normalizeEstado(cuenta.estado)
+  if (e === 'pagado' || e === 'cancelada' || e === 'cancelado') return 'success'
+  if (e === 'vencida') return 'danger'
+  if (e === 'parcial' || e === 'pendiente') return 'warning'
   return 'default'
 }
 
 function getEstadoLabel(estado: string | null | undefined) {
   const e = normalizeEstado(estado)
-
   if (e === 'pagado') return 'Pagado'
   if (e === 'cancelada' || e === 'cancelado') return 'Cancelado'
   if (e === 'anulada' || e === 'anulado') return 'Anulado'
@@ -151,149 +113,187 @@ function getEstadoLabel(estado: string | null | undefined) {
   return estado || 'Sin estado'
 }
 
-function ResumenCard({
-  title,
-  value,
-  helper,
-  icon,
-  tone = 'default',
-}: {
-  title: string
-  value: string
-  helper: string
-  icon: React.ReactNode
-  tone?: 'default' | 'warning' | 'success'
-}) {
-  const tones = {
-    default: 'from-white/[0.05] to-white/[0.02]',
-    warning: 'from-white/[0.05] to-white/[0.02]',
-    success: 'from-white/[0.05] to-white/[0.02]',
-  }
+// ─── Fila de cuenta individual (dentro del acordeón) ─────────────────────────
 
-  return (
-    <Card className="overflow-hidden p-5">
-      <div className={`rounded-2xl bg-gradient-to-r ${tones[tone]} p-4`}>
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm text-white/55">{title}</p>
-            <p className="mt-2 text-3xl font-bold tracking-tight text-white">{value}</p>
-            <p className="mt-1 text-xs text-white/40">{helper}</p>
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-white/[0.05] p-3 text-white/75">
-            {icon}
-          </div>
-        </div>
-      </div>
-    </Card>
-  )
-}
-
-function CuentaRow({
-  cuenta,
-  estadoCuenta,
-}: {
-  cuenta: CuentaPorCobrar
-  estadoCuenta?: EstadoCuentaCliente | null
-}) {
+function CuentaDetalle({ cuenta }: { cuenta: CuentaPorCobrar }) {
   const diasVencidos = calcularDiasVencidos(cuenta.fecha_vencimiento)
   const montoTotal = Number(cuenta.monto_total_usd || 0)
   const montoPagado = Number(cuenta.monto_pagado_usd || 0)
   const saldo = Number(cuenta.saldo_usd || 0)
   const progreso = montoTotal > 0 ? Math.min(100, Math.round((montoPagado / montoTotal) * 100)) : 0
-  const creditoDisponible = Number(estadoCuenta?.credito_disponible_usd || 0)
 
   return (
-    <Card className="group p-5 hover:bg-white/[0.05] hover:border-white/15">
-      <div className="flex flex-col gap-5 xl:flex-row xl:items-start">
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="truncate text-lg font-semibold text-white">{cuenta.cliente_nombre}</h3>
-                <Badge variant={getEstadoBadgeVariant(cuenta)}>{getEstadoLabel(cuenta.estado)}</Badge>
-                {diasVencidos > 0 && isPendienteEstado(cuenta.estado) && (
-                  <Badge variant="danger">
-                    <Clock3 className="h-3 w-3" />
-                    {diasVencidos} día{diasVencidos !== 1 ? 's' : ''} vencido
-                  </Badge>
-                )}
-              </div>
-
-              <p className="mt-1 text-sm text-white/50">{cuenta.concepto || 'Sin concepto'}</p>
-            </div>
-
-            <div className="text-right">
-              <p className="text-2xl font-bold text-white">{formatMoney(saldo)}</p>
-              <p className="text-xs text-white/45">Deuda de esta cuenta</p>
-            </div>
+    <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
+          {/* Concepto + badges */}
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-medium text-white">{cuenta.concepto || 'Sin concepto'}</p>
+            <Badge variant={getEstadoBadgeVariant(cuenta)}>{getEstadoLabel(cuenta.estado)}</Badge>
+            {diasVencidos > 0 && isPendienteEstado(cuenta.estado) && (
+              <Badge variant="danger">
+                <Clock3 className="h-3 w-3" />
+                {diasVencidos}d vencida
+              </Badge>
+            )}
           </div>
 
-          <div className="grid gap-3 text-sm text-white/55 sm:grid-cols-3">
-            <div>
-              <p className="text-xs text-white/35">Monto total</p>
-              <p className="mt-1 text-white">{formatMoney(montoTotal)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-white/35">Pagado</p>
-              <p className="mt-1 text-white">{formatMoney(montoPagado)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-white/35">Saldo de esta cuenta</p>
-              <p className="mt-1 text-white">{formatMoney(saldo)}</p>
-            </div>
+          {/* Fechas */}
+          <div className="mt-2 flex flex-wrap gap-4 text-xs text-white/40">
+            {cuenta.fecha_venta && <span>Emisión: {formatDate(cuenta.fecha_venta)}</span>}
+            {cuenta.fecha_vencimiento && <span>Vence: {formatDate(cuenta.fecha_vencimiento)}</span>}
+            {cuenta.tipo_origen && <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">{cuenta.tipo_origen}</span>}
           </div>
 
-          <div>
-            <div className="mb-2 flex items-center justify-between text-xs text-white/45">
-              <span>Progreso de cobro</span>
+          {/* Barra de progreso */}
+          <div className="mt-3">
+            <div className="mb-1 flex justify-between text-[11px] text-white/35">
+              <span>Cobrado {formatMoney(montoPagado)} de {formatMoney(montoTotal)}</span>
               <span>{progreso}%</span>
             </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
               <div
-                className="h-2 rounded-full bg-gradient-to-r from-violet-500 to-emerald-400 transition-all duration-500"
+                className="h-1.5 rounded-full bg-gradient-to-r from-violet-500 to-emerald-400 transition-all duration-500"
                 style={{ width: `${progreso}%` }}
               />
             </div>
           </div>
+        </div>
 
-          <div className="flex flex-wrap gap-2 text-xs text-white/45">
-            {cuenta.tipo_origen ? (
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
-                {cuenta.tipo_origen}
-              </span>
-            ) : null}
-            {cuenta.notas ? (
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
-                Con notas
-              </span>
-            ) : null}
-            {creditoDisponible > 0.01 ? (
-              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1">
-                Este cliente tiene crédito disponible: {formatMoney(creditoDisponible)}
-              </span>
-            ) : null}
+        {/* Saldo */}
+        <div className="shrink-0 text-right">
+          <p className="text-lg font-bold text-white">{formatMoney(saldo)}</p>
+          <p className="text-[11px] text-white/35">saldo pendiente</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Tarjeta de cliente agrupado ──────────────────────────────────────────────
+
+function ClienteCard({
+  grupo,
+  estadoCuenta,
+}: {
+  grupo: ClienteAgrupado
+  estadoCuenta?: EstadoCuentaCliente | null
+}) {
+  const [abierto, setAbierto] = useState(false)
+  const creditoDisponible = Number(estadoCuenta?.credito_disponible_usd || 0)
+  const progreso = (grupo.total_deuda + grupo.total_pagado) > 0
+    ? Math.min(100, Math.round((grupo.total_pagado / (grupo.total_deuda + grupo.total_pagado)) * 100))
+    : 0
+
+  return (
+    <Card className={`overflow-hidden transition-all duration-300 ${abierto ? 'border-white/15' : 'hover:border-white/15 hover:bg-white/[0.04]'}`}>
+      {/* ── Header clickeable ── */}
+      <button
+        type="button"
+        onClick={() => setAbierto(!abierto)}
+        className="w-full px-5 py-4 text-left"
+      >
+        <div className="flex items-center gap-4">
+          {/* Avatar iniciales */}
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500/30 to-fuchsia-500/20 border border-violet-400/20 text-sm font-bold text-violet-200">
+            {grupo.cliente_nombre.slice(0, 2).toUpperCase()}
+          </div>
+
+          {/* Info cliente */}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-semibold text-white">{grupo.cliente_nombre}</p>
+              {grupo.cuentas_vencidas > 0 && (
+                <Badge variant="danger">
+                  <Clock3 className="h-3 w-3" />
+                  {grupo.cuentas_vencidas} vencida{grupo.cuentas_vencidas > 1 ? 's' : ''}
+                </Badge>
+              )}
+              {creditoDisponible > 0.01 && (
+                <Badge variant="success">Crédito: {formatMoney(creditoDisponible)}</Badge>
+              )}
+            </div>
+            <p className="mt-0.5 text-xs text-white/40">
+              {grupo.cuentas.length} cuenta{grupo.cuentas.length !== 1 ? 's' : ''}
+            </p>
+          </div>
+
+          {/* Deuda total */}
+          <div className="shrink-0 text-right">
+            <p className="text-xl font-bold text-white">{formatMoney(grupo.total_deuda)}</p>
+            <p className="text-[11px] text-white/35">deuda total</p>
+          </div>
+
+          {/* Chevron */}
+          <ChevronDown
+            className={`h-5 w-5 shrink-0 text-white/40 transition-transform duration-300 ${abierto ? 'rotate-180' : ''}`}
+          />
+        </div>
+
+        {/* Barra de progreso global */}
+        {(grupo.total_deuda + grupo.total_pagado) > 0 && (
+          <div className="mt-3 pl-14">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-1.5 rounded-full bg-gradient-to-r from-violet-500 to-emerald-400 transition-all duration-500"
+                style={{ width: `${progreso}%` }}
+              />
+            </div>
+            <p className="mt-1 text-[11px] text-white/30">
+              {formatMoney(grupo.total_pagado)} cobrado · {progreso}%
+            </p>
+          </div>
+        )}
+      </button>
+
+      {/* ── Detalle expandido ── */}
+      {abierto && (
+        <div className="border-t border-white/8 px-5 pb-5 pt-4">
+          <div className="space-y-3">
+            {grupo.cuentas.map((cuenta) => (
+              <CuentaDetalle key={cuenta.id} cuenta={cuenta} />
+            ))}
+          </div>
+
+          {/* Acciones */}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link
+              href={`/admin/finanzas/ingresos?cliente=${grupo.cliente_id}`}
+              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
+            >
+              Cobrar en ingresos
+            </Link>
+            <Link
+              href={`/admin/finanzas/ingresos?cliente=${grupo.cliente_id}&tipoIngreso=saldo`}
+              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
+            >
+              Agregar saldo
+            </Link>
           </div>
         </div>
+      )}
+    </Card>
+  )
+}
 
-        <div className="flex shrink-0 flex-col gap-3 xl:w-[220px]">
-          <Link
-            href={`/admin/finanzas/ingresos?cliente=${cuenta.cliente_id}`}
-            className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-center text-sm font-medium text-white/85 transition hover:bg-white/[0.06]"
-          >
-            Cobrar en ingresos
-          </Link>
+// ─── ResumenCard ──────────────────────────────────────────────────────────────
 
-          <Link
-            href={`/admin/finanzas/ingresos?cliente=${cuenta.cliente_id}&tipoIngreso=saldo`}
-            className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-center text-sm font-medium text-white/85 transition hover:bg-white/[0.06]"
-          >
-            Agregar saldo
-          </Link>
+function ResumenCard({ title, value, helper, icon }: { title: string; value: string; helper: string; icon: React.ReactNode }) {
+  return (
+    <Card className="p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm text-white/55">{title}</p>
+          <p className="mt-2 text-3xl font-bold tracking-tight text-white">{value}</p>
+          <p className="mt-1 text-xs text-white/40">{helper}</p>
         </div>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.05] p-3 text-white/75">{icon}</div>
       </div>
     </Card>
   )
 }
+
+// ─── Page principal ───────────────────────────────────────────────────────────
 
 export default function CobranzasDashboardPage() {
   const [cuentas, setCuentas] = useState<CuentaPorCobrar[]>([])
@@ -302,9 +302,7 @@ export default function CobranzasDashboardPage() {
   const [busqueda, setBusqueda] = useState('')
   const [tab, setTab] = useState<'pendientes' | 'historial'>('pendientes')
 
-  useEffect(() => {
-    void cargarCuentas()
-  }, [])
+  useEffect(() => { void cargarCuentas() }, [])
 
   async function cargarCuentas() {
     try {
@@ -312,34 +310,15 @@ export default function CobranzasDashboardPage() {
       const cuentasData = data || []
       setCuentas(cuentasData)
 
-      const clienteIds = Array.from(
-        new Set(
-          cuentasData
-            .map((cuenta) => String(cuenta.cliente_id || '').trim())
-            .filter(Boolean)
-        )
-      )
+      const clienteIds = Array.from(new Set(cuentasData.map((c) => String(c.cliente_id || '').trim()).filter(Boolean)))
 
       if (clienteIds.length > 0) {
         const { data: estados, error } = await supabase
           .from('v_clientes_estado_cuenta')
-          .select(`
-            cliente_id,
-            total_pendiente_usd,
-            total_pendiente_bs,
-            credito_disponible_usd,
-            saldo_pendiente_neto_usd,
-            saldo_favor_neto_usd,
-            credito_disponible_bs,
-            saldo_pendiente_neto_bs,
-            saldo_favor_neto_bs
-          `)
+          .select('cliente_id, total_pendiente_usd, credito_disponible_usd, saldo_pendiente_neto_usd, saldo_favor_neto_usd')
           .in('cliente_id', clienteIds)
 
-        if (error) {
-          console.error('Error cargando estado de cuenta en cobranzas:', error)
-          setEstadoCuentaMap({})
-        } else {
+        if (!error) {
           const nextMap: Record<string, EstadoCuentaCliente> = {}
           for (const item of estados || []) {
             const row = item as EstadoCuentaCliente
@@ -347,83 +326,74 @@ export default function CobranzasDashboardPage() {
           }
           setEstadoCuentaMap(nextMap)
         }
-      } else {
-        setEstadoCuentaMap({})
       }
-    } catch (error) {
-      console.error('Error cargando cobranzas:', error)
-      setCuentas([])
-      setEstadoCuentaMap({})
+    } catch (err) {
+      console.error('Error cargando cobranzas:', err)
     } finally {
       setCargando(false)
     }
   }
 
-  const cuentasPendientes = useMemo(() => {
-    return cuentas
-      .filter((c) => isPendienteEstado(c.estado) || Number(c.saldo_usd || 0) > 0)
-      .sort((a, b) => {
-        const av = new Date(a.fecha_vencimiento || a.fecha_venta || a.created_at || 0).getTime()
-        const bv = new Date(b.fecha_vencimiento || b.fecha_venta || b.created_at || 0).getTime()
-        return av - bv
-      })
-  }, [cuentas])
+  // ── Agrupar por cliente ──────────────────────────────────────────────────
 
-  const cuentasHistorial = useMemo(() => {
-    return cuentas
-      .filter((c) => isHistorialEstado(c.estado) || Number(c.saldo_usd || 0) <= 0)
-      .sort((a, b) => {
-        const av = new Date(a.created_at || a.fecha_venta || 0).getTime()
-        const bv = new Date(b.created_at || b.fecha_venta || 0).getTime()
-        return bv - av
-      })
-  }, [cuentas])
+  function agruparPorCliente(lista: CuentaPorCobrar[]): ClienteAgrupado[] {
+    const mapa: Record<string, ClienteAgrupado> = {}
 
-  const pendientesFiltradas = useMemo(() => {
-    const q = busqueda.trim().toLowerCase()
-    if (!q) return cuentasPendientes
+    for (const cuenta of lista) {
+      const id = String(cuenta.cliente_id || 'sin_id')
+      if (!mapa[id]) {
+        mapa[id] = {
+          cliente_id: id,
+          cliente_nombre: cuenta.cliente_nombre || 'Cliente desconocido',
+          cuentas: [],
+          total_deuda: 0,
+          total_pagado: 0,
+          cuentas_vencidas: 0,
+        }
+      }
+      mapa[id].cuentas.push(cuenta)
+      mapa[id].total_deuda += Number(cuenta.saldo_usd || 0)
+      mapa[id].total_pagado += Number(cuenta.monto_pagado_usd || 0)
+      if (calcularDiasVencidos(cuenta.fecha_vencimiento) > 0 && isPendienteEstado(cuenta.estado)) {
+        mapa[id].cuentas_vencidas++
+      }
+    }
 
-    return cuentasPendientes.filter((c) => {
-      return (
-        String(c.cliente_nombre || '').toLowerCase().includes(q) ||
-        String(c.concepto || '').toLowerCase().includes(q) ||
-        String(c.estado || '').toLowerCase().includes(q)
-      )
-    })
-  }, [busqueda, cuentasPendientes])
+    return Object.values(mapa).sort((a, b) => b.total_deuda - a.total_deuda)
+  }
 
-  const historialFiltrado = useMemo(() => {
-    const q = busqueda.trim().toLowerCase()
-    if (!q) return cuentasHistorial
+  // ── Filtros ──────────────────────────────────────────────────────────────
 
-    return cuentasHistorial.filter((c) => {
-      return (
-        String(c.cliente_nombre || '').toLowerCase().includes(q) ||
-        String(c.concepto || '').toLowerCase().includes(q) ||
-        String(c.estado || '').toLowerCase().includes(q)
-      )
-    })
-  }, [busqueda, cuentasHistorial])
-
-  const totalPendiente = useMemo(
-    () => cuentasPendientes.reduce((sum, c) => sum + Number(c.saldo_usd || 0), 0),
-    [cuentasPendientes]
-  )
-
-  const totalHistorico = useMemo(
-    () => cuentasHistorial.reduce((sum, c) => sum + Number(c.monto_pagado_usd || c.monto_total_usd || 0), 0),
-    [cuentasHistorial]
-  )
-
-  const totalCobrado = useMemo(
-    () => cuentas.reduce((sum, c) => sum + Number(c.monto_pagado_usd || 0), 0),
+  const cuentasPendientes = useMemo(() =>
+    cuentas.filter((c) => isPendienteEstado(c.estado) || Number(c.saldo_usd || 0) > 0),
     [cuentas]
   )
 
-  const cuentasVigentes = useMemo(
-    () => cuentasPendientes.filter((c) => calcularDiasVencidos(c.fecha_vencimiento) === 0).length,
-    [cuentasPendientes]
+  const cuentasHistorial = useMemo(() =>
+    cuentas.filter((c) => isHistorialEstado(c.estado) && Number(c.saldo_usd || 0) <= 0),
+    [cuentas]
   )
+
+  const gruposPendientes = useMemo(() => {
+    const q = busqueda.trim().toLowerCase()
+    const grupos = agruparPorCliente(cuentasPendientes)
+    if (!q) return grupos
+    return grupos.filter((g) => g.cliente_nombre.toLowerCase().includes(q))
+  }, [cuentasPendientes, busqueda])
+
+  const gruposHistorial = useMemo(() => {
+    const q = busqueda.trim().toLowerCase()
+    const grupos = agruparPorCliente(cuentasHistorial)
+    if (!q) return grupos
+    return grupos.filter((g) => g.cliente_nombre.toLowerCase().includes(q))
+  }, [cuentasHistorial, busqueda])
+
+  // ── Métricas ─────────────────────────────────────────────────────────────
+
+  const totalPendiente = useMemo(() => cuentasPendientes.reduce((s, c) => s + Number(c.saldo_usd || 0), 0), [cuentasPendientes])
+  const totalCobrado = useMemo(() => cuentas.reduce((s, c) => s + Number(c.monto_pagado_usd || 0), 0), [cuentas])
+  const clientesConDeuda = gruposPendientes.length
+  const clientesVencidos = useMemo(() => gruposPendientes.filter((g) => g.cuentas_vencidas > 0).length, [gruposPendientes])
 
   if (cargando) {
     return (
@@ -442,102 +412,56 @@ export default function CobranzasDashboardPage() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#0a0b0f] via-[#0d1017] to-[#11131a]">
       <div className="mx-auto max-w-[1500px] px-4 py-8 sm:px-6">
+
+        {/* Header */}
         <div className="mb-8 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <div className="mb-2 flex items-center gap-3">
-              <Link
-                href="/admin"
-                className="rounded-2xl border border-white/10 bg-white/[0.03] p-2.5 transition-all hover:bg-white/[0.08]"
-              >
+              <Link href="/admin" className="rounded-2xl border border-white/10 bg-white/[0.03] p-2.5 transition-all hover:bg-white/[0.08]">
                 <ArrowLeft className="h-5 w-5 text-white/70" />
               </Link>
-
               <div className="flex flex-wrap items-center gap-2 text-sm text-white/35">
-                <Link href="/admin" className="transition hover:text-white/70">
-                  Admin
-                </Link>
+                <Link href="/admin" className="transition hover:text-white/70">Admin</Link>
                 <span>/</span>
                 <span className="text-white/70">Cobranzas</span>
               </div>
             </div>
-
             <h1 className="text-3xl font-bold tracking-tight text-white">Cobranzas</h1>
-            <p className="mt-2 text-base text-white/55">
-              Aquí se muestra solo la deuda de cada cuenta. El saldo neto general del cliente se trabaja en ingresos.
-            </p>
+            <p className="mt-2 text-base text-white/55">Deuda agrupada por cliente. Haz click en un cliente para ver sus cuentas.</p>
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Link
-              href="/admin/finanzas/ingresos"
-              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
-            >
+            <Link href="/admin/finanzas/ingresos" className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]">
               Ir a ingresos
             </Link>
-            <button
-              type="button"
-              onClick={() => setTab('pendientes')}
-              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
-            >
-              Ver cuentas pendientes aquí
-            </button>
           </div>
         </div>
 
+        {/* KPIs */}
         <div className="mb-6 grid gap-4 lg:grid-cols-4">
-          <ResumenCard
-            title="Total pendiente"
-            value={formatMoney(totalPendiente)}
-            helper={`${cuentasPendientes.length} cuenta(s) por cobrar`}
-            icon={<Wallet className="h-6 w-6" />}
-            tone="warning"
-          />
-          <ResumenCard
-            title="Total cobrado"
-            value={formatMoney(totalCobrado)}
-            helper="Suma de pagos registrados"
-            icon={<DollarSign className="h-6 w-6" />}
-            tone="success"
-          />
-          <ResumenCard
-            title="En historial"
-            value={String(cuentasHistorial.length)}
-            helper={formatMoney(totalHistorico)}
-            icon={<History className="h-6 w-6" />}
-          />
-          <ResumenCard
-            title="Pendientes vigentes"
-            value={String(cuentasVigentes)}
-            helper="Aún no vencen"
-            icon={<Calendar className="h-6 w-6" />}
-          />
+          <ResumenCard title="Total pendiente" value={formatMoney(totalPendiente)} helper={`${clientesConDeuda} cliente(s) con deuda`} icon={<Wallet className="h-6 w-6" />} />
+          <ResumenCard title="Total cobrado" value={formatMoney(totalCobrado)} helper="Suma de pagos registrados" icon={<DollarSign className="h-6 w-6" />} />
+          <ResumenCard title="Clientes con deuda" value={String(clientesConDeuda)} helper="Tienen saldo pendiente" icon={<User className="h-6 w-6" />} />
+          <ResumenCard title="Con vencidas" value={String(clientesVencidos)} helper="Al menos 1 cuenta vencida" icon={<Calendar className="h-6 w-6" />} />
         </div>
 
+        {/* Tabs + búsqueda */}
         <Card className="mb-6 p-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => setTab('pendientes')}
-                className={`rounded-2xl border px-4 py-2 text-sm font-medium transition ${
-                  tab === 'pendientes'
-                    ? 'border-white/20 bg-white/[0.08] text-white'
-                    : 'border-white/10 bg-white/[0.03] text-white/65 hover:bg-white/[0.06]'
-                }`}
+                className={`rounded-2xl border px-4 py-2 text-sm font-medium transition ${tab === 'pendientes' ? 'border-white/20 bg-white/[0.08] text-white' : 'border-white/10 bg-white/[0.03] text-white/65 hover:bg-white/[0.06]'}`}
               >
-                Cuentas pendientes ({pendientesFiltradas.length})
+                Pendientes ({gruposPendientes.length} clientes)
               </button>
-
               <button
                 type="button"
                 onClick={() => setTab('historial')}
-                className={`rounded-2xl border px-4 py-2 text-sm font-medium transition ${
-                  tab === 'historial'
-                    ? 'border-white/20 bg-white/[0.08] text-white'
-                    : 'border-white/10 bg-white/[0.03] text-white/65 hover:bg-white/[0.06]'
-                }`}
+                className={`rounded-2xl border px-4 py-2 text-sm font-medium transition ${tab === 'historial' ? 'border-white/20 bg-white/[0.08] text-white' : 'border-white/10 bg-white/[0.03] text-white/65 hover:bg-white/[0.06]'}`}
               >
-                Cuentas cerradas ({historialFiltrado.length})
+                Historial ({gruposHistorial.length} clientes)
               </button>
             </div>
 
@@ -546,31 +470,30 @@ export default function CobranzasDashboardPage() {
               <input
                 value={busqueda}
                 onChange={(e) => setBusqueda(e.target.value)}
-                placeholder={`Buscar en ${tab}...`}
+                placeholder="Buscar cliente..."
                 className="w-full rounded-2xl border border-white/10 bg-white/[0.03] py-3 pl-11 pr-4 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-white/20 focus:bg-white/[0.05]"
               />
             </div>
           </div>
         </Card>
 
+        {/* Lista agrupada */}
         {tab === 'pendientes' && (
-          <div className="space-y-4">
-            {pendientesFiltradas.length === 0 ? (
+          <div className="space-y-3">
+            {gruposPendientes.length === 0 ? (
               <Card className="p-12 text-center">
                 <div className="mx-auto mb-4 inline-flex items-center justify-center rounded-full bg-emerald-400/10 p-4">
                   <CheckCircle2 className="h-10 w-10 text-emerald-400" />
                 </div>
                 <h3 className="text-2xl font-semibold text-white">No hay pendientes</h3>
-                <p className="mt-2 text-white/55">
-                  No tienes cuentas por cobrar pendientes en este momento.
-                </p>
+                <p className="mt-2 text-white/55">No tienes cuentas por cobrar pendientes.</p>
               </Card>
             ) : (
-              pendientesFiltradas.map((cuenta) => (
-                <CuentaRow
-                  key={cuenta.id}
-                  cuenta={cuenta}
-                  estadoCuenta={estadoCuentaMap[String(cuenta.cliente_id || '')] || null}
+              gruposPendientes.map((grupo) => (
+                <ClienteCard
+                  key={grupo.cliente_id}
+                  grupo={grupo}
+                  estadoCuenta={estadoCuentaMap[grupo.cliente_id] || null}
                 />
               ))
             )}
@@ -578,23 +501,21 @@ export default function CobranzasDashboardPage() {
         )}
 
         {tab === 'historial' && (
-          <div className="space-y-4">
-            {historialFiltrado.length === 0 ? (
+          <div className="space-y-3">
+            {gruposHistorial.length === 0 ? (
               <Card className="p-12 text-center">
                 <div className="mx-auto mb-4 inline-flex items-center justify-center rounded-full bg-white/10 p-4">
                   <History className="h-10 w-10 text-white/70" />
                 </div>
                 <h3 className="text-2xl font-semibold text-white">Sin historial todavía</h3>
-                <p className="mt-2 text-white/55">
-                  Aquí aparecerán las cuentas ya cerradas, pagadas o anuladas.
-                </p>
+                <p className="mt-2 text-white/55">Aquí aparecerán clientes con cuentas ya cerradas.</p>
               </Card>
             ) : (
-              historialFiltrado.map((cuenta) => (
-                <CuentaRow
-                  key={cuenta.id}
-                  cuenta={cuenta}
-                  estadoCuenta={estadoCuentaMap[String(cuenta.cliente_id || '')] || null}
+              gruposHistorial.map((grupo) => (
+                <ClienteCard
+                  key={grupo.cliente_id}
+                  grupo={grupo}
+                  estadoCuenta={estadoCuentaMap[grupo.cliente_id] || null}
                 />
               ))
             )}

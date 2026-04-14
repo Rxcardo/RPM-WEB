@@ -1,4 +1,4 @@
-'use client'
+ 'use client'
 
 export const dynamic = 'force-dynamic'
 
@@ -153,6 +153,40 @@ function estadoBadge(estado: string) {
       return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
     default:
       return 'border-white/10 bg-white/[0.05] text-white/70'
+  }
+}
+
+function estadoPlanBadge(estado: string) {
+  switch ((estado || '').toLowerCase()) {
+    case 'activo':
+      return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+    case 'agotado':
+      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+    case 'vencido':
+      return 'border-white/10 bg-white/[0.05] text-white/70'
+    case 'renovado':
+      return 'border-violet-400/20 bg-violet-400/10 text-violet-300'
+    case 'cancelado':
+      return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+    default:
+      return 'border-white/10 bg-white/[0.05] text-white/70'
+  }
+}
+
+function getPlanStatusLabel(estado: string | null | undefined) {
+  switch ((estado || '').toLowerCase()) {
+    case 'activo':
+      return 'Activo'
+    case 'agotado':
+      return 'Agotado'
+    case 'vencido':
+      return 'Vencido'
+    case 'renovado':
+      return 'Renovado'
+    case 'cancelado':
+      return 'Cancelado'
+    default:
+      return estado || 'Sin estado'
   }
 }
 
@@ -707,8 +741,15 @@ export default function ClientesPage() {
                     <td className="px-4 py-4">
                       {planActivo ? (
                         <div>
-                          <div className="font-medium text-white">
-                            {planActivo.planes?.nombre || 'Plan'}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="font-medium text-white">
+                              {planActivo.planes?.nombre || 'Plan'}
+                            </div>
+                            <span
+                              className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${estadoPlanBadge(planActivo.estado)}`}
+                            >
+                              {getPlanStatusLabel(planActivo.estado)}
+                            </span>
                           </div>
                           <div className="mt-1 text-xs text-white/45">
                             Vence: {formatDate(planActivo.fecha_fin)}

@@ -230,6 +230,10 @@ function r2(v: number) {
   return Math.round(v * 100) / 100
 }
 
+function clamp(v: number, min: number, max: number) {
+  return Math.min(Math.max(v, min), max)
+}
+
 function nn(v: string) {
   const n = Number(v)
   return Number.isFinite(n) && n >= 0 ? n : 0
@@ -554,6 +558,13 @@ export default function ClientePlanPage() {
   const [duracionMin, setDuracionMin] = useState(60)
 
   const [registrarPago, setRegistrarPago] = useState(true)
+  const [tipoPago, setTipoPago] = useState<'unico' | 'mixto'>('unico')
+  const [monedaPagoUnico, setMonedaPagoUnico] = useState<'USD' | 'BS'>('USD')
+  const [metodoPagoUnicoId, setMetodoPagoUnicoId] = useState('')
+  const [referenciaPagoUnico, setReferenciaPagoUnico] = useState('')
+  const [notasPagoUnico, setNotasPagoUnico] = useState('')
+  const [tasaPagoUnico, setTasaPagoUnico] = useState<number | null>(null)
+  const [montoPagoUnicoBs, setMontoPagoUnicoBs] = useState<number | null>(null)
   const [usarPrecioPlan, setUsarPrecioPlan] = useState(true)
   const [montoPersonalizado, setMontoPersonalizado] = useState('')
   const [notasPagoGenerales, setNotasPagoGenerales] = useState('')
@@ -574,6 +585,19 @@ export default function ClientePlanPage() {
 
   const [renovarConPendientes, setRenovarConPendientes] = useState<OpcionArrastreSesiones>('si')
   const [registrarAjustePlan, setRegistrarAjustePlan] = useState(true)
+  const [porcentajeRpmEditable, setPorcentajeRpmEditable] = useState(50)
+  const [porcentajeEntrenadorEditable, setPorcentajeEntrenadorEditable] = useState(50)
+
+  const [mixtoMonedaIngresada, setMixtoMonedaIngresada] = useState<'USD' | 'BS'>('USD')
+  const [mixtoMetodoIngresadoId, setMixtoMetodoIngresadoId] = useState('')
+  const [mixtoMetodoDiferenciaId, setMixtoMetodoDiferenciaId] = useState('')
+  const [mixtoMontoIngresadoUsd, setMixtoMontoIngresadoUsd] = useState('')
+  const [mixtoMontoIngresadoBs, setMixtoMontoIngresadoBs] = useState<number | null>(null)
+  const [mixtoTasaBcv, setMixtoTasaBcv] = useState<number | null>(null)
+  const [mixtoReferenciaIngresada, setMixtoReferenciaIngresada] = useState('')
+  const [mixtoReferenciaDiferencia, setMixtoReferenciaDiferencia] = useState('')
+  const [mixtoNotasIngresada, setMixtoNotasIngresada] = useState('')
+  const [mixtoNotasDiferencia, setMixtoNotasDiferencia] = useState('')
 
   const fetchAll = useCallback(async () => {
     if (!id) return
@@ -671,31 +695,98 @@ export default function ClientePlanPage() {
     [usarPrecioPlan, selectedPlan, montoPersonalizado]
   )
 
-  const porcentajeRpmPlan = useMemo(() => {
-    const base = Number(selectedPlan?.comision_base ?? selectedPlan?.precio ?? 0)
-    const rpm = Number(selectedPlan?.comision_rpm ?? 0)
-    if (!base) return 0
-    return r2((rpm / base) * 100)
+  const montoBaseComisionPlan = useMemo(() => {
+    return Number(selectedPlan?.comision_base ?? selectedPlan?.precio ?? 0)
   }, [selectedPlan])
+
+  const montoRpmPlan = useMemo(() => {
+    return Number(selectedPlan?.comision_rpm ?? 0)
+  }, [selectedPlan])
+
+  const montoEntrenadorPlan = useMemo(() => {
+    return Number(selectedPlan?.comision_entrenador ?? 0)
+  }, [selectedPlan])
+
+  const porcentajeRpmPlan = useMemo(() => {
+    if (!montoBaseComisionPlan) return 0
+    return r2((montoRpmPlan / montoBaseComisionPlan) * 100)
+  }, [montoBaseComisionPlan, montoRpmPlan])
 
   const porcentajeEntrenadorPlan = useMemo(() => {
-    const base = Number(selectedPlan?.comision_base ?? selectedPlan?.precio ?? 0)
-    const entrenador = Number(selectedPlan?.comision_entrenador ?? 0)
-    if (!base) return 0
-    return r2((entrenador / base) * 100)
-  }, [selectedPlan])
+    return r2(100 - porcentajeRpmPlan)
+  }, [porcentajeRpmPlan])
+
+  useEffect(() => {
+    if (!selectedPlan) {
+      setPorcentajeRpmEditable(50)
+      setPorcentajeEntrenadorEditable(50)
+      return
+    }
+
+    const rpmPct = clamp(
+      r2(
+        porcentajeRpmPlan > 0
+          ? porcentajeRpmPlan
+          : montoBaseComisionPlan > 0
+            ? (montoRpmPlan / montoBaseComisionPlan) * 100
+            : 50
+      ),
+      0,
+      100
+    )
+
+    setPorcentajeRpmEditable(rpmPct)
+    setPorcentajeEntrenadorEditable(r2(100 - rpmPct))
+  }, [selectedPlan?.id, porcentajeRpmPlan, montoBaseComisionPlan, montoRpmPlan])
 
   const baseComisionAplicada = useMemo(() => {
-    return usarPrecioPlan ? Number(selectedPlan?.comision_base ?? selectedPlan?.precio ?? 0) : montoBase
-  }, [usarPrecioPlan, selectedPlan, montoBase])
+    return r2(Math.max(Number(montoBase || 0), 0))
+  }, [montoBase])
+
+  const porcentajeRpmAplicado = useMemo(() => clamp(r2(porcentajeRpmEditable), 0, 100), [porcentajeRpmEditable])
+  const porcentajeEntrenadorAplicado = useMemo(() => clamp(r2(100 - porcentajeRpmAplicado), 0, 100), [porcentajeRpmAplicado])
 
   const montoRpmAplicado = useMemo(() => {
-    return r2((baseComisionAplicada * porcentajeRpmPlan) / 100)
-  }, [baseComisionAplicada, porcentajeRpmPlan])
+    return r2((baseComisionAplicada * porcentajeRpmAplicado) / 100)
+  }, [baseComisionAplicada, porcentajeRpmAplicado])
 
   const montoEntrenadorAplicado = useMemo(() => {
-    return r2((baseComisionAplicada * porcentajeEntrenadorPlan) / 100)
-  }, [baseComisionAplicada, porcentajeEntrenadorPlan])
+    return r2(baseComisionAplicada - montoRpmAplicado)
+  }, [baseComisionAplicada, montoRpmAplicado])
+
+  function handleChangeMontoComisionDesdeRpmMonto(value: string) {
+    const rpmMonto = clamp(Number(value || 0), 0, baseComisionAplicada)
+    const nuevoPct = baseComisionAplicada > 0 ? r2((rpmMonto / baseComisionAplicada) * 100) : 0
+    setPorcentajeRpmEditable(nuevoPct)
+    setPorcentajeEntrenadorEditable(r2(100 - nuevoPct))
+  }
+
+  function handleChangeMontoComisionDesdeEntrenadorMonto(value: string) {
+    const entrenadorMonto = clamp(Number(value || 0), 0, baseComisionAplicada)
+    const nuevoPct = baseComisionAplicada > 0 ? r2((entrenadorMonto / baseComisionAplicada) * 100) : 0
+    const rpmPct = r2(100 - nuevoPct)
+    setPorcentajeRpmEditable(rpmPct)
+    setPorcentajeEntrenadorEditable(nuevoPct)
+  }
+
+  function handleChangePorcentajeRpm(value: string) {
+    const nuevoPct = clamp(Number(value || 0), 0, 100)
+    setPorcentajeRpmEditable(r2(nuevoPct))
+    setPorcentajeEntrenadorEditable(r2(100 - nuevoPct))
+  }
+
+  function handleChangePorcentajeEntrenador(value: string) {
+    const nuevoPct = clamp(Number(value || 0), 0, 100)
+    const rpmPct = r2(100 - nuevoPct)
+    setPorcentajeRpmEditable(rpmPct)
+    setPorcentajeEntrenadorEditable(r2(nuevoPct))
+  }
+
+  function resetearComisionAlPlan() {
+    const rpmPct = clamp(porcentajeRpmPlan > 0 ? porcentajeRpmPlan : 50, 0, 100)
+    setPorcentajeRpmEditable(r2(rpmPct))
+    setPorcentajeEntrenadorEditable(r2(100 - rpmPct))
+  }
 
 
   const sesionesRestantes = planActivo
@@ -733,11 +824,78 @@ export default function ClientePlanPage() {
     return r2(montoBase)
   }, [modo, planActivo, selectedPlan, ajusteFinancieroPlan, montoBase])
 
+  const metodosPagoUnicoDisponibles = useMemo(
+    () => getMetodosForMoneda(monedaPagoUnico),
+    [metodosPago, monedaPagoUnico]
+  )
+
+  const totalPagoUnicoUsd = useMemo(() => r2(montoObjetivoPago), [montoObjetivoPago])
+
+  const totalPagoUnicoBs = useMemo(() => {
+    if (monedaPagoUnico !== 'BS' || !tasaPagoUnico || tasaPagoUnico <= 0) return 0
+    return r2(montoObjetivoPago * tasaPagoUnico)
+  }, [monedaPagoUnico, tasaPagoUnico, montoObjetivoPago])
+
+  const metodosMixtoIngresado = useMemo(
+    () => getMetodosForMoneda(mixtoMonedaIngresada),
+    [metodosPago, mixtoMonedaIngresada]
+  )
+
+  const metodosMixtoDiferencia = useMemo(
+    () => getMetodosForMoneda(mixtoMonedaIngresada === 'USD' ? 'BS' : 'USD'),
+    [metodosPago, mixtoMonedaIngresada]
+  )
+
+  const mixtoMontoIngresadoUsdEquiv = useMemo(() => {
+    if (mixtoMonedaIngresada === 'USD') {
+      return r2(clamp(Number(mixtoMontoIngresadoUsd || 0), 0, montoObjetivoPago))
+    }
+    if (!mixtoTasaBcv || mixtoTasaBcv <= 0) return 0
+    return r2(Math.max(Number(mixtoMontoIngresadoBs || 0), 0) / mixtoTasaBcv)
+  }, [mixtoMonedaIngresada, mixtoMontoIngresadoUsd, mixtoMontoIngresadoBs, mixtoTasaBcv, montoObjetivoPago])
+
+  const mixtoFaltanteUsd = useMemo(() => {
+    return r2(Math.max(montoObjetivoPago - mixtoMontoIngresadoUsdEquiv, 0))
+  }, [montoObjetivoPago, mixtoMontoIngresadoUsdEquiv])
+
+  const mixtoFaltanteBs = useMemo(() => {
+    if (!mixtoTasaBcv || mixtoTasaBcv <= 0) return 0
+    return r2(mixtoFaltanteUsd * mixtoTasaBcv)
+  }, [mixtoFaltanteUsd, mixtoTasaBcv])
+
+  useEffect(() => {
+    if (selectedPlan) {
+      setUsarPrecioPlan(true)
+      setMontoPersonalizado(String(selectedPlan.precio ?? ''))
+    } else {
+      setMontoPersonalizado('')
+    }
+  }, [selectedPlan?.id])
+
   useEffect(() => {
     if (modo === 'asignar' && planActivo && selectedPlan) {
       setRegistrarPago(montoObjetivoPago > 0.009)
     }
   }, [modo, planActivo, selectedPlan, montoObjetivoPago])
+
+  useEffect(() => {
+    setMetodoPagoUnicoId('')
+  }, [monedaPagoUnico])
+
+  useEffect(() => {
+    setMontoPagoUnicoBs(monedaPagoUnico === 'BS' ? r2(montoObjetivoPago) : null)
+  }, [monedaPagoUnico, montoObjetivoPago])
+
+  useEffect(() => {
+    setMixtoMetodoIngresadoId('')
+    setMixtoMetodoDiferenciaId('')
+    setMixtoReferenciaIngresada('')
+    setMixtoReferenciaDiferencia('')
+    setMixtoNotasIngresada('')
+    setMixtoNotasDiferencia('')
+    setMixtoMontoIngresadoUsd('')
+    setMixtoMontoIngresadoBs(null)
+  }, [mixtoMonedaIngresada])
 
   const planificacionPreview = useMemo(() => {
     if (!selectedPlan || !fechaInicio || !diasSemana.length || !totalPreviewSesiones) return null
@@ -765,6 +923,13 @@ export default function ClientePlanPage() {
     setHoraInicio('')
     setDuracionMin(60)
     setRegistrarPago(true)
+    setTipoPago('unico')
+    setMonedaPagoUnico('USD')
+    setMetodoPagoUnicoId('')
+    setReferenciaPagoUnico('')
+    setNotasPagoUnico('')
+    setTasaPagoUnico(null)
+    setMontoPagoUnicoBs(null)
     setUsarPrecioPlan(true)
     setMontoPersonalizado('')
     setNotasPagoGenerales('')
@@ -776,6 +941,18 @@ export default function ClientePlanPage() {
     setSuccessMsg('')
     setRenovarConPendientes('si')
     setRegistrarAjustePlan(true)
+    setPorcentajeRpmEditable(50)
+    setPorcentajeEntrenadorEditable(50)
+    setMixtoMonedaIngresada('USD')
+    setMixtoMetodoIngresadoId('')
+    setMixtoMetodoDiferenciaId('')
+    setMixtoMontoIngresadoUsd('')
+    setMixtoMontoIngresadoBs(null)
+    setMixtoTasaBcv(null)
+    setMixtoReferenciaIngresada('')
+    setMixtoReferenciaDiferencia('')
+    setMixtoNotasIngresada('')
+    setMixtoNotasDiferencia('')
   }
 
   async function crearPlanInline() {
@@ -799,8 +976,8 @@ export default function ClientePlanPage() {
           vigencia_tipo: nuevoPlanVigenciaTipo,
           precio: Number(nuevoPlanPrecio),
           comision_base: Number(nuevoPlanPrecio),
-          comision_rpm: r2(Number(nuevoPlanPrecio) * 0.35),
-          comision_entrenador: r2(Number(nuevoPlanPrecio) * 0.65),
+          comision_rpm: r2(Number(nuevoPlanPrecio) * 0.5),
+          comision_entrenador: r2(Number(nuevoPlanPrecio) * 0.5),
           estado: 'activo',
         })
         .select('id, nombre, sesiones_totales, vigencia_valor, vigencia_tipo, precio, estado, descripcion, comision_base, comision_rpm, comision_entrenador')
@@ -1005,45 +1182,114 @@ export default function ClientePlanPage() {
   }, [])
 
   const resumenPagos = useMemo(() => {
-    const items = pagosMixtos.map((item) => {
-      const montoUsdEq =
-        item.moneda_pago === 'USD'
-          ? r2(Number(item.monto_usd || 0))
-          : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
-            ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
-            : 0
+    if (!registrarPago) {
+      return {
+        items: [],
+        totalUsd: 0,
+        totalBs: 0,
+        faltanteUsd: 0,
+        excedenteUsd: 0,
+        diferenciaUsd: 0,
+        cuadra: true,
+        todosValidos: true,
+      }
+    }
 
-      const montoBs =
-        item.moneda_pago === 'BS'
-          ? r2(Number(item.monto_bs || 0))
-          : Number(item.tasa_bcv || 0) > 0 && Number(item.monto_usd || 0) > 0
-            ? r2(Number(item.monto_usd || 0) * Number(item.tasa_bcv || 0))
-            : 0
+    if (tipoPago === 'unico') {
+      const valido =
+        !!metodoPagoUnicoId &&
+        (
+          monedaPagoUnico === 'USD'
+            ? montoObjetivoPago > 0
+            : Number(totalPagoUnicoBs || 0) > 0 && Number(tasaPagoUnico || 0) > 0
+        )
 
       return {
-        ...item,
-        monto_equivalente_usd: montoUsdEq,
-        monto_equivalente_bs: montoBs > 0 ? montoBs : null,
-        monto_insertar:
-          item.moneda_pago === 'BS'
-            ? r2(Number(item.monto_bs || 0))
-            : r2(Number(item.monto_usd || 0)),
-        valido:
-          !!item.metodo_pago_v2_id &&
-          (
-            item.moneda_pago === 'USD'
-              ? Number(item.monto_usd || 0) > 0
-              : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
-          ),
+        items: [
+          {
+            moneda_pago: monedaPagoUnico,
+            metodo_pago_v2_id: metodoPagoUnicoId,
+            monto_insertar: monedaPagoUnico === 'BS' ? r2(Number(totalPagoUnicoBs || 0)) : r2(montoObjetivoPago),
+            monto_equivalente_usd: r2(montoObjetivoPago),
+            monto_equivalente_bs: monedaPagoUnico === 'BS'
+              ? r2(Number(totalPagoUnicoBs || 0))
+              : tasaPagoUnico && tasaPagoUnico > 0
+                ? r2(montoObjetivoPago * tasaPagoUnico)
+                : null,
+            tasa_bcv: monedaPagoUnico === 'BS' ? tasaPagoUnico : null,
+            referencia: referenciaPagoUnico || null,
+            notas: notasPagoUnico || null,
+            valido,
+          },
+        ],
+        totalUsd: r2(montoObjetivoPago),
+        totalBs: monedaPagoUnico === 'BS' ? r2(Number(totalPagoUnicoBs || 0)) : 0,
+        faltanteUsd: 0,
+        excedenteUsd: 0,
+        diferenciaUsd: 0,
+        cuadra: montoObjetivoPago >= 0,
+        todosValidos: valido,
       }
-    })
+    }
 
-    const totalUsd = r2(
-      items.reduce((acc, item) => acc + Number(item.monto_equivalente_usd || 0), 0)
-    )
-    const totalBs = r2(
-      items.reduce((acc, item) => acc + Number(item.monto_equivalente_bs || 0), 0)
-    )
+    const items =
+      registrarPago
+        ? [
+            {
+              moneda_pago: mixtoMonedaIngresada,
+              metodo_pago_v2_id: mixtoMetodoIngresadoId,
+              monto_insertar:
+                mixtoMonedaIngresada === 'USD'
+                  ? r2(clamp(Number(mixtoMontoIngresadoUsd || 0), 0, montoObjetivoPago))
+                  : r2(Number(mixtoMontoIngresadoBs || 0)),
+              monto_equivalente_usd: mixtoMontoIngresadoUsdEquiv,
+              monto_equivalente_bs:
+                mixtoMonedaIngresada === 'BS'
+                  ? r2(Number(mixtoMontoIngresadoBs || 0))
+                  : mixtoTasaBcv && mixtoTasaBcv > 0
+                    ? r2(clamp(Number(mixtoMontoIngresadoUsd || 0), 0, montoObjetivoPago) * mixtoTasaBcv)
+                    : null,
+              tasa_bcv: mixtoMonedaIngresada === 'BS' ? mixtoTasaBcv : null,
+              referencia: mixtoReferenciaIngresada || null,
+              notas: mixtoNotasIngresada || null,
+              valido:
+                !!mixtoMetodoIngresadoId &&
+                (
+                  mixtoMonedaIngresada === 'USD'
+                    ? Number(mixtoMontoIngresadoUsd || 0) > 0
+                    : Number(mixtoMontoIngresadoBs || 0) > 0 && Number(mixtoTasaBcv || 0) > 0
+                ),
+            },
+            {
+              moneda_pago: mixtoMonedaIngresada === 'USD' ? 'BS' : 'USD',
+              metodo_pago_v2_id: mixtoMetodoDiferenciaId,
+              monto_insertar:
+                mixtoMonedaIngresada === 'USD'
+                  ? r2(mixtoFaltanteBs)
+                  : r2(mixtoFaltanteUsd),
+              monto_equivalente_usd: mixtoFaltanteUsd,
+              monto_equivalente_bs:
+                mixtoMonedaIngresada === 'USD'
+                  ? r2(mixtoFaltanteBs)
+                  : mixtoTasaBcv && mixtoTasaBcv > 0
+                    ? r2(mixtoFaltanteUsd * mixtoTasaBcv)
+                    : null,
+              tasa_bcv: mixtoMonedaIngresada === 'USD' ? mixtoTasaBcv : null,
+              referencia: mixtoReferenciaDiferencia || null,
+              notas: mixtoNotasDiferencia || null,
+              valido:
+                !!mixtoMetodoDiferenciaId &&
+                (
+                  mixtoMonedaIngresada === 'USD'
+                    ? Number(mixtoTasaBcv || 0) > 0
+                    : true
+                ),
+            },
+          ]
+        : []
+
+    const totalUsd = r2(items.reduce((acc, item) => acc + Number(item.monto_equivalente_usd || 0), 0))
+    const totalBs = r2(items.reduce((acc, item) => acc + Number(item.monto_equivalente_bs || 0), 0))
     const faltanteUsd = r2(Math.max(montoObjetivoPago - totalUsd, 0))
     const excedenteUsd = r2(Math.max(totalUsd - montoObjetivoPago, 0))
     const diferenciaUsd = r2(montoObjetivoPago - totalUsd)
@@ -1055,10 +1301,33 @@ export default function ClientePlanPage() {
       faltanteUsd,
       excedenteUsd,
       diferenciaUsd,
-      cuadra: Math.abs(diferenciaUsd) < 0.01 && montoObjetivoPago >= 0,
-      todosValidos: items.every((item) => item.valido),
+      cuadra: registrarPago ? Math.abs(diferenciaUsd) < 0.01 && montoObjetivoPago >= 0 : true,
+      todosValidos: registrarPago ? items.every((item) => item.valido) : true,
     }
-  }, [pagosMixtos, montoObjetivoPago])
+  }, [
+    registrarPago,
+    tipoPago,
+    monedaPagoUnico,
+    metodoPagoUnicoId,
+    referenciaPagoUnico,
+    notasPagoUnico,
+    tasaPagoUnico,
+    totalPagoUnicoBs,
+    mixtoMonedaIngresada,
+    mixtoMetodoIngresadoId,
+    mixtoMetodoDiferenciaId,
+    mixtoMontoIngresadoUsd,
+    mixtoMontoIngresadoBs,
+    mixtoTasaBcv,
+    mixtoReferenciaIngresada,
+    mixtoReferenciaDiferencia,
+    mixtoNotasIngresada,
+    mixtoNotasDiferencia,
+    mixtoMontoIngresadoUsdEquiv,
+    mixtoFaltanteUsd,
+    mixtoFaltanteBs,
+    montoObjetivoPago,
+  ])
 
   async function registrarPagoMixtoPlan(params: {
     fecha: string
@@ -1184,7 +1453,7 @@ export default function ClientePlanPage() {
         return
       }
       if (!resumenPagos.todosValidos) {
-        setErrorMsg('Completa correctamente todos los fragmentos del pago mixto.')
+        setErrorMsg(tipoPago === 'unico' ? 'Completa correctamente el pago único.' : 'Completa correctamente el pago mixto.')
         return
       }
       if (!resumenPagos.cuadra) {
@@ -1253,7 +1522,7 @@ export default function ClientePlanPage() {
         await registrarComision(np.id, empleadoId, id, baseC, fechaInicio, rpmV, entV)
       }
 
-      const porcRpm = baseC > 0 ? r2((rpmV / baseC) * 100) : 0
+      const porcRpm = porcentajeRpmAplicado
 
       await supabase
         .from('clientes_planes')
@@ -1338,7 +1607,7 @@ export default function ClientePlanPage() {
         return
       }
       if (!resumenPagos.todosValidos) {
-        setErrorMsg('Completa correctamente todos los fragmentos del pago mixto.')
+        setErrorMsg(tipoPago === 'unico' ? 'Completa correctamente el pago único.' : 'Completa correctamente el pago mixto.')
         return
       }
       if (!resumenPagos.cuadra) {
@@ -1415,7 +1684,7 @@ export default function ClientePlanPage() {
         await registrarComision(np.id, empleadoId, id, baseC, fechaInicio, rpmV, entV)
       }
 
-      const porcRpm = baseC > 0 ? r2((rpmV / baseC) * 100) : 0
+      const porcRpm = porcentajeRpmAplicado
 
       await supabase
         .from('clientes_planes')
@@ -1543,7 +1812,32 @@ export default function ClientePlanPage() {
 
         {registrarPago && (
           <>
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setTipoPago('unico')}
+                className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                  tipoPago === 'unico'
+                    ? 'border-emerald-400/40 bg-emerald-500/20 text-emerald-300'
+                    : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]'
+                }`}
+              >
+                Pago único
+              </button>
+              <button
+                type="button"
+                onClick={() => setTipoPago('mixto')}
+                className={`rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+                  tipoPago === 'mixto'
+                    ? 'border-violet-400/40 bg-violet-500/20 text-violet-300'
+                    : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]'
+                }`}
+              >
+                Pago mixto
+              </button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
               <Field
                 label={modo === 'asignar' && planActivo && selectedPlan ? 'Monto a cobrar por diferencia' : 'Monto objetivo USD'}
                 helper={
@@ -1563,7 +1857,13 @@ export default function ClientePlanPage() {
                     type="number"
                     min={0}
                     step="0.01"
-                    value={usarPrecioPlan ? (modo === 'asignar' && planActivo && selectedPlan ? String(montoObjetivoPago) : (selectedPlan?.precio ?? '')) : montoPersonalizado}
+                    value={
+                      usarPrecioPlan
+                        ? modo === 'asignar' && planActivo && selectedPlan
+                          ? String(montoObjetivoPago)
+                          : String(selectedPlan?.precio ?? '')
+                        : montoPersonalizado
+                    }
                     readOnly={usarPrecioPlan}
                     onChange={(e) => setMontoPersonalizado(e.target.value)}
                     className={`${inputCls} ${usarPrecioPlan ? 'cursor-not-allowed opacity-60' : ''}`}
@@ -1601,197 +1901,280 @@ export default function ClientePlanPage() {
               </div>
             </div>
 
-            <div className="space-y-4">
-              {pagosMixtos.map((item, index) => {
-                const metodosDisponibles = getMetodosForMoneda(item.moneda_pago)
-                const montoUsdEq =
-                  item.moneda_pago === 'USD'
-                    ? r2(Number(item.monto_usd || 0))
-                    : Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
-                      ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
-                      : 0
-
-                return (
-                  <div
-                    key={item.id_local}
-                    className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"
-                  >
-                    <div className="mb-4 flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-semibold text-white">Fragmento #{index + 1}</p>
-                        <p className="text-xs text-white/45">
-                          {item.moneda_pago === 'BS'
-                            ? `Equivalente USD calculado: ${formatMoney(montoUsdEq)}`
-                            : `Monto del fragmento: ${formatMoney(montoUsdEq)}`}
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => removePagoItem(item.id_local)}
-                        disabled={pagosMixtos.length <= 1}
-                        className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/70 hover:bg-white/[0.06] disabled:opacity-40"
+            {tipoPago === 'unico' ? (
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <Field label="Moneda">
+                      <select
+                        value={monedaPagoUnico}
+                        onChange={(e) => setMonedaPagoUnico(e.target.value as 'USD' | 'BS')}
+                        className={inputCls}
                       >
-                        Quitar
-                      </button>
-                    </div>
+                        <option value="USD" className="bg-[#11131a]">USD</option>
+                        <option value="BS" className="bg-[#11131a]">Bs</option>
+                      </select>
+                    </Field>
 
-                    <div className="grid gap-4 md:grid-cols-3">
-                      <Field label="Moneda">
-                        <select
-                          value={item.moneda_pago}
-                          onChange={(e) =>
-                            updatePagoItem(item.id_local, {
-                              moneda_pago: e.target.value as 'USD' | 'BS',
-                              metodo_pago_v2_id: '',
-                              monto_usd: '',
-                              monto_bs: null,
-                              tasa_bcv: null,
-                            })
-                          }
-                          className={inputCls}
-                        >
-                          <option value="USD" className="bg-[#11131a]">USD</option>
-                          <option value="BS" className="bg-[#11131a]">Bs</option>
-                        </select>
-                      </Field>
+                    <Field label={monedaPagoUnico === 'USD' ? 'Método USD' : 'Método Bs'}>
+                      <select
+                        value={metodoPagoUnicoId}
+                        onChange={(e) => setMetodoPagoUnicoId(e.target.value)}
+                        className={inputCls}
+                      >
+                        <option value="" className="bg-[#11131a]">Seleccionar</option>
+                        {metodosPagoUnicoDisponibles.map((m) => (
+                          <option key={m.id} value={m.id} className="bg-[#11131a]">
+                            {m.nombre}
+                            {m.moneda ? ` · ${m.moneda}` : ''}
+                            {m.tipo ? ` · ${m.tipo}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
 
-                      <Field label={item.moneda_pago === 'USD' ? 'Método USD' : 'Método Bs'}>
-                        <select
-                          value={item.metodo_pago_v2_id}
-                          onChange={(e) =>
-                            updatePagoItem(item.id_local, {
-                              metodo_pago_v2_id: e.target.value,
-                            })
-                          }
-                          className={inputCls}
-                        >
-                          <option value="" className="bg-[#11131a]">Seleccionar</option>
-                          {metodosDisponibles.map((m) => (
-                            <option key={m.id} value={m.id} className="bg-[#11131a]">
-                              {m.nombre}
-                              {m.moneda ? ` · ${m.moneda}` : ''}
-                              {m.tipo ? ` · ${m.tipo}` : ''}
-                            </option>
-                          ))}
-                        </select>
-                      </Field>
-
-                      {item.moneda_pago === 'USD' ? (
-                        <Field label="Monto USD">
-                          <input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={item.monto_usd}
-                            onChange={(e) =>
-                              updatePagoItem(item.id_local, {
-                                monto_usd: e.target.value,
-                              })
-                            }
-                            className={inputCls}
-                            placeholder="0.00"
-                          />
-                        </Field>
-                      ) : (
-                        <Field label="Monto Bs">
-                          <input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={item.monto_bs ?? ''}
-                            onChange={(e) =>
-                              updatePagoItem(item.id_local, {
-                                monto_bs: e.target.value ? Number(e.target.value) : null,
-                              })
-                            }
-                            className={inputCls}
-                            placeholder="0.00"
-                          />
-                        </Field>
-                      )}
-
-                      {item.moneda_pago === 'BS' && (
-                        <div className="md:col-span-3">
-                          <PagoBsSelector
-                            fecha={fechaInicio}
-                            montoUsd={
-                              Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
-                                ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
-                                : 0
-                            }
-                            montoBs={item.monto_bs}
-                            onChangeTasa={(tasa) => handlePagoBsTasaChange(item.id_local, tasa)}
-                            onChangeMontoBs={(monto) => handlePagoBsMontoChange(item.id_local, monto)}
-                          />
-                        </div>
-                      )}
-
-                      {item.moneda_pago === 'BS' && (
-                        <div className="md:col-span-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm">
-                          <div className="flex justify-between">
-                            <span className="text-white/55">Equivalente USD calculado:</span>
-                            <span className="text-white">
-                              {formatMoney(
-                                Number(item.monto_bs || 0) > 0 && Number(item.tasa_bcv || 0) > 0
-                                  ? r2(Number(item.monto_bs || 0) / Number(item.tasa_bcv || 0))
-                                  : 0
-                              )}
-                            </span>
-                          </div>
-                        </div>
-                      )}
-
-                      <Field label="Referencia">
+                    {monedaPagoUnico === 'USD' ? (
+                      <Field label="Monto USD">
                         <input
-                          value={item.referencia}
-                          onChange={(e) =>
-                            updatePagoItem(item.id_local, {
-                              referencia: e.target.value,
-                            })
-                          }
-                          className={inputCls}
-                          placeholder="Referencia o comprobante"
+                          type="text"
+                          value={formatMoney(totalPagoUnicoUsd)}
+                          readOnly
+                          className={`${inputCls} cursor-not-allowed opacity-80`}
                         />
                       </Field>
+                    ) : (
+                      <Field label="Monto Bs">
+                        <input
+                          type="text"
+                          value={formatBs(totalPagoUnicoBs)}
+                          readOnly
+                          className={`${inputCls} cursor-not-allowed opacity-80`}
+                        />
+                      </Field>
+                    )}
 
-                      <div className="md:col-span-2">
-                        <Field label="Notas del fragmento">
-                          <input
-                            value={item.notas}
-                            onChange={(e) =>
-                              updatePagoItem(item.id_local, {
-                                notas: e.target.value,
-                              })
-                            }
-                            className={inputCls}
-                            placeholder="Notas opcionales..."
-                          />
-                        </Field>
+                    {monedaPagoUnico === 'BS' && (
+                      <div className="md:col-span-3">
+                        <PagoBsSelector
+                          fecha={fechaInicio}
+                          montoUsd={montoObjetivoPago}
+                          montoBs={montoPagoUnicoBs}
+                          onChangeTasa={(tasa) => setTasaPagoUnico(tasa)}
+                          onChangeMontoBs={(monto) => setMontoPagoUnicoBs(monto)}
+                        />
                       </div>
+                    )}
+
+                    <Field label="Referencia del pago">
+                      <input
+                        value={referenciaPagoUnico}
+                        onChange={(e) => setReferenciaPagoUnico(e.target.value)}
+                        className={inputCls}
+                        placeholder="Referencia o comprobante"
+                      />
+                    </Field>
+
+                    <div className="md:col-span-2">
+                      <Field label="Notas del pago">
+                        <input
+                          value={notasPagoUnico}
+                          onChange={(e) => setNotasPagoUnico(e.target.value)}
+                          className={inputCls}
+                          placeholder="Notas opcionales..."
+                        />
+                      </Field>
                     </div>
                   </div>
-                )
-              })}
-            </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                  <p className="text-xs text-white/65">
+                    Escribe lo que te pagaron primero y el sistema calcula cuánto representa en USD y cuánto falta automáticamente.
+                  </p>
+                </div>
 
-            <div className="flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={() => addPagoItem('USD')}
-                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
-              >
-                + Agregar pago USD
-              </button>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Field label="Moneda recibida primero">
+                    <select
+                      value={mixtoMonedaIngresada}
+                      onChange={(e) => setMixtoMonedaIngresada(e.target.value as 'USD' | 'BS')}
+                      className={inputCls}
+                    >
+                      <option value="USD" className="bg-[#11131a]">USD</option>
+                      <option value="BS" className="bg-[#11131a]">Bs</option>
+                    </select>
+                  </Field>
 
-              <button
-                type="button"
-                onClick={() => addPagoItem('BS')}
-                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
-              >
-                + Agregar pago Bs
-              </button>
-            </div>
+                  <Field label={mixtoMonedaIngresada === 'USD' ? 'Método del pago en USD' : 'Método del pago en Bs'}>
+                    <select
+                      value={mixtoMetodoIngresadoId}
+                      onChange={(e) => setMixtoMetodoIngresadoId(e.target.value)}
+                      className={inputCls}
+                    >
+                      <option value="" className="bg-[#11131a]">Seleccionar</option>
+                      {metodosMixtoIngresado.map((m) => (
+                        <option key={m.id} value={m.id} className="bg-[#11131a]">
+                          {m.nombre}
+                          {m.moneda ? ` · ${m.moneda}` : ''}
+                          {m.tipo ? ` · ${m.tipo}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+
+                  {mixtoMonedaIngresada === 'USD' ? (
+                    <Field label="Monto recibido en USD">
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={mixtoMontoIngresadoUsd}
+                        onChange={(e) => setMixtoMontoIngresadoUsd(e.target.value)}
+                        className={inputCls}
+                        placeholder="0.00"
+                      />
+                    </Field>
+                  ) : (
+                    <Field label="Monto recibido en Bs">
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={mixtoMontoIngresadoBs ?? ''}
+                        onChange={(e) => setMixtoMontoIngresadoBs(e.target.value ? Number(e.target.value) : null)}
+                        className={inputCls}
+                        placeholder="0.00"
+                      />
+                    </Field>
+                  )}
+
+                  <Field label="Tasa BCV usada">
+                    <div className={`${inputCls} flex items-center justify-between opacity-80`}>
+                      <span>{mixtoTasaBcv && mixtoTasaBcv > 0 ? String(mixtoTasaBcv) : 'Sin tasa'}</span>
+                      <span className="text-xs text-white/45">automática</span>
+                    </div>
+                  </Field>
+
+                  <div className="md:col-span-2">
+                    <PagoBsSelector
+                      fecha={fechaInicio}
+                      montoUsd={
+                        mixtoMonedaIngresada === 'USD'
+                          ? r2(clamp(Number(mixtoMontoIngresadoUsd || 0), 0, montoObjetivoPago))
+                          : mixtoMontoIngresadoUsdEquiv
+                      }
+                      montoBs={mixtoMonedaIngresada === 'BS' ? mixtoMontoIngresadoBs : mixtoFaltanteBs}
+                      onChangeTasa={(tasa) => setMixtoTasaBcv(tasa)}
+                      onChangeMontoBs={(monto) => {
+                        if (mixtoMonedaIngresada === 'BS') {
+                          setMixtoMontoIngresadoBs(monto)
+                        }
+                      }}
+                    />
+                  </div>
+
+                  <Field label="Referencia del pago recibido">
+                    <input
+                      value={mixtoReferenciaIngresada}
+                      onChange={(e) => setMixtoReferenciaIngresada(e.target.value)}
+                      className={inputCls}
+                      placeholder="Referencia o comprobante"
+                    />
+                  </Field>
+
+                  <Field label="Notas del pago recibido">
+                    <input
+                      value={mixtoNotasIngresada}
+                      onChange={(e) => setMixtoNotasIngresada(e.target.value)}
+                      className={inputCls}
+                      placeholder="Notas opcionales..."
+                    />
+                  </Field>
+                </div>
+
+                <div className="rounded-xl border border-violet-400/20 bg-violet-500/10 p-2.5">
+                  <p className="text-xs font-medium text-violet-300">Diferencia automática</p>
+
+                  <div className="mt-2 grid gap-2 md:grid-cols-2">
+                    <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2.5">
+                      <p className="text-xs text-white/45">Lo recibido equivale a</p>
+                      <p className="mt-1 text-lg font-semibold text-white">
+                        {formatMoney(mixtoMontoIngresadoUsdEquiv)}
+                      </p>
+                      <p className="mt-1 text-xs text-white/45">
+                        {mixtoMonedaIngresada === 'BS'
+                          ? `Desde ${formatBs(Number(mixtoMontoIngresadoBs || 0))}`
+                          : 'Pagado directo en USD'}
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2.5">
+                      <p className="text-xs text-white/45">Falta por cobrar</p>
+                      <p className="mt-1 text-lg font-semibold text-white">
+                        {formatMoney(mixtoFaltanteUsd)}
+                      </p>
+                      <p className="mt-1 text-xs text-white/45">
+                        {mixtoMonedaIngresada === 'USD'
+                          ? `Equivale a ${formatBs(mixtoFaltanteBs)}`
+                          : `Se cobra como ${formatMoney(mixtoFaltanteUsd)}`}
+                      </p>
+                    </div>
+
+                    <Field
+                      label={
+                        mixtoMonedaIngresada === 'USD'
+                          ? 'Método para la diferencia en Bs'
+                          : 'Método para la diferencia en USD'
+                      }
+                    >
+                      <select
+                        value={mixtoMetodoDiferenciaId}
+                        onChange={(e) => setMixtoMetodoDiferenciaId(e.target.value)}
+                        className={inputCls}
+                      >
+                        <option value="" className="bg-[#11131a]">Seleccionar</option>
+                        {metodosMixtoDiferencia.map((m) => (
+                          <option key={m.id} value={m.id} className="bg-[#11131a]">
+                            {m.nombre}
+                            {m.moneda ? ` · ${m.moneda}` : ''}
+                            {m.tipo ? ` · ${m.tipo}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+
+                    <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2.5">
+                      <p className="text-xs text-white/45">Monto automático de la diferencia</p>
+                      <p className="mt-1 text-lg font-semibold text-white">
+                        {mixtoMonedaIngresada === 'USD'
+                          ? formatBs(mixtoFaltanteBs)
+                          : formatMoney(mixtoFaltanteUsd)}
+                      </p>
+                    </div>
+
+                    <Field label="Referencia de la diferencia">
+                      <input
+                        value={mixtoReferenciaDiferencia}
+                        onChange={(e) => setMixtoReferenciaDiferencia(e.target.value)}
+                        className={inputCls}
+                        placeholder="Referencia o comprobante"
+                      />
+                    </Field>
+
+                    <Field label="Notas de la diferencia">
+                      <input
+                        value={mixtoNotasDiferencia}
+                        onChange={(e) => setMixtoNotasDiferencia(e.target.value)}
+                        className={inputCls}
+                        placeholder="Notas opcionales..."
+                      />
+                    </Field>
+                  </div>
+                </div>
+              </>
+            )}
 
             <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
               <p className="text-sm font-medium text-emerald-300">Resumen del pago</p>
@@ -2217,8 +2600,18 @@ export default function ClientePlanPage() {
         )}
 
         <div className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-          <p className="text-sm font-medium text-white/75">Configuración de comisión</p>
-          <div className="grid gap-4 sm:grid-cols-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <p className="text-sm font-medium text-white/75">Configuración de comisión</p>
+            <button
+              type="button"
+              onClick={resetearComisionAlPlan}
+              className="rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/60 transition hover:bg-white/[0.06]"
+            >
+              Restaurar comisión del plan
+            </button>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3">
             <Field label="Precio (USD)" helper={usarPrecioPlan ? 'Tomando el precio del plan.' : 'Precio editable para este plan.'}>
               <div className="flex gap-2">
                 <input
@@ -2241,7 +2634,7 @@ export default function ClientePlanPage() {
               </div>
             </Field>
 
-            <Field label="Base comisión">
+            <Field label="Base comisión" helper="Se recalcula con el monto actual.">
               <input
                 type="number"
                 value={String(baseV)}
@@ -2250,23 +2643,74 @@ export default function ClientePlanPage() {
               />
             </Field>
 
-            <Field label="RPM recibe">
-              <input
-                type="text"
-                value={`${formatMoney(rpmV)} · ${porcentajeRpmPlan}%`}
-                readOnly
-                className={`${inputCls} cursor-not-allowed opacity-80`}
-              />
-            </Field>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+              <p className="text-xs text-white/45">Regla aplicada</p>
+              <p className="mt-2 text-sm text-white/75">
+                Si cambias el monto, se mantiene la proporción actual. Si cambias una comisión o porcentaje, la otra se ajusta sola.
+              </p>
+            </div>
+          </div>
 
-            <Field label="Entrenador recibe">
-              <input
-                type="text"
-                value={`${formatMoney(entV)} · ${porcentajeEntrenadorPlan}%`}
-                readOnly
-                className={`${inputCls} cursor-not-allowed opacity-80`}
-              />
-            </Field>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-2xl border border-violet-400/15 bg-white/[0.03] p-4">
+              <p className="mb-3 text-sm font-semibold text-violet-300">RPM</p>
+
+              <Field label="RPM porcentaje">
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step="0.01"
+                  value={porcentajeRpmAplicado}
+                  onChange={(e) => handleChangePorcentajeRpm(e.target.value)}
+                  className={inputCls}
+                />
+              </Field>
+
+              <div className="mt-4">
+                <Field label="RPM monto">
+                  <input
+                    type="number"
+                    min={0}
+                    max={baseV}
+                    step="0.01"
+                    value={montoRpmAplicado}
+                    onChange={(e) => handleChangeMontoComisionDesdeRpmMonto(e.target.value)}
+                    className={inputCls}
+                  />
+                </Field>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-emerald-400/15 bg-white/[0.03] p-4">
+              <p className="mb-3 text-sm font-semibold text-emerald-300">Entrenador</p>
+
+              <Field label="Entrenador porcentaje">
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step="0.01"
+                  value={porcentajeEntrenadorAplicado}
+                  onChange={(e) => handleChangePorcentajeEntrenador(e.target.value)}
+                  className={inputCls}
+                />
+              </Field>
+
+              <div className="mt-4">
+                <Field label="Entrenador monto">
+                  <input
+                    type="number"
+                    min={0}
+                    max={baseV}
+                    step="0.01"
+                    value={montoEntrenadorAplicado}
+                    onChange={(e) => handleChangeMontoComisionDesdeEntrenadorMonto(e.target.value)}
+                    className={inputCls}
+                  />
+                </Field>
+              </div>
+            </div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">
@@ -2277,12 +2721,12 @@ export default function ClientePlanPage() {
             <Card className="border-violet-400/20 bg-violet-400/5 p-4">
               <p className="text-xs text-white/45">RPM recibe</p>
               <p className="mt-1 text-lg font-semibold text-violet-400">{formatMoney(rpmV)}</p>
-              <p className="text-xs text-white/25">{porcentajeRpmPlan}%</p>
+              <p className="text-xs text-white/25">{porcentajeRpmAplicado}%</p>
             </Card>
             <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
               <p className="text-xs text-white/45">Entrenador recibe</p>
               <p className="mt-1 text-lg font-semibold text-emerald-400">{formatMoney(entV)}</p>
-              <p className="text-xs text-white/25">{porcentajeEntrenadorPlan}%</p>
+              <p className="text-xs text-white/25">{porcentajeEntrenadorAplicado}%</p>
             </Card>
           </div>
         </div>
@@ -2351,7 +2795,7 @@ export default function ClientePlanPage() {
         <div>
           <p className="text-sm text-white/55">Clientes / Plan</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">Plan del cliente</h1>
-          <p className="mt-2 text-sm text-white/55">{cliente.nombre}</p>
+          <p className="mt-1 text-xs text-white/45">{cliente.nombre}</p>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <ActionCard title="Volver al cliente" description="Ver ficha completa." href={`/admin/personas/clientes/${id}`} />

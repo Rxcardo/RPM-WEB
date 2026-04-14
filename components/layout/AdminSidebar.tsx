@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
-import { useState, type ComponentType } from 'react'
+import { useState, useEffect, type ComponentType } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Activity,
@@ -43,7 +43,7 @@ const navItems: NavItem[] = [
     ],
   },
   {
-    label: 'Agenda',
+    label: 'Citas',
     href: '/admin/operaciones/agenda',
     icon: Calendar,
     children: [
@@ -104,6 +104,21 @@ function pathMatches(pathname: string, href?: string) {
   return pathname === href || pathname.startsWith(`${href}/`)
 }
 
+/** Obtiene las iniciales de un nombre o email */
+function getInitials(nameOrEmail: string): string {
+  const clean = nameOrEmail.split('@')[0]
+  const parts = clean.trim().split(/\s+/)
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+  return clean.slice(0, 2).toUpperCase()
+}
+
+/** Formatea el nombre: si es email muestra la parte local con capitalización */
+function formatDisplayName(nameOrEmail: string): string {
+  if (!nameOrEmail.includes('@')) return nameOrEmail
+  const local = nameOrEmail.split('@')[0]
+  return local.charAt(0).toUpperCase() + local.slice(1)
+}
+
 function DesktopNavItem({ item, pathname }: { item: NavItem; pathname: string }) {
   const [isHovered, setIsHovered] = useState(false)
   const active =
@@ -112,7 +127,7 @@ function DesktopNavItem({ item, pathname }: { item: NavItem; pathname: string })
   const Icon = item.icon
 
   const buttonClass = `
-    inline-flex h-11 items-center gap-2.5 rounded-2xl border px-4 text-sm font-medium transition-all duration-200
+    inline-flex h-10 items-center gap-2 rounded-2xl border px-3 text-[13px] font-medium transition-all duration-200
     ${
       active || isHovered
         ? 'border-violet-400/20 bg-gradient-to-r from-violet-600/20 via-purple-500/15 to-fuchsia-500/10 text-white shadow-[0_0_0_1px_rgba(168,85,247,0.08),0_12px_30px_rgba(76,29,149,0.18)]'
@@ -127,7 +142,7 @@ function DesktopNavItem({ item, pathname }: { item: NavItem; pathname: string })
       onMouseLeave={() => setIsHovered(false)}
     >
       <Link href={item.href || '#'} className={buttonClass}>
-        <Icon className="h-4 w-4" />
+        <Icon className="h-4 w-4 shrink-0" />
         <span>{item.label}</span>
         {item.children && (
           <ChevronDown className={`h-4 w-4 transition-transform ${isHovered ? 'rotate-180' : ''}`} />
@@ -163,7 +178,6 @@ function DesktopNavItem({ item, pathname }: { item: NavItem; pathname: string })
                     <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04]">
                       <child.icon className="h-4 w-4" />
                     </div>
-
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold">{child.label}</p>
                       {child.description ? (
@@ -184,6 +198,23 @@ function DesktopNavItem({ item, pathname }: { item: NavItem; pathname: string })
 export default function AdminSidebar() {
   const pathname = usePathname()
   const router = useRouter()
+  const [userDisplay, setUserDisplay] = useState<string>('')
+  const [userInitials, setUserInitials] = useState<string>('--')
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      const user = data?.user
+      if (!user) return
+      // Prioridad: full_name > email
+      const raw =
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        user.email ||
+        ''
+      setUserDisplay(formatDisplayName(raw))
+      setUserInitials(getInitials(raw))
+    })
+  }, [])
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
@@ -194,11 +225,12 @@ export default function AdminSidebar() {
   return (
     <div className="sticky top-0 z-40 w-full border-b border-white/10 bg-[#0b0b12]/92 backdrop-blur-2xl">
       <div className="mx-auto flex h-[78px] max-w-[1720px] items-center justify-between gap-6 px-6">
+
+        {/* ── Logo ── */}
         <Link href="/admin/dashboard" className="flex shrink-0 items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white shadow-xl">
             <img src="/favicon.ico" alt="RPM" className="h-8 w-8 object-contain" />
           </div>
-
           <div className="min-w-0">
             <p className="mb-1 text-[10px] uppercase tracking-[0.28em] text-white/28 leading-none">
               RPM
@@ -207,19 +239,40 @@ export default function AdminSidebar() {
           </div>
         </Link>
 
-        <nav className="flex flex-1 items-center justify-center gap-2">
+        {/* ── Nav ── */}
+        <nav className="flex flex-1 items-center justify-center gap-1">
           {navItems.map((item) => (
             <DesktopNavItem key={item.label} item={item} pathname={pathname} />
           ))}
         </nav>
 
-        <div className="shrink-0">
+        {/* ── Right: user + logout ── */}
+        <div className="flex shrink-0 items-center gap-2">
+
+          {/* Avatar + nombre — compacto, sin borde extra */}
+          <div className="flex items-center gap-2 pr-1">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-[11px] font-bold text-white shadow-[0_0_10px_rgba(168,85,247,0.3)]">
+              {userInitials}
+            </div>
+            {userDisplay ? (
+              <span className="max-w-[100px] truncate text-sm font-medium text-white/80">
+                {userDisplay}
+              </span>
+            ) : (
+              <div className="h-3 w-16 animate-pulse rounded bg-white/10" />
+            )}
+          </div>
+
+          {/* Divider */}
+          <div className="h-5 w-px bg-white/10" />
+
+          {/* Logout — solo ícono con tooltip hover */}
           <button
             onClick={handleSignOut}
-            className="inline-flex h-11 items-center gap-2 rounded-2xl border border-red-400/15 bg-red-500/10 px-4 text-sm font-semibold text-red-200 transition hover:border-red-400/25 hover:bg-red-500/15 hover:text-white"
+            title="Cerrar sesión"
+            className="flex h-9 w-9 items-center justify-center rounded-xl border border-red-400/15 bg-red-500/8 text-red-300/70 transition hover:border-red-400/30 hover:bg-red-500/15 hover:text-red-200"
           >
             <LogOut className="h-4 w-4" />
-            <span>Cerrar sesión</span>
           </button>
         </div>
       </div>

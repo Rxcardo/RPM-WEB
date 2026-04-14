@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { obtenerTasaBCV } from '@/lib/finanzas/tasas'
+import { obtenerTasaBCVEuro } from '@/lib/finanzas/tasas'
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
@@ -13,7 +13,6 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Validar formato de fecha
     if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
       return NextResponse.json(
         { error: 'Formato de fecha inválido. Usa YYYY-MM-DD' },
@@ -21,24 +20,19 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Si tu helper no recibe argumentos, solo llámalo sin args
-    const tasa = await obtenerTasaBCV()
+    const tasa = await obtenerTasaBCVEuro()
 
     if (tasa) {
       return NextResponse.json({
         success: true,
         fecha,
         tasa,
-        moneda: 'USD',
+        moneda: 'EUR',
       })
     }
 
     return NextResponse.json(
-      {
-        success: false,
-        error: 'No se pudo obtener la tasa',
-        fecha,
-      },
+      { success: false, error: 'No se pudo obtener la tasa', fecha },
       { status: 404 }
     )
   } catch (error) {
@@ -50,13 +44,9 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST deshabilitado hasta tener una función real para guardar tasa manual
 export async function POST() {
   return NextResponse.json(
-    {
-      error:
-        'Guardar tasa manual no está disponible todavía. Debes crear una función específica en lib/finanzas/tasas para guardar la tasa.',
-    },
+    { error: 'Guardar tasa manual no está disponible todavía.' },
     { status: 501 }
   )
 }

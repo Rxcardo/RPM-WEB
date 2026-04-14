@@ -40,6 +40,8 @@ type Plan = {
   descripcion: string | null
 }
 
+type ClientePlanEstado = 'activo' | 'vencido' | 'agotado' | 'cancelado' | 'renovado'
+
 type ClientePlan = {
   id: string
   cliente_id: string
@@ -48,7 +50,7 @@ type ClientePlan = {
   sesiones_usadas: number
   fecha_inicio: string | null
   fecha_fin: string | null
-  estado: 'activo' | 'vencido' | 'agotado' | 'cancelado' | 'renovado'
+  estado: ClientePlanEstado
   created_at: string
   planes: Plan | null
 }
@@ -113,7 +115,6 @@ type SesionPlan = {
     planes?: { nombre?: string | null } | null
   } | null
 }
-
 
 type EstadoCuentaCliente = {
   cliente_id: string
@@ -329,7 +330,6 @@ function roleLabel(rol: string | null | undefined) {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
-
 function estadoFinancieroLabel(estado: EstadoCuentaCliente | null) {
   const pendiente = Number(estado?.saldo_pendiente_neto_usd || 0)
   const credito = Number(estado?.saldo_favor_neto_usd || 0)
@@ -352,6 +352,39 @@ function estadoFinancieroBadge(estado: EstadoCuentaCliente | null) {
   return 'border-white/10 bg-white/[0.05] text-white/70'
 }
 
+function getPlanPriority(estado: string | null | undefined) {
+  switch ((estado || '').toLowerCase()) {
+    case 'activo':
+      return 5
+    case 'agotado':
+      return 4
+    case 'vencido':
+      return 3
+    case 'renovado':
+      return 2
+    case 'cancelado':
+      return 1
+    default:
+      return 0
+  }
+}
+
+function getPlanStatusLabel(estado: string | null | undefined) {
+  switch ((estado || '').toLowerCase()) {
+    case 'activo':
+      return 'Activo'
+    case 'agotado':
+      return 'Agotado'
+    case 'vencido':
+      return 'Vencido'
+    case 'renovado':
+      return 'Renovado'
+    case 'cancelado':
+      return 'Cancelado'
+    default:
+      return estado || 'Sin estado'
+  }
+}
 
 export default function ClienteDetallePage() {
   const params = useParams()
@@ -589,7 +622,6 @@ export default function ClienteDetallePage() {
       warnings.push('Sesiones plan: no se pudieron cargar.')
     }
 
-
     try {
       const estadoCuentaRes = await supabase
         .from('v_clientes_estado_cuenta')
@@ -615,21 +647,57 @@ export default function ClienteDetallePage() {
     setLoadingExtras(false)
   }
 
+  const planPrincipal = useMemo(() => {
+    if (!historialPlanes.length) return null
+
+    const sorted = [...historialPlanes].sort((a, b) => {
+      const priorityDiff = getPlanPriority(b.estado) - getPlanPriority(a.estado)
+      if (priorityDiff !== 0) return priorityDiff
+
+      const dateA = new Date(a.created_at).getTime()
+      const dateB = new Date(b.created_at).getTime()
+      return dateB - dateA
+    })
+
+    return sorted[0] || null
+  }, [historialPlanes])
+
   const planActivo = useMemo(() => {
     return historialPlanes.find((p) => p.estado === 'activo') || null
   }, [historialPlanes])
 
   const resumenPlan = useMemo(() => {
-    if (!planActivo) return { usadas: 0, restantes: 0, total: 0 }
-    const total = Number(planActivo.sesiones_totales || 0)
-    const usadas = Number(planActivo.sesiones_usadas || 0)
-    return { usadas, restantes: Math.max(0, total - usadas), total }
-  }, [planActivo])
+    const planBase = planPrincipal || planActivo
+    if (!planBase) {
+      return {
+        usadas: 0,
+        restantes: 0,
+        total: 0,
+        estado: null as string | null,
+        nombre: 'Sin plan activo',
+      }
+    }
+
+    const total = Number(planBase.sesiones_totales || 0)
+    const usadas = Number(planBase.sesiones_usadas || 0)
+
+    return {
+      usadas,
+      restantes: Math.max(0, total - usadas),
+      total,
+      estado: planBase.estado || null,
+      nombre: planBase.planes?.nombre || 'Plan',
+    }
+  }, [planPrincipal, planActivo])
 
   const resumenPagos = useMemo(() => {
     const pagosPagados = pagos.filter((p) => (p.estado || '').toLowerCase() === 'pagado')
     const monedas = Array.from(
-      new Set(pagosPagados.map((p) => (p.moneda_pago || '').toUpperCase().trim()).filter(Boolean))
+      new Set(
+        pagosPagados
+          .map((p) => (p.moneda_pago || '').toUpperCase().trim())
+          .filter(Boolean)
+      )
     )
     const todosBS = monedas.length === 1 && monedas[0] === 'BS'
     const monedaResumen: 'BS' | 'USD' = todosBS ? 'BS' : 'USD'
@@ -644,7 +712,8 @@ export default function ClienteDetallePage() {
       asistio: sesionesPlan.filter((s) => s.asistencia_estado === 'asistio').length,
       aviso: sesionesPlan.filter((s) => s.asistencia_estado === 'no_asistio_aviso').length,
       sinAviso: sesionesPlan.filter((s) => s.asistencia_estado === 'no_asistio_sin_aviso').length,
-      pendientes: sesionesPlan.filter((s) => (s.asistencia_estado || 'pendiente') === 'pendiente').length,
+      pendientes: sesionesPlan.filter((s) => (s.asistencia_estado || 'pendiente') === 'pendiente')
+        .length,
       reprogramables: sesionesPlan.filter((s) => s.reprogramable === true).length,
     }
   }, [sesionesPlan])
@@ -686,7 +755,8 @@ export default function ClienteDetallePage() {
             {cliente.nombre}
           </h1>
           <p className="mt-2 text-sm text-white/55">
-            {cliente.email || 'Sin correo'} · {cliente.telefono || 'Sin teléfono'} · {cliente.estado}
+            {cliente.email || 'Sin correo'} · {cliente.telefono || 'Sin teléfono'} ·{' '}
+            {cliente.estado}
           </p>
         </div>
 
@@ -694,16 +764,14 @@ export default function ClienteDetallePage() {
           <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl xl:min-w-[340px]">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-wide text-white/45">
-                  Menú rápido
-                </p>
-                <p className="mt-1 text-sm font-medium text-white">
-                  Estado financiero
-                </p>
+                <p className="text-xs uppercase tracking-wide text-white/45">Menú rápido</p>
+                <p className="mt-1 text-sm font-medium text-white">Estado financiero</p>
               </div>
 
               <span
-                className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(estadoCuenta)}`}
+                className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(
+                  estadoCuenta
+                )}`}
               >
                 {estadoFinancieroLabel(estadoCuenta)}
               </span>
@@ -711,18 +779,14 @@ export default function ClienteDetallePage() {
 
             <div className="mt-4 grid grid-cols-2 gap-3">
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                <p className="text-[11px] uppercase tracking-wide text-white/45">
-                  Pendiente
-                </p>
+                <p className="text-[11px] uppercase tracking-wide text-white/45">Pendiente</p>
                 <p className="mt-1 text-sm font-semibold text-rose-300">
                   {money(estadoCuenta?.saldo_pendiente_neto_usd || 0, 'USD')}
                 </p>
               </div>
 
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                <p className="text-[11px] uppercase tracking-wide text-white/45">
-                  Saldo a favor
-                </p>
+                <p className="text-[11px] uppercase tracking-wide text-white/45">Saldo a favor</p>
                 <p className="mt-1 text-sm font-semibold text-emerald-300">
                   {money(estadoCuenta?.saldo_favor_neto_usd || 0, 'USD')}
                 </p>
@@ -775,11 +839,16 @@ export default function ClienteDetallePage() {
         </Card>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard
-          title="Plan activo"
-          value={truncateText(planActivo?.planes?.nombre, 22)}
-          subtitle={planActivo?.planes?.nombre || 'Resumen actual del cliente'}
+          title="Plan"
+          value={truncateText(resumenPlan.nombre, 22)}
+          subtitle={resumenPlan.nombre || 'Resumen actual del cliente'}
+        />
+        <StatCard
+          title="Estado del plan"
+          value={getPlanStatusLabel(resumenPlan.estado)}
+          subtitle={resumenPlan.estado ? 'Estado real desde base de datos' : 'Sin plan registrado'}
         />
         <StatCard title="Sesiones usadas" value={resumenPlan.usadas} />
         <StatCard title="Sesiones restantes" value={resumenPlan.restantes} />
@@ -796,7 +865,11 @@ export default function ClienteDetallePage() {
         <StatCard title="Avisó" value={resumenAsistenciaPlan.aviso} color="text-amber-400" />
         <StatCard title="Sin aviso" value={resumenAsistenciaPlan.sinAviso} color="text-rose-400" />
         <StatCard title="Pendientes" value={resumenAsistenciaPlan.pendientes} />
-        <StatCard title="Reprogramables" value={resumenAsistenciaPlan.reprogramables} color="text-violet-400" />
+        <StatCard
+          title="Reprogramables"
+          value={resumenAsistenciaPlan.reprogramables}
+          color="text-violet-400"
+        />
       </div>
 
       {loadingExtras ? (
@@ -811,7 +884,7 @@ export default function ClienteDetallePage() {
         <div className="space-y-6 xl:col-span-2">
           <Section
             title="Historial de planes"
-            description="Registro de planes asignados, renovados y cancelados."
+            description="Registro de planes asignados, renovados, agotados, vencidos o cancelados."
             className="p-0"
             contentClassName="overflow-hidden"
           >
@@ -841,6 +914,7 @@ export default function ClienteDetallePage() {
                         0,
                         Number(item.sesiones_totales || 0) - Number(item.sesiones_usadas || 0)
                       )
+
                       return (
                         <tr key={item.id} className="transition hover:bg-white/[0.03]">
                           <td className="px-4 py-3">
@@ -868,9 +942,11 @@ export default function ClienteDetallePage() {
                           </td>
                           <td className="px-4 py-3">
                             <span
-                              className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(item.estado)}`}
+                              className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(
+                                item.estado
+                              )}`}
                             >
-                              {item.estado}
+                              {getPlanStatusLabel(item.estado)}
                             </span>
                           </td>
                         </tr>
@@ -896,6 +972,7 @@ export default function ClienteDetallePage() {
                     <th className="px-4 py-3 text-left font-medium">Hora</th>
                     <th className="px-4 py-3 text-left font-medium">Empleado</th>
                     <th className="px-4 py-3 text-left font-medium">Plan</th>
+                    <th className="px-4 py-3 text-left font-medium">Estado plan</th>
                     <th className="px-4 py-3 text-left font-medium">Asistencia</th>
                     <th className="px-4 py-3 text-left font-medium">Consume</th>
                     <th className="px-4 py-3 text-left font-medium">Detalle</th>
@@ -904,7 +981,7 @@ export default function ClienteDetallePage() {
                 <tbody className="divide-y divide-white/10">
                   {sesionesPlan.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-6 text-white/55">
+                      <td colSpan={8} className="px-4 py-6 text-white/55">
                         Este cliente no tiene sesiones de plan registradas.
                       </td>
                     </tr>
@@ -930,7 +1007,18 @@ export default function ClienteDetallePage() {
                         </td>
                         <td className="px-4 py-3">
                           <span
-                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${asistenciaPlanBadge(sesion.asistencia_estado)}`}
+                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(
+                              sesion.clientes_planes?.estado || ''
+                            )}`}
+                          >
+                            {getPlanStatusLabel(sesion.clientes_planes?.estado)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${asistenciaPlanBadge(
+                              sesion.asistencia_estado
+                            )}`}
                           >
                             {asistenciaPlanLabel(sesion.asistencia_estado)}
                           </span>
@@ -1016,7 +1104,9 @@ export default function ClienteDetallePage() {
                         </td>
                         <td className="px-4 py-3">
                           <span
-                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPagoBadge(pago.estado)}`}
+                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPagoBadge(
+                              pago.estado
+                            )}`}
                           >
                             {pago.estado}
                           </span>
@@ -1050,7 +1140,9 @@ export default function ClienteDetallePage() {
                     </p>
                   </div>
                   <span
-                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(estadoCuenta)}`}
+                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(
+                      estadoCuenta
+                    )}`}
                   >
                     {estadoFinancieroLabel(estadoCuenta)}
                   </span>
@@ -1076,30 +1168,54 @@ export default function ClienteDetallePage() {
             </div>
           </Section>
 
-          <Section title="Plan actual" description="Resumen del plan activo y acceso rápido.">
-            {!planActivo ? (
-              <p className="text-sm text-white/55">No tiene plan activo.</p>
+          <Section
+            title="Resumen del plan"
+            description="Estado actual del plan principal del cliente."
+          >
+            {!planPrincipal ? (
+              <p className="text-sm text-white/55">No tiene planes registrados.</p>
             ) : (
               <div className="space-y-3">
-                <div>
-                  <p className="font-medium text-white break-words whitespace-normal">
-                    {planActivo.planes?.nombre}
-                  </p>
-                  <p className="text-sm text-white/55">
-                    {money(planActivo.planes?.precio || 0, 'USD')}
-                  </p>
-                  <p className="text-xs text-white/45">
-                    Vigencia: {formatVigencia(planActivo.planes?.vigencia_valor, planActivo.planes?.vigencia_tipo)}
-                  </p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-white break-words whitespace-normal">
+                      {planPrincipal.planes?.nombre || 'Plan'}
+                    </p>
+                    <p className="text-sm text-white/55">
+                      {money(planPrincipal.planes?.precio || 0, 'USD')}
+                    </p>
+                    <p className="text-xs text-white/45">
+                      Vigencia:{' '}
+                      {formatVigencia(
+                        planPrincipal.planes?.vigencia_valor,
+                        planPrincipal.planes?.vigencia_tipo
+                      )}
+                    </p>
+                  </div>
+
+                  <span
+                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(
+                      planPrincipal.estado
+                    )}`}
+                  >
+                    {getPlanStatusLabel(planPrincipal.estado)}
+                  </span>
                 </div>
 
                 <Card className="p-3">
                   <div className="space-y-1 text-sm text-white/75">
-                    <p>Inicio: {planActivo.fecha_inicio || '—'}</p>
-                    <p>Fin: {planActivo.fecha_fin || '—'}</p>
-                    <p>Total sesiones: {planActivo.sesiones_totales}</p>
-                    <p>Usadas: {planActivo.sesiones_usadas}</p>
-                    <p>Restantes: {resumenPlan.restantes}</p>
+                    <p>Inicio: {planPrincipal.fecha_inicio || '—'}</p>
+                    <p>Fin: {planPrincipal.fecha_fin || '—'}</p>
+                    <p>Total sesiones: {planPrincipal.sesiones_totales}</p>
+                    <p>Usadas: {planPrincipal.sesiones_usadas}</p>
+                    <p>
+                      Restantes:{' '}
+                      {Math.max(
+                        0,
+                        Number(planPrincipal.sesiones_totales || 0) -
+                          Number(planPrincipal.sesiones_usadas || 0)
+                      )}
+                    </p>
                   </div>
                 </Card>
 
@@ -1126,7 +1242,8 @@ export default function ClienteDetallePage() {
                           {cita.servicios?.nombre || 'Servicio'}
                         </p>
                         <p className="text-sm text-white/55">
-                          {cita.fecha} · {cita.hora_inicio.slice(0, 5)} - {cita.hora_fin.slice(0, 5)}
+                          {cita.fecha} · {cita.hora_inicio.slice(0, 5)} -{' '}
+                          {cita.hora_fin.slice(0, 5)}
                         </p>
                         <p className="text-xs text-white/40">
                           {cita.empleados?.nombre || 'Sin terapeuta'}
@@ -1136,7 +1253,9 @@ export default function ClienteDetallePage() {
                         ) : null}
                       </div>
                       <span
-                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoCitaBadge(cita.estado)}`}
+                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoCitaBadge(
+                          cita.estado
+                        )}`}
                       >
                         {cita.estado}
                       </span>
@@ -1165,7 +1284,9 @@ export default function ClienteDetallePage() {
                   <Card key={evento.id} className="p-3">
                     <div className="flex items-center justify-between gap-3">
                       <span
-                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${tipoEventoBadge(evento.tipo)}`}
+                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${tipoEventoBadge(
+                          evento.tipo
+                        )}`}
                       >
                         {evento.tipo}
                       </span>
