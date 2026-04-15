@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'RPM Clinic',
+  title: 'RPM',
   description: 'Sistema de gestión RPM',
 }
 

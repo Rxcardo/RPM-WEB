@@ -70,13 +70,17 @@ function formatDate(value: string | null | undefined) {
   if (!value) return '—'
   try {
     return new Date(value).toLocaleDateString('es-VE', { day: 'numeric', month: 'short', year: 'numeric' })
-  } catch { return value }
+  } catch {
+    return value
+  }
 }
 
 function calcularDiasVencidos(fechaVencimiento: string | null | undefined) {
   if (!fechaVencimiento) return 0
-  const hoy = new Date(); hoy.setHours(0, 0, 0, 0)
-  const venc = new Date(fechaVencimiento); venc.setHours(0, 0, 0, 0)
+  const hoy = new Date()
+  hoy.setHours(0, 0, 0, 0)
+  const venc = new Date(fechaVencimiento)
+  venc.setHours(0, 0, 0, 0)
   return Math.max(0, Math.ceil((hoy.getTime() - venc.getTime()) / (1000 * 60 * 60 * 24)))
 }
 
@@ -126,7 +130,6 @@ function CuentaDetalle({ cuenta }: { cuenta: CuentaPorCobrar }) {
     <div className="rounded-2xl border border-white/8 bg-white/[0.02] p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
-          {/* Concepto + badges */}
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-sm font-medium text-white">{cuenta.concepto || 'Sin concepto'}</p>
             <Badge variant={getEstadoBadgeVariant(cuenta)}>{getEstadoLabel(cuenta.estado)}</Badge>
@@ -138,14 +141,12 @@ function CuentaDetalle({ cuenta }: { cuenta: CuentaPorCobrar }) {
             )}
           </div>
 
-          {/* Fechas */}
           <div className="mt-2 flex flex-wrap gap-4 text-xs text-white/40">
             {cuenta.fecha_venta && <span>Emisión: {formatDate(cuenta.fecha_venta)}</span>}
             {cuenta.fecha_vencimiento && <span>Vence: {formatDate(cuenta.fecha_vencimiento)}</span>}
             {cuenta.tipo_origen && <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5">{cuenta.tipo_origen}</span>}
           </div>
 
-          {/* Barra de progreso */}
           <div className="mt-3">
             <div className="mb-1 flex justify-between text-[11px] text-white/35">
               <span>Cobrado {formatMoney(montoPagado)} de {formatMoney(montoTotal)}</span>
@@ -158,9 +159,17 @@ function CuentaDetalle({ cuenta }: { cuenta: CuentaPorCobrar }) {
               />
             </div>
           </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link
+              href={`/admin/finanzas/ingresos?cliente=${cuenta.cliente_id}&tipoIngreso=saldo&destino=deuda&cuenta=${cuenta.id}`}
+              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
+            >
+              Cobrar esta deuda
+            </Link>
+          </div>
         </div>
 
-        {/* Saldo */}
         <div className="shrink-0 text-right">
           <p className="text-lg font-bold text-white">{formatMoney(saldo)}</p>
           <p className="text-[11px] text-white/35">saldo pendiente</p>
@@ -185,21 +194,20 @@ function ClienteCard({
     ? Math.min(100, Math.round((grupo.total_pagado / (grupo.total_deuda + grupo.total_pagado)) * 100))
     : 0
 
+  const primeraCuentaPendiente = grupo.cuentas.find((c) => Number(c.saldo_usd || 0) > 0) || grupo.cuentas[0] || null
+
   return (
     <Card className={`overflow-hidden transition-all duration-300 ${abierto ? 'border-white/15' : 'hover:border-white/15 hover:bg-white/[0.04]'}`}>
-      {/* ── Header clickeable ── */}
       <button
         type="button"
         onClick={() => setAbierto(!abierto)}
         className="w-full px-5 py-4 text-left"
       >
         <div className="flex items-center gap-4">
-          {/* Avatar iniciales */}
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500/30 to-fuchsia-500/20 border border-violet-400/20 text-sm font-bold text-violet-200">
             {grupo.cliente_nombre.slice(0, 2).toUpperCase()}
           </div>
 
-          {/* Info cliente */}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <p className="font-semibold text-white">{grupo.cliente_nombre}</p>
@@ -218,19 +226,16 @@ function ClienteCard({
             </p>
           </div>
 
-          {/* Deuda total */}
           <div className="shrink-0 text-right">
             <p className="text-xl font-bold text-white">{formatMoney(grupo.total_deuda)}</p>
             <p className="text-[11px] text-white/35">deuda total</p>
           </div>
 
-          {/* Chevron */}
           <ChevronDown
             className={`h-5 w-5 shrink-0 text-white/40 transition-transform duration-300 ${abierto ? 'rotate-180' : ''}`}
           />
         </div>
 
-        {/* Barra de progreso global */}
         {(grupo.total_deuda + grupo.total_pagado) > 0 && (
           <div className="mt-3 pl-14">
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
@@ -246,7 +251,6 @@ function ClienteCard({
         )}
       </button>
 
-      {/* ── Detalle expandido ── */}
       {abierto && (
         <div className="border-t border-white/8 px-5 pb-5 pt-4">
           <div className="space-y-3">
@@ -255,14 +259,21 @@ function ClienteCard({
             ))}
           </div>
 
-          {/* Acciones */}
           <div className="mt-4 flex flex-wrap gap-2">
             <Link
               href={`/admin/finanzas/ingresos?cliente=${grupo.cliente_id}`}
               className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
             >
-              Cobrar en ingresos
+              Nuevo ingreso
             </Link>
+
+            <Link
+              href={`/admin/finanzas/ingresos?cliente=${grupo.cliente_id}&tipoIngreso=saldo&destino=deuda&cuenta=${primeraCuentaPendiente?.id || ''}`}
+              className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
+            >
+              Cobrar deuda
+            </Link>
+
             <Link
               href={`/admin/finanzas/ingresos?cliente=${grupo.cliente_id}&tipoIngreso=saldo`}
               className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
@@ -334,8 +345,6 @@ export default function CobranzasDashboardPage() {
     }
   }
 
-  // ── Agrupar por cliente ──────────────────────────────────────────────────
-
   function agruparPorCliente(lista: CuentaPorCobrar[]): ClienteAgrupado[] {
     const mapa: Record<string, ClienteAgrupado> = {}
 
@@ -362,8 +371,6 @@ export default function CobranzasDashboardPage() {
     return Object.values(mapa).sort((a, b) => b.total_deuda - a.total_deuda)
   }
 
-  // ── Filtros ──────────────────────────────────────────────────────────────
-
   const cuentasPendientes = useMemo(() =>
     cuentas.filter((c) => isPendienteEstado(c.estado) || Number(c.saldo_usd || 0) > 0),
     [cuentas]
@@ -388,8 +395,6 @@ export default function CobranzasDashboardPage() {
     return grupos.filter((g) => g.cliente_nombre.toLowerCase().includes(q))
   }, [cuentasHistorial, busqueda])
 
-  // ── Métricas ─────────────────────────────────────────────────────────────
-
   const totalPendiente = useMemo(() => cuentasPendientes.reduce((s, c) => s + Number(c.saldo_usd || 0), 0), [cuentasPendientes])
   const totalCobrado = useMemo(() => cuentas.reduce((s, c) => s + Number(c.monto_pagado_usd || 0), 0), [cuentas])
   const clientesConDeuda = gruposPendientes.length
@@ -412,8 +417,6 @@ export default function CobranzasDashboardPage() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#0a0b0f] via-[#0d1017] to-[#11131a]">
       <div className="mx-auto max-w-[1500px] px-4 py-8 sm:px-6">
-
-        {/* Header */}
         <div className="mb-8 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <div className="mb-2 flex items-center gap-3">
@@ -437,7 +440,6 @@ export default function CobranzasDashboardPage() {
           </div>
         </div>
 
-        {/* KPIs */}
         <div className="mb-6 grid gap-4 lg:grid-cols-4">
           <ResumenCard title="Total pendiente" value={formatMoney(totalPendiente)} helper={`${clientesConDeuda} cliente(s) con deuda`} icon={<Wallet className="h-6 w-6" />} />
           <ResumenCard title="Total cobrado" value={formatMoney(totalCobrado)} helper="Suma de pagos registrados" icon={<DollarSign className="h-6 w-6" />} />
@@ -445,7 +447,6 @@ export default function CobranzasDashboardPage() {
           <ResumenCard title="Con vencidas" value={String(clientesVencidos)} helper="Al menos 1 cuenta vencida" icon={<Calendar className="h-6 w-6" />} />
         </div>
 
-        {/* Tabs + búsqueda */}
         <Card className="mb-6 p-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap gap-2">
@@ -477,7 +478,6 @@ export default function CobranzasDashboardPage() {
           </div>
         </Card>
 
-        {/* Lista agrupada */}
         {tab === 'pendientes' && (
           <div className="space-y-3">
             {gruposPendientes.length === 0 ? (

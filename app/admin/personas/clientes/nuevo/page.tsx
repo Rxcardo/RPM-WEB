@@ -4,7 +4,6 @@ export const dynamic = 'force-dynamic'
 
 import {
   memo,
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -83,14 +82,13 @@ type PlanificacionSesiones = {
 }
 
 type PagoMixtoItem = {
-  id_local: string
-  moneda_pago: 'USD' | 'BS'
-  metodo_pago_v2_id: string
-  monto_usd: string
-  monto_bs: number | null
-  tasa_bcv: number | null
+  moneda: 'USD' | 'BS'
+  metodoId: string
+  monto: string
   referencia: string
   notas: string
+  tasaBcv: number | null
+  montoBs: number | null
 }
 
 const DIAS_SEMANA = [
@@ -191,12 +189,12 @@ function formatMoney(v: number | null | undefined) {
   }).format(Number(v || 0))
 }
 
-function formatBs(v: number) {
+function formatBs(v: number | null | undefined) {
   return new Intl.NumberFormat('es-VE', {
     style: 'currency',
     currency: 'VES',
     maximumFractionDigits: 2,
-  }).format(v)
+  }).format(Number(v || 0))
 }
 
 function formatVigencia(valor: number, tipo: VigenciaTipo) {
@@ -245,6 +243,7 @@ function detectarMetodoBs(metodo: MetodoPago | null) {
   return (
     moneda === 'BS' ||
     moneda === 'VES' ||
+    moneda === 'BOLIVARES' ||
     nombre.includes('bs') ||
     nombre.includes('bolívar') ||
     nombre.includes('bolivar') ||
@@ -256,6 +255,7 @@ function detectarMetodoBs(metodo: MetodoPago | null) {
     tipo.includes('bolívar') ||
     tipo.includes('bolivar') ||
     tipo.includes('pago_movil') ||
+    (tipo.includes('transferencia') && moneda === 'VES') ||
     carteraCodigo.includes('bs') ||
     carteraCodigo.includes('ves')
   )
@@ -369,6 +369,18 @@ function calcularPlanificacionSesiones(
 
 function buildEntrenamientoKey(fecha: string, horaInicio: string, horaFin: string, empleadoId: string) {
   return `${fecha}__${horaInicio}__${horaFin}__${empleadoId}`
+}
+
+function pagoToUsd(pago: PagoMixtoItem): number {
+  const monto = parseFloat(pago.monto) || 0
+  if (pago.moneda === 'USD') return r2(monto)
+  if (!pago.tasaBcv || pago.tasaBcv <= 0) return 0
+  return r2(monto / pago.tasaBcv)
+}
+
+function pagoMontoEnBs(pago: PagoMixtoItem): number {
+  if (pago.moneda !== 'BS') return 0
+  return parseFloat(pago.monto) || 0
 }
 
 function Field({
@@ -566,19 +578,6 @@ function CalendarioDisponibilidad({
   )
 }
 
-function makePagoItem(moneda: 'USD' | 'BS' = 'USD'): PagoMixtoItem {
-  return {
-    id_local: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    moneda_pago: moneda,
-    metodo_pago_v2_id: '',
-    monto_usd: '',
-    monto_bs: null,
-    tasa_bcv: null,
-    referencia: '',
-    notas: '',
-  }
-}
-
 const PagoBsSelector = memo(function PagoBsSelector({
   fecha,
   montoUsd,
@@ -604,6 +603,146 @@ const PagoBsSelector = memo(function PagoBsSelector({
     />
   )
 })
+
+function PagoMixtoCard({
+  numero,
+  pago,
+  metodosPago,
+  fecha,
+  onChange,
+}: {
+  numero: 1 | 2
+  pago: PagoMixtoItem
+  metodosPago: MetodoPago[]
+  fecha: string
+  onChange: (patch: Partial<PagoMixtoItem>) => void
+}) {
+  const isUsd = pago.moneda === 'USD'
+  const equivalenteUsd = pagoToUsd(pago)
+  const montoBsDisplay = pagoMontoEnBs(pago)
+
+  const metodosDisponibles = useMemo(
+    () =>
+      isUsd
+        ? metodosPago.filter((m) => detectarMetodoUsd(m))
+        : metodosPago.filter((m) => detectarMetodoBs(m)),
+    [metodosPago, isUsd]
+  )
+
+  const colors =
+    numero === 1
+      ? { border: 'border-blue-400/20', badge: 'bg-blue-500/15 text-blue-300', equiv: 'text-blue-300' }
+      : { border: 'border-violet-400/20', badge: 'bg-violet-500/15 text-violet-300', equiv: 'text-violet-300' }
+
+  function handleMonedaChange(moneda: 'USD' | 'BS') {
+    onChange({ moneda, metodoId: '', monto: '', tasaBcv: null, montoBs: null })
+  }
+
+  return (
+    <div className={`rounded-2xl border ${colors.border} bg-white/[0.02] p-5`}>
+      <div className="mb-4 flex items-start justify-between">
+        <div className="flex items-center gap-3">
+          <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${colors.badge}`}>
+            {numero}
+          </span>
+          <div>
+            <p className="text-sm font-medium text-white">Pago {numero}</p>
+            <p className="text-xs text-white/40">{numero === 1 ? 'Método principal' : 'Método secundario'}</p>
+          </div>
+        </div>
+
+        {(parseFloat(pago.monto) || 0) > 0 && (
+          <div className="text-right">
+            <p className={`text-lg font-semibold ${colors.equiv}`}>
+              {isUsd ? formatMoney(equivalenteUsd) : formatBs(montoBsDisplay)}
+            </p>
+            {!isUsd && equivalenteUsd > 0 && (
+              <p className="text-xs text-white/40">≈ {formatMoney(equivalenteUsd)}</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="mb-3 grid grid-cols-2 gap-3">
+        <Field label="Moneda">
+          <select
+            value={pago.moneda}
+            onChange={(e) => handleMonedaChange(e.target.value as 'USD' | 'BS')}
+            className={inputCls}
+          >
+            <option value="USD" className="bg-[#11131a]">USD</option>
+            <option value="BS" className="bg-[#11131a]">Bolívares</option>
+          </select>
+        </Field>
+
+        <Field label={isUsd ? 'Método USD' : 'Método Bs'}>
+          <select
+            value={pago.metodoId}
+            onChange={(e) => onChange({ metodoId: e.target.value })}
+            className={inputCls}
+          >
+            <option value="" className="bg-[#11131a]">Seleccionar</option>
+            {metodosDisponibles.map((m) => (
+              <option key={m.id} value={m.id} className="bg-[#11131a]">
+                {m.nombre}
+                {m.moneda ? ` · ${m.moneda}` : ''}
+                {m.tipo ? ` · ${m.tipo}` : ''}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      <div className="mb-3">
+        <Field label={isUsd ? 'Monto USD' : 'Monto Bs'}>
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={pago.monto}
+            onChange={(e) => onChange({ monto: e.target.value })}
+            className={inputCls}
+            placeholder="0.00"
+          />
+        </Field>
+      </div>
+
+      {!isUsd && (
+        <div className="mb-3">
+          <PagoBsSelector
+            fecha={fecha}
+            montoUsd={equivalenteUsd}
+            montoBs={parseFloat(pago.monto) || null}
+            onChangeTasa={(tasa) => onChange({ tasaBcv: tasa })}
+            onChangeMontoBs={(monto) => onChange({ monto: String(monto), montoBs: monto })}
+          />
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Referencia">
+          <input
+            type="text"
+            value={pago.referencia}
+            onChange={(e) => onChange({ referencia: e.target.value })}
+            className={inputCls}
+            placeholder="Comprobante..."
+          />
+        </Field>
+
+        <Field label="Notas">
+          <input
+            type="text"
+            value={pago.notas}
+            onChange={(e) => onChange({ notas: e.target.value })}
+            className={inputCls}
+            placeholder="Opcional..."
+          />
+        </Field>
+      </div>
+    </div>
+  )
+}
 
 export default function NuevoClientePage() {
   const router = useRouter()
@@ -655,12 +794,26 @@ export default function NuevoClientePage() {
   const [montoPersonalizado, setMontoPersonalizado] = useState('')
   const [notasPagoGenerales, setNotasPagoGenerales] = useState('')
   const [tipoPago, setTipoPago] = useState<TipoPago>('unico')
+
   const [monedaPagoUnico, setMonedaPagoUnico] = useState<'USD' | 'BS'>('USD')
   const [metodoPagoUnicoId, setMetodoPagoUnicoId] = useState('')
   const [referenciaPagoUnico, setReferenciaPagoUnico] = useState('')
   const [notasPagoUnico, setNotasPagoUnico] = useState('')
   const [tasaPagoUnico, setTasaPagoUnico] = useState<number | null>(null)
   const [montoPagoUnicoBs, setMontoPagoUnicoBs] = useState<number | null>(null)
+
+  const pagoMixtoVacio = (): PagoMixtoItem => ({
+    moneda: 'USD',
+    metodoId: '',
+    monto: '',
+    referencia: '',
+    notas: '',
+    tasaBcv: null,
+    montoBs: null,
+  })
+
+  const [pagoMixto1, setPagoMixto1] = useState<PagoMixtoItem>(pagoMixtoVacio())
+  const [pagoMixto2, setPagoMixto2] = useState<PagoMixtoItem>({ ...pagoMixtoVacio(), moneda: 'BS' })
 
   const [mostrarCrearPlan, setMostrarCrearPlan] = useState(false)
   const [nuevoPlanNombre, setNuevoPlanNombre] = useState('')
@@ -670,16 +823,6 @@ export default function NuevoClientePage() {
   const [nuevoPlanPrecio, setNuevoPlanPrecio] = useState('')
   const [creandoPlan, setCreandoPlan] = useState(false)
 
-  const [mixtoMonedaIngresada, setMixtoMonedaIngresada] = useState<'USD' | 'BS'>('USD')
-  const [mixtoMetodoIngresadoId, setMixtoMetodoIngresadoId] = useState('')
-  const [mixtoMetodoDiferenciaId, setMixtoMetodoDiferenciaId] = useState('')
-  const [mixtoMontoIngresadoUsd, setMixtoMontoIngresadoUsd] = useState('')
-  const [mixtoMontoIngresadoBs, setMixtoMontoIngresadoBs] = useState<number | null>(null)
-  const [mixtoTasaBcv, setMixtoTasaBcv] = useState<number | null>(null)
-  const [mixtoReferenciaIngresada, setMixtoReferenciaIngresada] = useState('')
-  const [mixtoReferenciaDiferencia, setMixtoReferenciaDiferencia] = useState('')
-  const [mixtoNotasIngresada, setMixtoNotasIngresada] = useState('')
-  const [mixtoNotasDiferencia, setMixtoNotasDiferencia] = useState('')
   const [porcentajeRpmEditable, setPorcentajeRpmEditable] = useState(50)
   const [porcentajeEntrenadorEditable, setPorcentajeEntrenadorEditable] = useState(50)
 
@@ -901,6 +1044,11 @@ export default function NuevoClientePage() {
     return r2(baseComisionAplicada - montoRpmAplicado)
   }, [baseComisionAplicada, montoRpmAplicado])
 
+  const comisionBalanceOk = useMemo(
+    () => Math.abs(r2(montoRpmAplicado + montoEntrenadorAplicado) - baseComisionAplicada) < 0.01,
+    [montoRpmAplicado, montoEntrenadorAplicado, baseComisionAplicada]
+  )
+
   const planificacion = useMemo(() => {
     if (!fechaInicio || !diasSemana.length || !planSeleccionado) return null
     return calcularPlanificacionSesiones(
@@ -915,6 +1063,91 @@ export default function NuevoClientePage() {
   const fechasPreview = useMemo(() => {
     return planificacion?.fechas || []
   }, [planificacion])
+
+  const totalPagoUnicoUsd = useMemo(() => r2(montoBase), [montoBase])
+
+  const totalPagoUnicoBs = useMemo(() => {
+    if (monedaPagoUnico !== 'BS' || !tasaPagoUnico || tasaPagoUnico <= 0) return 0
+    return r2(montoBase * tasaPagoUnico)
+  }, [monedaPagoUnico, tasaPagoUnico, montoBase])
+
+  const tasaReferenciaComision = useMemo(() => {
+    if (tipoPago === 'unico' && monedaPagoUnico === 'BS' && tasaPagoUnico && tasaPagoUnico > 0) {
+      return tasaPagoUnico
+    }
+
+    if (tipoPago === 'mixto') {
+      const t1 = pagoMixto1.moneda === 'BS' ? pagoMixto1.tasaBcv : null
+      const t2 = pagoMixto2.moneda === 'BS' ? pagoMixto2.tasaBcv : null
+      return t1 || t2 || null
+    }
+
+    return null
+  }, [tipoPago, monedaPagoUnico, tasaPagoUnico, pagoMixto1, pagoMixto2])
+
+  const comisionEquivalentes = useMemo(() => {
+    if (!tasaReferenciaComision || tasaReferenciaComision <= 0) {
+      return {
+        monto_base_usd: baseComisionAplicada,
+        monto_base_bs: null,
+        monto_rpm_usd: montoRpmAplicado,
+        monto_rpm_bs: null,
+        monto_profesional_usd: montoEntrenadorAplicado,
+        monto_profesional_bs: null,
+      }
+    }
+
+    return {
+      monto_base_usd: baseComisionAplicada,
+      monto_base_bs: r2(baseComisionAplicada * tasaReferenciaComision),
+      monto_rpm_usd: montoRpmAplicado,
+      monto_rpm_bs: r2(montoRpmAplicado * tasaReferenciaComision),
+      monto_profesional_usd: montoEntrenadorAplicado,
+      monto_profesional_bs: r2(montoEntrenadorAplicado * tasaReferenciaComision),
+    }
+  }, [baseComisionAplicada, montoRpmAplicado, montoEntrenadorAplicado, tasaReferenciaComision])
+
+  const resumenPagosMixto = useMemo(() => {
+    const usd1 = pagoToUsd(pagoMixto1)
+    const usd2 = pagoToUsd(pagoMixto2)
+    const totalUsd = r2(usd1 + usd2)
+    const totalBs = r2(pagoMontoEnBs(pagoMixto1) + pagoMontoEnBs(pagoMixto2))
+    const diferenciaUsd = r2(montoBase - totalUsd)
+    const faltanteUsd = r2(Math.max(diferenciaUsd, 0))
+    const excedenteUsd = r2(Math.max(-diferenciaUsd, 0))
+    const cuadra = Math.abs(diferenciaUsd) < 0.01 && montoBase > 0
+
+    const pct1 = montoBase > 0 ? Math.round((usd1 / montoBase) * 100) : 0
+    const pct2 = montoBase > 0 ? Math.round((usd2 / montoBase) * 100) : 0
+
+    const p1Valido =
+      !!pagoMixto1.metodoId &&
+      (pagoMixto1.moneda === 'USD'
+        ? (parseFloat(pagoMixto1.monto) || 0) > 0
+        : (parseFloat(pagoMixto1.monto) || 0) > 0 && (pagoMixto1.tasaBcv || 0) > 0)
+
+    const p2Valido =
+      !!pagoMixto2.metodoId &&
+      (pagoMixto2.moneda === 'USD'
+        ? (parseFloat(pagoMixto2.monto) || 0) > 0
+        : (parseFloat(pagoMixto2.monto) || 0) > 0 && (pagoMixto2.tasaBcv || 0) > 0)
+
+    return {
+      usd1,
+      usd2,
+      totalUsd,
+      totalBs,
+      diferenciaUsd,
+      faltanteUsd,
+      excedenteUsd,
+      cuadra,
+      pct1,
+      pct2,
+      p1Valido,
+      p2Valido,
+      todosValidos: p1Valido && p2Valido,
+    }
+  }, [pagoMixto1, pagoMixto2, montoBase])
 
   function handleChangeMontoComisionDesdeRpmMonto(value: string) {
     const rpmMonto = clamp(Number(value || 0), 0, baseComisionAplicada)
@@ -1067,6 +1300,14 @@ export default function NuevoClientePage() {
         tipo: 'plan',
         estado: 'pendiente',
         porcentaje_rpm: porcRpm,
+        moneda: tasaReferenciaComision ? 'BS' : 'USD',
+        tasa_bcv: tasaReferenciaComision,
+        monto_base_usd: comisionEquivalentes.monto_base_usd,
+        monto_base_bs: comisionEquivalentes.monto_base_bs,
+        monto_rpm_usd: comisionEquivalentes.monto_rpm_usd,
+        monto_rpm_bs: comisionEquivalentes.monto_rpm_bs,
+        monto_profesional_usd: comisionEquivalentes.monto_profesional_usd,
+        monto_profesional_bs: comisionEquivalentes.monto_profesional_bs,
       })
 
       if (error) console.error('❌ Error comisión:', error.message)
@@ -1311,27 +1552,6 @@ export default function NuevoClientePage() {
     }
   }
 
-  function getMetodosForMoneda(moneda: 'USD' | 'BS') {
-    return moneda === 'USD'
-      ? metodosPago.filter((m) => detectarMetodoUsd(m))
-      : metodosPago.filter((m) => detectarMetodoBs(m))
-  }
-
-  const metodosPagoUnicoDisponibles = useMemo(
-    () => getMetodosForMoneda(monedaPagoUnico),
-    [metodosPago, monedaPagoUnico]
-  )
-
-  const metodosMixtoIngresado = useMemo(
-    () => getMetodosForMoneda(mixtoMonedaIngresada),
-    [metodosPago, mixtoMonedaIngresada]
-  )
-
-  const metodosMixtoDiferencia = useMemo(
-    () => getMetodosForMoneda(mixtoMonedaIngresada === 'USD' ? 'BS' : 'USD'),
-    [metodosPago, mixtoMonedaIngresada]
-  )
-
   useEffect(() => {
     setMetodoPagoUnicoId('')
   }, [monedaPagoUnico])
@@ -1341,133 +1561,11 @@ export default function NuevoClientePage() {
   }, [monedaPagoUnico, montoBase])
 
   useEffect(() => {
-    setMixtoMetodoIngresadoId('')
-    setMixtoMetodoDiferenciaId('')
-    setMixtoReferenciaIngresada('')
-    setMixtoReferenciaDiferencia('')
-    setMixtoNotasIngresada('')
-    setMixtoNotasDiferencia('')
-    setMixtoMontoIngresadoUsd('')
-    setMixtoMontoIngresadoBs(null)
-  }, [mixtoMonedaIngresada])
-
-  const totalPagoUnicoUsd = useMemo(() => r2(montoBase), [montoBase])
-
-  const totalPagoUnicoBs = useMemo(() => {
-    if (monedaPagoUnico !== 'BS' || !tasaPagoUnico || tasaPagoUnico <= 0) return 0
-    return r2(montoBase * tasaPagoUnico)
-  }, [monedaPagoUnico, tasaPagoUnico, montoBase])
-
-  const mixtoMontoIngresadoUsdEquiv = useMemo(() => {
-    if (mixtoMonedaIngresada === 'USD') {
-      return r2(clamp(Number(mixtoMontoIngresadoUsd || 0), 0, montoBase))
+    if (tipoPago === 'mixto') {
+      setPagoMixto1(pagoMixtoVacio())
+      setPagoMixto2({ ...pagoMixtoVacio(), moneda: 'BS' })
     }
-
-    if (!mixtoTasaBcv || mixtoTasaBcv <= 0) return 0
-    return r2(Math.max(Number(mixtoMontoIngresadoBs || 0), 0) / mixtoTasaBcv)
-  }, [mixtoMonedaIngresada, mixtoMontoIngresadoUsd, mixtoMontoIngresadoBs, mixtoTasaBcv, montoBase])
-
-  const mixtoFaltanteUsd = useMemo(() => {
-    return r2(Math.max(montoBase - mixtoMontoIngresadoUsdEquiv, 0))
-  }, [montoBase, mixtoMontoIngresadoUsdEquiv])
-
-  const mixtoFaltanteBs = useMemo(() => {
-    if (!mixtoTasaBcv || mixtoTasaBcv <= 0) return 0
-    return r2(mixtoFaltanteUsd * mixtoTasaBcv)
-  }, [mixtoFaltanteUsd, mixtoTasaBcv])
-
-  const resumenPagos = useMemo(() => {
-    const items =
-      tipoPago !== 'mixto'
-        ? []
-        : [
-            {
-              moneda_pago: mixtoMonedaIngresada,
-              metodo_pago_v2_id: mixtoMetodoIngresadoId,
-              monto_insertar:
-                mixtoMonedaIngresada === 'USD'
-                  ? r2(clamp(Number(mixtoMontoIngresadoUsd || 0), 0, montoBase))
-                  : r2(Number(mixtoMontoIngresadoBs || 0)),
-              monto_equivalente_usd: mixtoMontoIngresadoUsdEquiv,
-              monto_equivalente_bs:
-                mixtoMonedaIngresada === 'BS'
-                  ? r2(Number(mixtoMontoIngresadoBs || 0))
-                  : mixtoTasaBcv && mixtoTasaBcv > 0
-                    ? r2(clamp(Number(mixtoMontoIngresadoUsd || 0), 0, montoBase) * mixtoTasaBcv)
-                    : null,
-              tasa_bcv: mixtoMonedaIngresada === 'BS' ? mixtoTasaBcv : null,
-              referencia: mixtoReferenciaIngresada || null,
-              notas: mixtoNotasIngresada || null,
-              valido:
-                !!mixtoMetodoIngresadoId &&
-                (mixtoMonedaIngresada === 'USD'
-                  ? Number(mixtoMontoIngresadoUsd || 0) > 0
-                  : Number(mixtoMontoIngresadoBs || 0) > 0 && Number(mixtoTasaBcv || 0) > 0),
-            },
-            {
-              moneda_pago: mixtoMonedaIngresada === 'USD' ? 'BS' : 'USD',
-              metodo_pago_v2_id: mixtoMetodoDiferenciaId,
-              monto_insertar:
-                mixtoMonedaIngresada === 'USD'
-                  ? r2(mixtoFaltanteBs)
-                  : r2(mixtoFaltanteUsd),
-              monto_equivalente_usd: mixtoFaltanteUsd,
-              monto_equivalente_bs:
-                mixtoMonedaIngresada === 'USD'
-                  ? r2(mixtoFaltanteBs)
-                  : mixtoTasaBcv && mixtoTasaBcv > 0
-                    ? r2(mixtoFaltanteUsd * mixtoTasaBcv)
-                    : null,
-              tasa_bcv: mixtoMonedaIngresada === 'USD' ? mixtoTasaBcv : null,
-              referencia: mixtoReferenciaDiferencia || null,
-              notas: mixtoNotasDiferencia || null,
-              valido:
-                !!mixtoMetodoDiferenciaId &&
-                (mixtoMonedaIngresada === 'USD'
-                  ? Number(mixtoFaltanteBs || 0) >= 0 && Number(mixtoTasaBcv || 0) > 0
-                  : Number(mixtoFaltanteUsd || 0) >= 0),
-            },
-          ]
-
-    const totalUsd = tipoPago === 'mixto'
-      ? r2(items.reduce((acc, item) => acc + Number(item.monto_equivalente_usd || 0), 0))
-      : 0
-
-    const totalBs = tipoPago === 'mixto'
-      ? r2(items.reduce((acc, item) => acc + Number(item.monto_equivalente_bs || 0), 0))
-      : 0
-
-    const faltanteUsd = tipoPago === 'mixto' ? r2(Math.max(montoBase - totalUsd, 0)) : 0
-    const excedenteUsd = tipoPago === 'mixto' ? r2(Math.max(totalUsd - montoBase, 0)) : 0
-    const diferenciaUsd = tipoPago === 'mixto' ? r2(montoBase - totalUsd) : 0
-
-    return {
-      items,
-      totalUsd,
-      totalBs,
-      faltanteUsd,
-      excedenteUsd,
-      diferenciaUsd,
-      cuadra: tipoPago === 'mixto' ? Math.abs(diferenciaUsd) < 0.01 && montoBase > 0 : false,
-      todosValidos: tipoPago === 'mixto' ? items.every((item) => item.valido) : false,
-    }
-  }, [
-    tipoPago,
-    mixtoMonedaIngresada,
-    mixtoMetodoIngresadoId,
-    mixtoMetodoDiferenciaId,
-    mixtoMontoIngresadoUsd,
-    mixtoMontoIngresadoBs,
-    mixtoTasaBcv,
-    mixtoReferenciaIngresada,
-    mixtoReferenciaDiferencia,
-    mixtoNotasIngresada,
-    mixtoNotasDiferencia,
-    mixtoMontoIngresadoUsdEquiv,
-    mixtoFaltanteUsd,
-    mixtoFaltanteBs,
-    montoBase,
-  ])
+  }, [tipoPago])
 
   async function handleGuardarPago(e: React.FormEvent) {
     e.preventDefault()
@@ -1502,6 +1600,11 @@ export default function NuevoClientePage() {
         return
       }
 
+      if (!comisionBalanceOk) {
+        setErrorMsg('La distribución de comisión no cuadra correctamente.')
+        return
+      }
+
       if (tipoPago === 'unico') {
         if (!metodoPagoUnicoId) {
           setErrorMsg('Selecciona el método del pago único.')
@@ -1513,48 +1616,21 @@ export default function NuevoClientePage() {
           return
         }
       } else {
-        if (!mixtoMetodoIngresadoId) {
-          setErrorMsg('Selecciona el método del monto recibido.')
+        if (!resumenPagosMixto.p1Valido) {
+          setErrorMsg('Completa el Pago 1: método y monto requeridos.')
           return
         }
 
-        if (!mixtoMetodoDiferenciaId) {
-          setErrorMsg('Selecciona el método de la diferencia.')
+        if (!resumenPagosMixto.p2Valido) {
+          setErrorMsg('Completa el Pago 2: método y monto requeridos.')
           return
         }
 
-        if (mixtoMonedaIngresada === 'USD') {
-          if (Number(mixtoMontoIngresadoUsd || 0) <= 0) {
-            setErrorMsg('Ingresa el monto recibido en USD.')
-            return
-          }
-
-          if (!mixtoTasaBcv || mixtoTasaBcv <= 0) {
-            setErrorMsg('Selecciona una tasa válida para calcular la diferencia en bolívares.')
-            return
-          }
-        } else {
-          if (Number(mixtoMontoIngresadoBs || 0) <= 0) {
-            setErrorMsg('Ingresa el monto recibido en bolívares.')
-            return
-          }
-
-          if (!mixtoTasaBcv || mixtoTasaBcv <= 0) {
-            setErrorMsg('Selecciona una tasa válida para convertir el pago en bolívares.')
-            return
-          }
-        }
-
-        if (!resumenPagos.todosValidos) {
-          setErrorMsg('Completa correctamente los datos del pago mixto.')
-          return
-        }
-
-        if (!resumenPagos.cuadra) {
+        if (!resumenPagosMixto.cuadra) {
           setErrorMsg(
             `La suma de pagos no cuadra. Objetivo: ${formatMoney(montoBase)} | Registrado: ${formatMoney(
-              resumenPagos.totalUsd
-            )} | Faltante: ${formatMoney(resumenPagos.faltanteUsd)}`
+              resumenPagosMixto.totalUsd
+            )} | Faltante: ${formatMoney(resumenPagosMixto.faltanteUsd)}`
           )
           return
         }
@@ -1585,13 +1661,13 @@ export default function NuevoClientePage() {
                   notas: notasPagoUnico || null,
                 },
               ]
-            : resumenPagos.items.map((item) => ({
-                metodo_pago_v2_id: item.metodo_pago_v2_id,
-                moneda_pago: item.moneda_pago,
-                monto: item.monto_insertar,
-                tasa_bcv: item.moneda_pago === 'BS' ? item.tasa_bcv : item.tasa_bcv || null,
-                referencia: item.referencia || null,
-                notas: item.notas || null,
+            : [pagoMixto1, pagoMixto2].map((p) => ({
+                metodo_pago_v2_id: p.metodoId,
+                moneda_pago: p.moneda,
+                monto: parseFloat(p.monto) || 0,
+                tasa_bcv: p.moneda === 'BS' ? p.tasaBcv : null,
+                referencia: p.referencia || null,
+                notas: p.notas || null,
               }))
 
         const { error: pagosMixtosError } = await supabase.rpc('registrar_pagos_mixtos', {
@@ -2462,6 +2538,14 @@ export default function NuevoClientePage() {
                       <p className="mt-2 text-sm text-white/50">{porcentajeEntrenadorAplicado}%</p>
                     </div>
                   </div>
+
+                  {comisionEquivalentes.monto_base_bs ? (
+                    <div className="mt-4 grid gap-2 border-t border-white/10 pt-4 text-sm md:grid-cols-3">
+                      <div><span className="text-white/55">Base en Bs: </span><span className="text-white/75">{formatBs(comisionEquivalentes.monto_base_bs)}</span></div>
+                      <div><span className="text-white/55">RPM en Bs: </span><span className="text-white/75">{formatBs(comisionEquivalentes.monto_rpm_bs || 0)}</span></div>
+                      <div><span className="text-white/55">Entrenador en Bs: </span><span className="text-white/75">{formatBs(comisionEquivalentes.monto_profesional_bs || 0)}</span></div>
+                    </div>
+                  ) : null}
                 </div>
 
                 <Card className="p-6">
@@ -2475,30 +2559,22 @@ export default function NuevoClientePage() {
                       />
                     </Field>
 
-                    <Field label="Tipo de pago" helper="Elige si todo entra en una sola moneda o si el pago se divide.">
+                    <Field label="Tipo de pago" helper="Elige si todo entra por un solo método o si el pago se divide en dos.">
                       <div className="grid grid-cols-2 gap-3">
-                        <button
-                          type="button"
-                          onClick={() => setTipoPago('unico')}
-                          className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition ${
-                            tipoPago === 'unico'
-                              ? 'border-violet-400/40 bg-violet-500/20 text-violet-300'
-                              : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]'
-                          }`}
-                        >
-                          Pago único
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setTipoPago('mixto')}
-                          className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition ${
-                            tipoPago === 'mixto'
-                              ? 'border-violet-400/40 bg-violet-500/20 text-violet-300'
-                              : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]'
-                          }`}
-                        >
-                          Pago mixto
-                        </button>
+                        {(['unico', 'mixto'] as TipoPago[]).map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => setTipoPago(t)}
+                            className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition ${
+                              tipoPago === t
+                                ? 'border-violet-400/40 bg-violet-500/20 text-violet-300'
+                                : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]'
+                            }`}
+                          >
+                            {t === 'unico' ? 'Pago único' : 'Pago mixto'}
+                          </button>
+                        ))}
                       </div>
                     </Field>
 
@@ -2515,8 +2591,8 @@ export default function NuevoClientePage() {
                     </div>
                   </div>
 
-                  {tipoPago === 'unico' ? (
-                    <div className="mt-6 space-y-4">
+                  {tipoPago === 'unico' && (
+                    <div className="mt-6">
                       <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                         <div className="grid gap-4 md:grid-cols-3">
                           <Field label="Moneda">
@@ -2537,7 +2613,10 @@ export default function NuevoClientePage() {
                               className={inputCls}
                             >
                               <option value="" className="bg-[#11131a]">Seleccionar</option>
-                              {metodosPagoUnicoDisponibles.map((m) => (
+                              {(monedaPagoUnico === 'USD'
+                                ? metodosPago.filter((m) => detectarMetodoUsd(m))
+                                : metodosPago.filter((m) => detectarMetodoBs(m))
+                              ).map((m) => (
                                 <option key={m.id} value={m.id} className="bg-[#11131a]">
                                   {m.nombre}
                                   {m.moneda ? ` · ${m.moneda}` : ''}
@@ -2601,177 +2680,88 @@ export default function NuevoClientePage() {
                         </div>
                       </div>
                     </div>
-                  ) : (
+                  )}
+
+                  {tipoPago === 'mixto' && (
                     <div className="mt-6 space-y-4">
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                        <p className="text-sm text-white/70">
-                          Escribes lo que te pagaron primero y el sistema te muestra cuánto representa en USD y cuánto falta automáticamente.
-                        </p>
-                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+                        <div className="mb-3 flex items-baseline justify-between">
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-2xl font-semibold text-white">{formatMoney(montoBase)}</span>
+                            <span className="text-sm text-white/45">total a cobrar</span>
+                          </div>
 
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <Field label="Moneda recibida primero">
-                          <select
-                            value={mixtoMonedaIngresada}
-                            onChange={(e) => setMixtoMonedaIngresada(e.target.value as 'USD' | 'BS')}
-                            className={inputCls}
-                          >
-                            <option value="USD" className="bg-[#11131a]">USD</option>
-                            <option value="BS" className="bg-[#11131a]">Bs</option>
-                          </select>
-                        </Field>
+                          {resumenPagosMixto.totalUsd > 0 && (
+                            <span className={`text-sm font-medium ${resumenPagosMixto.cuadra ? 'text-emerald-400' : 'text-amber-400'}`}>
+                              {resumenPagosMixto.cuadra ? '✓ Cuadra' : `Faltan ${formatMoney(resumenPagosMixto.faltanteUsd)}`}
+                            </span>
+                          )}
+                        </div>
 
-                        <Field label={mixtoMonedaIngresada === 'USD' ? 'Método del pago recibido' : 'Método del pago recibido'}>
-                          <select
-                            value={mixtoMetodoIngresadoId}
-                            onChange={(e) => setMixtoMetodoIngresadoId(e.target.value)}
-                            className={inputCls}
-                          >
-                            <option value="" className="bg-[#11131a]">Seleccionar</option>
-                            {metodosMixtoIngresado.map((m) => (
-                              <option key={m.id} value={m.id} className="bg-[#11131a]">
-                                {m.nombre}
-                                {m.moneda ? ` · ${m.moneda}` : ''}
-                                {m.tipo ? ` · ${m.tipo}` : ''}
-                              </option>
-                            ))}
-                          </select>
-                        </Field>
+                        <div className="flex h-2 overflow-hidden rounded-full bg-white/[0.06]">
+                          <div
+                            className="bg-blue-500 transition-all duration-300"
+                            style={{ width: `${Math.min(resumenPagosMixto.pct1, 100)}%` }}
+                          />
+                          <div
+                            className="bg-violet-500 transition-all duration-300"
+                            style={{ width: `${Math.min(resumenPagosMixto.pct2, 100 - resumenPagosMixto.pct1)}%` }}
+                          />
+                        </div>
 
-                        {mixtoMonedaIngresada === 'USD' ? (
-                          <Field label="Monto recibido en USD">
-                            <input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={mixtoMontoIngresadoUsd}
-                              onChange={(e) => setMixtoMontoIngresadoUsd(e.target.value)}
-                              className={inputCls}
-                              placeholder="0.00"
-                            />
-                          </Field>
-                        ) : (
-                          <Field label="Monto recibido en Bs">
-                            <input
-                              type="number"
-                              min={0}
-                              step="0.01"
-                              value={mixtoMontoIngresadoBs ?? ''}
-                              onChange={(e) => setMixtoMontoIngresadoBs(e.target.value ? Number(e.target.value) : null)}
-                              className={inputCls}
-                              placeholder="0.00"
-                            />
-                          </Field>
+                        {resumenPagosMixto.totalUsd > 0 && (
+                          <div className="mt-2 flex gap-4">
+                            <span className="text-xs text-blue-400">
+                              ■ Pago 1: {formatMoney(resumenPagosMixto.usd1)} ({resumenPagosMixto.pct1}%)
+                            </span>
+                            <span className="text-xs text-violet-400">
+                              ■ Pago 2: {formatMoney(resumenPagosMixto.usd2)} ({resumenPagosMixto.pct2}%)
+                            </span>
+                          </div>
                         )}
-
-                        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                          <p className="text-xs text-white/45">Equivale en USD</p>
-                          <p className="mt-1 text-lg font-semibold text-white">
-                            {formatMoney(mixtoMontoIngresadoUsdEquiv)}
-                          </p>
-                          <p className="mt-2 text-sm text-white/55">
-                            {mixtoMonedaIngresada === 'USD'
-                              ? 'Pago directo en USD'
-                              : `Desde ${formatBs(Number(mixtoMontoIngresadoBs || 0))}`}
-                          </p>
-                        </div>
-
-                        <div className="md:col-span-2">
-                          <PagoBsSelector
-                            fecha={fechaInicio}
-                            montoUsd={mixtoMonedaIngresada === 'USD' ? r2(clamp(Number(mixtoMontoIngresadoUsd || 0), 0, montoBase)) : mixtoMontoIngresadoUsdEquiv}
-                            montoBs={mixtoMonedaIngresada === 'BS' ? mixtoMontoIngresadoBs : mixtoFaltanteBs}
-                            onChangeTasa={(tasa) => setMixtoTasaBcv(tasa)}
-                            onChangeMontoBs={(monto) => {
-                              if (mixtoMonedaIngresada === 'BS') setMixtoMontoIngresadoBs(monto)
-                            }}
-                          />
-                        </div>
-
-                        <Field label="Referencia del pago recibido">
-                          <input
-                            value={mixtoReferenciaIngresada}
-                            onChange={(e) => setMixtoReferenciaIngresada(e.target.value)}
-                            className={inputCls}
-                            placeholder="Referencia o comprobante"
-                          />
-                        </Field>
-
-                        <Field label="Notas del pago recibido">
-                          <input
-                            value={mixtoNotasIngresada}
-                            onChange={(e) => setMixtoNotasIngresada(e.target.value)}
-                            className={inputCls}
-                            placeholder="Notas opcionales..."
-                          />
-                        </Field>
                       </div>
 
-                      <div className="rounded-xl border border-violet-400/15 bg-violet-500/5 p-3">
-                        <p className="text-sm font-semibold text-violet-300">Diferencia automática</p>
+                      <PagoMixtoCard
+                        numero={1}
+                        pago={pagoMixto1}
+                        metodosPago={metodosPago}
+                        fecha={fechaInicio}
+                        onChange={(patch) => setPagoMixto1((prev) => ({ ...prev, ...patch }))}
+                      />
 
-                        <div className="mt-4 grid gap-4 md:grid-cols-2">
-                          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                            <p className="text-xs text-white/45">Faltan</p>
-                            <p className="mt-1 text-lg font-semibold text-white">
-                              {formatMoney(mixtoFaltanteUsd)}
-                            </p>
-                            <p className="mt-2 text-sm text-white/55">
-                              {mixtoMonedaIngresada === 'USD'
-                                ? `Equivale a ${formatBs(mixtoFaltanteBs)}`
-                                : 'Se mantiene en USD'}
-                            </p>
-                          </div>
+                      <div className="flex items-center justify-center gap-2 py-1 text-white/30">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                          <path d="M7 2v10M3 8l4 4 4-4"/>
+                        </svg>
+                        <span className="text-xs">+</span>
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                          <path d="M7 2v10M3 8l4 4 4-4"/>
+                        </svg>
+                      </div>
 
-                          <Field
-                            label={
-                              mixtoMonedaIngresada === 'USD'
-                                ? 'Método para cobrar la diferencia en Bs'
-                                : 'Método para cobrar la diferencia en USD'
-                            }
-                          >
-                            <select
-                              value={mixtoMetodoDiferenciaId}
-                              onChange={(e) => setMixtoMetodoDiferenciaId(e.target.value)}
-                              className={inputCls}
-                            >
-                              <option value="" className="bg-[#11131a]">Seleccionar</option>
-                              {metodosMixtoDiferencia.map((m) => (
-                                <option key={m.id} value={m.id} className="bg-[#11131a]">
-                                  {m.nombre}
-                                  {m.moneda ? ` · ${m.moneda}` : ''}
-                                  {m.tipo ? ` · ${m.tipo}` : ''}
-                                </option>
-                              ))}
-                            </select>
-                          </Field>
+                      <PagoMixtoCard
+                        numero={2}
+                        pago={pagoMixto2}
+                        metodosPago={metodosPago}
+                        fecha={fechaInicio}
+                        onChange={(patch) => setPagoMixto2((prev) => ({ ...prev, ...patch }))}
+                      />
 
-                          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 md:col-span-2">
-                            <p className="text-xs text-white/45">Monto automático de la diferencia</p>
-                            <p className="mt-1 text-lg font-semibold text-white">
-                              {mixtoMonedaIngresada === 'USD'
-                                ? formatBs(mixtoFaltanteBs)
-                                : formatMoney(mixtoFaltanteUsd)}
-                            </p>
-                          </div>
+                      <div className={`rounded-2xl border p-4 ${resumenPagosMixto.cuadra ? 'border-emerald-400/20 bg-emerald-400/5' : 'border-amber-400/20 bg-amber-400/5'}`}>
+                        <p className={`text-sm font-medium ${resumenPagosMixto.cuadra ? 'text-emerald-300' : 'text-amber-300'}`}>
+                          {resumenPagosMixto.cuadra
+                            ? '✓ La suma de pagos cuadra correctamente.'
+                            : resumenPagosMixto.faltanteUsd > 0
+                              ? `Faltan ${formatMoney(resumenPagosMixto.faltanteUsd)} para completar el total.`
+                              : `Excedente de ${formatMoney(resumenPagosMixto.excedenteUsd)} sobre el total.`}
+                        </p>
 
-                          <Field label="Referencia de la diferencia">
-                            <input
-                              value={mixtoReferenciaDiferencia}
-                              onChange={(e) => setMixtoReferenciaDiferencia(e.target.value)}
-                              className={inputCls}
-                              placeholder="Referencia o comprobante"
-                            />
-                          </Field>
-
-                          <Field label="Notas de la diferencia">
-                            <input
-                              value={mixtoNotasDiferencia}
-                              onChange={(e) => setMixtoNotasDiferencia(e.target.value)}
-                              className={inputCls}
-                              placeholder="Notas opcionales..."
-                            />
-                          </Field>
+                        <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-white/50">
+                          <div>Objetivo: <span className="text-white/80">{formatMoney(montoBase)}</span></div>
+                          <div>Registrado: <span className="text-white/80">{formatMoney(resumenPagosMixto.totalUsd)}</span></div>
+                          {resumenPagosMixto.totalBs > 0 && (
+                            <div>Bs total: <span className="text-white/80">{formatBs(resumenPagosMixto.totalBs)}</span></div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -2816,45 +2806,16 @@ export default function NuevoClientePage() {
                       <div>
                         <p className="text-xs text-white/45">Total USD</p>
                         <p className="text-white">
-                          {tipoPago === 'unico' ? formatMoney(totalPagoUnicoUsd) : formatMoney(resumenPagos.totalUsd)}
+                          {tipoPago === 'unico' ? formatMoney(totalPagoUnicoUsd) : formatMoney(resumenPagosMixto.totalUsd)}
                         </p>
                       </div>
                       <div>
                         <p className="text-xs text-white/45">Total Bs</p>
                         <p className="text-white">
-                          {tipoPago === 'unico' ? formatBs(totalPagoUnicoBs) : formatBs(resumenPagos.totalBs)}
+                          {tipoPago === 'unico' ? formatBs(totalPagoUnicoBs) : formatBs(resumenPagosMixto.totalBs)}
                         </p>
                       </div>
                     </div>
-
-                    {tipoPago === 'mixto' && (
-                      <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                        {!resumenPagos.cuadra ? (
-                          <div className="space-y-1">
-                            <div className="flex justify-between text-sm">
-                              <span className="text-white/55">Faltante USD:</span>
-                              <span className="font-semibold text-amber-300">
-                                {formatMoney(resumenPagos.faltanteUsd)}
-                              </span>
-                            </div>
-
-                            {resumenPagos.excedenteUsd > 0 && (
-                              <div className="flex justify-between text-sm">
-                                <span className="text-white/55">Excedente USD:</span>
-                                <span className="font-semibold text-rose-300">
-                                  {formatMoney(resumenPagos.excedenteUsd)}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="flex justify-between text-sm">
-                            <span className="text-white/55">Estado:</span>
-                            <span className="font-semibold text-emerald-300">Pago completo</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </Card>
                 </Card>
               </div>
