@@ -4,19 +4,6 @@ export const dynamic = 'force-dynamic'
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import Link from 'next/link'
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  CartesianGrid,
-  XAxis,
-  YAxis,
-  Tooltip,
-  PieChart,
-  Pie,
-  Cell,
-  Legend,
-} from 'recharts'
 import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
@@ -25,6 +12,7 @@ import StatCard from '@/components/ui/StatCard'
 type Empleado = {
   id: string
   nombre: string
+  cedula: string | null
   telefono: string | null
   email: string | null
   rol: string | null
@@ -53,6 +41,7 @@ type RolUI = 'admin' | 'recepcionista' | 'fisioterapeuta'
 
 type FormState = {
   nombre: string
+  cedula: string
   email: string
   telefono: string
   rol: RolUI
@@ -61,6 +50,7 @@ type FormState = {
 
 const INITIAL_FORM: FormState = {
   nombre: '',
+  cedula: '',
   email: '',
   telefono: '',
   rol: 'fisioterapeuta',
@@ -73,8 +63,6 @@ const inputClassName = `
   placeholder:text-white/35
   focus:border-white/20 focus:bg-white/[0.05]
 `
-
-const PIE_COLORS = ['#38bdf8', '#34d399', '#f59e0b', '#f87171', '#a78bfa', '#94a3b8']
 
 function Field({
   label,
@@ -103,14 +91,25 @@ function formatDate(value: string | null | undefined) {
   }
 }
 
+function limpiarCedula(value: string) {
+  return value.trim().toUpperCase()
+}
+
+function mostrarRol(rol: string | null | undefined) {
+  const value = (rol || '').toLowerCase()
+  if (value === 'terapeuta' || value === 'fisioterapeuta') return 'Fisioterapeuta'
+  if (value === 'recepcionista' || value === 'recepcion') return 'Recepcionista'
+  if (value === 'admin') return 'Admin'
+  if (value === 'entrenador') return 'Entrenador'
+  return rol || 'Sin rol'
+}
+
 function estadoBadge(estado: string) {
   switch ((estado || '').toLowerCase()) {
     case 'activo':
       return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
     case 'inactivo':
       return 'border-white/10 bg-white/[0.05] text-white/70'
-    case 'vacaciones':
-      return 'border-sky-400/20 bg-sky-400/10 text-sky-300'
     case 'suspendido':
       return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
     default:
@@ -174,6 +173,7 @@ export default function PersonalPage() {
           .select(`
             id,
             nombre,
+            cedula,
             telefono,
             email,
             rol,
@@ -255,6 +255,7 @@ export default function PersonalPage() {
 
     try {
       const nombre = form.nombre.trim()
+      const cedula = limpiarCedula(form.cedula) || null
       const email = form.email.trim().toLowerCase() || null
       const telefono = form.telefono.trim() || null
 
@@ -293,6 +294,7 @@ export default function PersonalPage() {
 
       const payload = {
         nombre,
+        cedula,
         email,
         telefono,
         rol: form.rol,
@@ -386,16 +388,23 @@ export default function PersonalPage() {
     const q = search.trim().toLowerCase()
 
     return rows.filter(({ empleado }) => {
+      const rolNormalizado =
+        empleado.rol?.toLowerCase() === 'terapeuta' ? 'fisioterapeuta' : empleado.rol?.toLowerCase()
+
       const matchSearch =
         !q ||
         empleado.nombre.toLowerCase().includes(q) ||
+        empleado.cedula?.toLowerCase().includes(q) ||
         empleado.email?.toLowerCase().includes(q) ||
         empleado.telefono?.toLowerCase().includes(q) ||
         empleado.rol?.toLowerCase().includes(q) ||
+        rolNormalizado?.includes(q) ||
         empleado.estado?.toLowerCase().includes(q)
 
       const matchRol =
-        rolFiltro === 'todos' || empleado.rol?.toLowerCase() === rolFiltro.toLowerCase()
+        rolFiltro === 'todos' ||
+        empleado.rol?.toLowerCase() === rolFiltro.toLowerCase() ||
+        (rolFiltro === 'fisioterapeuta' && empleado.rol?.toLowerCase() === 'terapeuta')
 
       const matchEstado =
         estadoFiltro === 'todos' || empleado.estado?.toLowerCase() === estadoFiltro.toLowerCase()
@@ -407,7 +416,9 @@ export default function PersonalPage() {
   const stats = useMemo(() => {
     const total = empleados.length
     const activos = empleados.filter((e) => e.estado?.toLowerCase() === 'activo').length
-    const terapeutas = empleados.filter((e) => e.rol?.toLowerCase() === 'terapeuta').length
+    const terapeutas = empleados.filter((e) =>
+      ['terapeuta', 'fisioterapeuta'].includes(e.rol?.toLowerCase() || '')
+    ).length
     const entrenadores = empleados.filter((e) => e.rol?.toLowerCase() === 'entrenador').length
     const citasHoy = citas.filter((c) => c.fecha === hoy).length
 
@@ -419,31 +430,6 @@ export default function PersonalPage() {
       citasHoy,
     }
   }, [empleados, citas, hoy])
-
-  const topCitasChart = useMemo(() => {
-    return [...rows]
-      .sort((a, b) => b.citasTotal - a.citasTotal)
-      .slice(0, 6)
-      .map((row) => ({
-        nombre: row.empleado.nombre,
-        total: row.citasTotal,
-        hoy: row.citasHoy,
-      }))
-  }, [rows])
-
-  const estadosEquipoChart = useMemo(() => {
-    const programadas = rows.reduce((acc, row) => acc + row.programadas, 0)
-    const confirmadas = rows.reduce((acc, row) => acc + row.confirmadas, 0)
-    const completadas = rows.reduce((acc, row) => acc + row.completadas, 0)
-    const canceladas = rows.reduce((acc, row) => acc + row.canceladas, 0)
-
-    return [
-      { name: 'Programadas', value: programadas },
-      { name: 'Confirmadas', value: confirmadas },
-      { name: 'Completadas', value: completadas },
-      { name: 'Canceladas', value: canceladas },
-    ]
-  }, [rows])
 
   return (
     <>
@@ -490,90 +476,14 @@ export default function PersonalPage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           <StatCard title="Total personal" value={stats.total} color="text-white" />
           <StatCard title="Activos" value={stats.activos} color="text-emerald-400" />
-          <StatCard title="Terapeutas" value={stats.terapeutas} color="text-violet-400" />
+          <StatCard title="Fisioterapeutas" value={stats.terapeutas} color="text-violet-400" />
           <StatCard title="Entrenadores" value={stats.entrenadores} color="text-amber-300" />
           <StatCard title="Citas hoy" value={stats.citasHoy} color="text-sky-400" />
         </div>
 
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-          <Section
-            title="Citas por personal"
-            description="Top del equipo por carga total y actividad de hoy."
-          >
-            <div className="h-80">
-              {topCitasChart.length === 0 ? (
-                <Card className="flex h-full items-center justify-center p-4">
-                  <p className="text-sm text-white/55">No hay datos para mostrar.</p>
-                </Card>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={topCitasChart}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                    <XAxis dataKey="nombre" stroke="rgba(255,255,255,0.45)" />
-                    <YAxis allowDecimals={false} stroke="rgba(255,255,255,0.45)" />
-                    <Tooltip
-                      contentStyle={{
-                        background: '#11131a',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 16,
-                        color: '#fff',
-                      }}
-                    />
-                    <Legend />
-                    <Bar dataKey="total" fill="#a78bfa" radius={[8, 8, 0, 0]} />
-                    <Bar dataKey="hoy" fill="#38bdf8" radius={[8, 8, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </Section>
-
-          <Section
-            title="Estados de citas del equipo"
-            description="Distribución general del estado de las citas."
-          >
-            <div className="h-80">
-              {estadosEquipoChart.every((x) => x.value === 0) ? (
-                <Card className="flex h-full items-center justify-center p-4">
-                  <p className="text-sm text-white/55">No hay datos para mostrar.</p>
-                </Card>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={estadosEquipoChart}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={60}
-                      outerRadius={100}
-                      paddingAngle={3}
-                    >
-                      {estadosEquipoChart.map((entry, index) => (
-                        <Cell
-                          key={`${entry.name}-${index}`}
-                          fill={PIE_COLORS[index % PIE_COLORS.length]}
-                        />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{
-                        background: '#11131a',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 16,
-                        color: '#fff',
-                      }}
-                    />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </Section>
-        </div>
-
         <Section
           title="Filtros"
-          description="Busca por nombre, correo, teléfono, rol o estado."
+          description="Busca por nombre, cédula, correo, teléfono, rol o estado."
         >
           <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
             <div className="md:col-span-2">
@@ -581,7 +491,7 @@ export default function PersonalPage() {
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Nombre, correo, teléfono, rol o estado..."
+                  placeholder="Nombre, cédula, correo, teléfono, rol o estado..."
                   className={inputClassName}
                 />
               </Field>
@@ -597,9 +507,9 @@ export default function PersonalPage() {
                   <option value="todos" className="bg-[#11131a] text-white">
                     Todos
                   </option>
-                  <option value="fisioterapeuta">
-  Fisioterapeuta
-</option>
+                  <option value="fisioterapeuta" className="bg-[#11131a] text-white">
+                    Fisioterapeuta
+                  </option>
                   <option value="admin" className="bg-[#11131a] text-white">
                     Admin
                   </option>
@@ -626,9 +536,6 @@ export default function PersonalPage() {
                   <option value="inactivo" className="bg-[#11131a] text-white">
                     Inactivos
                   </option>
-                  <option value="vacaciones" className="bg-[#11131a] text-white">
-                    Vacaciones
-                  </option>
                   <option value="suspendido" className="bg-[#11131a] text-white">
                     Suspendidos
                   </option>
@@ -649,11 +556,12 @@ export default function PersonalPage() {
               <thead className="border-b border-white/10 bg-white/[0.03]">
                 <tr className="text-left text-white/55">
                   <th className="px-4 py-3 font-medium">Personal</th>
+                  <th className="px-4 py-3 font-medium">Cédula</th>
                   <th className="px-4 py-3 font-medium">Contacto</th>
                   <th className="px-4 py-3 font-medium">Rol</th>
                   <th className="px-4 py-3 font-medium">Estado</th>
                   <th className="px-4 py-3 font-medium">Carga hoy</th>
-                  <th className="px-4 py-3 font-medium">Citas</th>
+                  
                   <th className="px-4 py-3 font-medium">Registro</th>
                   <th className="px-4 py-3 font-medium">Acciones</th>
                 </tr>
@@ -662,13 +570,13 @@ export default function PersonalPage() {
               <tbody className="divide-y divide-white/10 text-sm">
                 {loading ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center text-white/55">
+                    <td colSpan={9} className="px-4 py-10 text-center text-white/55">
                       Cargando personal...
                     </td>
                   </tr>
                 ) : personalFiltrado.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center text-white/55">
+                    <td colSpan={9} className="px-4 py-10 text-center text-white/55">
                       No hay personal registrado.
                     </td>
                   </tr>
@@ -689,6 +597,10 @@ export default function PersonalPage() {
                         </td>
 
                         <td className="px-4 py-4">
+                          <div className="text-white/75">{empleado.cedula || 'Sin cédula'}</div>
+                        </td>
+
+                        <td className="px-4 py-4">
                           <div className="text-white/75">{empleado.email || 'Sin correo'}</div>
                           <div className="mt-1 text-xs text-white/45">
                             {empleado.telefono || 'Sin teléfono'}
@@ -696,8 +608,8 @@ export default function PersonalPage() {
                         </td>
 
                         <td className="px-4 py-4">
-                          <div className="font-medium capitalize text-white">
-                            {empleado.rol || 'Sin rol'}
+                          <div className="font-medium text-white">
+                            {mostrarRol(empleado.rol)}
                           </div>
                         </td>
 
@@ -726,9 +638,6 @@ export default function PersonalPage() {
                               <option value="inactivo" className="bg-[#11131a] text-white">
                                 Inactivo
                               </option>
-                              <option value="vacaciones" className="bg-[#11131a] text-white">
-                                Vacaciones
-                              </option>
                               <option value="suspendido" className="bg-[#11131a] text-white">
                                 Suspendido
                               </option>
@@ -746,15 +655,7 @@ export default function PersonalPage() {
                           </span>
                         </td>
 
-                        <td className="px-4 py-4">
-                          <div className="font-medium text-white">Total: {citasTotal}</div>
-                          <div className="mt-1 text-xs text-white/45">
-                            Prog: {programadas} · Conf: {confirmadas}
-                          </div>
-                          <div className="mt-1 text-xs text-white/45">
-                            Comp: {completadas} · Canc: {canceladas}
-                          </div>
-                        </td>
+                        
 
                         <td className="px-4 py-4">
                           <div className="text-white/75">{formatDate(empleado.created_at)}</div>
@@ -815,7 +716,7 @@ export default function PersonalPage() {
                   <p className="text-sm text-white/45">Personas</p>
                   <h2 className="mt-1 text-xl font-semibold text-white">Nuevo personal</h2>
                   <p className="mt-1 text-sm text-white/55">
-                    Crea un terapeuta, entrenador o miembro del equipo.
+                    Crea un fisioterapeuta o miembro del equipo.
                   </p>
                 </div>
 
@@ -850,7 +751,7 @@ export default function PersonalPage() {
 
                   <Section
                     title="Formulario de personal"
-                    description="Completa nombre, contacto, rol, estado y comisiones."
+                    description="Completa nombre, cédula, contacto, rol y estado."
                   >
                     <div className="grid gap-4 md:grid-cols-2">
                       <Field label="Nombre">
@@ -859,6 +760,16 @@ export default function PersonalPage() {
                           value={form.nombre}
                           onChange={(e) => setForm({ ...form, nombre: e.target.value })}
                           placeholder="Nombre completo"
+                          className={inputClassName}
+                        />
+                      </Field>
+
+                      <Field label="Cédula" helper="Opcional. Debe ser única si la colocas.">
+                        <input
+                          type="text"
+                          value={form.cedula}
+                          onChange={(e) => setForm({ ...form, cedula: e.target.value })}
+                          placeholder="Ej: V-12345678"
                           className={inputClassName}
                         />
                       </Field>
@@ -892,9 +803,9 @@ export default function PersonalPage() {
                           onChange={(e) => setForm({ ...form, rol: e.target.value as RolUI })}
                           className={inputClassName}
                         >
-                          <option value="fisioterapeuta">
-  Fisioterapeuta
-</option>
+                          <option value="fisioterapeuta" className="bg-[#11131a] text-white">
+                            Fisioterapeuta
+                          </option>
                           <option value="recepcionista" className="bg-[#11131a] text-white">
                             Recepcionista
                           </option>
@@ -916,8 +827,8 @@ export default function PersonalPage() {
                           <option value="inactivo" className="bg-[#11131a] text-white">
                             Inactivo
                           </option>
-                          <option value="vacaciones" className="bg-[#11131a] text-white">
-                            Vacaciones
+                          <option value="suspendido" className="bg-[#11131a] text-white">
+                            Suspendido
                           </option>
                         </select>
                       </Field>

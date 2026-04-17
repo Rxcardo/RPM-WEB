@@ -12,6 +12,7 @@ type RolUI = 'admin' | 'recepcionista' | 'fisioterapeuta'
 
 type FormState = {
   nombre: string
+  cedula: string
   email: string
   telefono: string
   rol: RolUI
@@ -22,6 +23,7 @@ type FormState = {
 
 const INITIAL_FORM: FormState = {
   nombre: '',
+  cedula: '',
   email: '',
   telefono: '',
   rol: 'fisioterapeuta',
@@ -64,6 +66,10 @@ function parsePorcentaje(value: string): number {
   return parsed
 }
 
+function limpiarCedula(value: string) {
+  return value.trim().toUpperCase()
+}
+
 function mapearRolCatalogo(rolUI: RolUI): 'admin' | 'recepcionista' | 'terapeuta' {
   if (rolUI === 'fisioterapeuta') return 'terapeuta'
   return rolUI
@@ -92,6 +98,7 @@ export default function NuevoPersonalPage() {
 
     try {
       const nombre = form.nombre.trim()
+      const cedula = limpiarCedula(form.cedula) || null
       const email = form.email.trim().toLowerCase() || null
       const telefono = form.telefono.trim() || null
       const comisionPlan = parsePorcentaje(form.comision_plan_porcentaje)
@@ -109,10 +116,11 @@ export default function NuevoPersonalPage() {
 
       const payload = {
         nombre,
+        cedula,
         email,
         telefono,
-        rol: form.rol, // visual / legado
-        rol_id: rolData.id, // permisos reales
+        rol: form.rol,
+        rol_id: rolData.id,
         estado: form.estado,
         especialidad: form.rol === 'fisioterapeuta' ? '' : null,
         comision_plan_porcentaje: comisionPlan,
@@ -184,6 +192,16 @@ export default function NuevoPersonalPage() {
             />
           </Field>
 
+          <Field label="Cédula" helper="Opcional. Debe ser única si la colocas.">
+            <input
+              type="text"
+              value={form.cedula}
+              onChange={(e) => setForm({ ...form, cedula: e.target.value })}
+              placeholder="Ej: V-12345678"
+              className={inputClassName}
+            />
+          </Field>
+
           <Field label="Email" helper="Opcional. No se enviará invitación.">
             <input
               type="email"
@@ -213,9 +231,9 @@ export default function NuevoPersonalPage() {
               onChange={(e) => setForm({ ...form, rol: e.target.value as RolUI })}
               className={inputClassName}
             >
-              <option value="fisioterapeuta">
-  Fisioterapeuta
-</option>
+              <option value="fisioterapeuta" className="bg-[#11131a] text-white">
+                Fisioterapeuta
+              </option>
               <option value="recepcionista" className="bg-[#11131a] text-white">
                 Recepcionista
               </option>
@@ -237,15 +255,41 @@ export default function NuevoPersonalPage() {
               <option value="inactivo" className="bg-[#11131a] text-white">
                 Inactivo
               </option>
-              <option value="vacaciones" className="bg-[#11131a] text-white">
-                Vacaciones
+              <option value="suspendido" className="bg-[#11131a] text-white">
+                Suspendido
               </option>
             </select>
           </Field>
 
-          
+          <Field label="Comisión por plan (%)">
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value={form.comision_plan_porcentaje}
+              onChange={(e) =>
+                setForm({ ...form, comision_plan_porcentaje: e.target.value })
+              }
+              placeholder="0"
+              className={inputClassName}
+            />
+          </Field>
 
-          
+          <Field label="Comisión por cita (%)">
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value={form.comision_cita_porcentaje}
+              onChange={(e) =>
+                setForm({ ...form, comision_cita_porcentaje: e.target.value })
+              }
+              placeholder="0"
+              className={inputClassName}
+            />
+          </Field>
         </div>
 
         <div className="mt-6 flex flex-wrap gap-3">
