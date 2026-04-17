@@ -49,6 +49,14 @@ const INITIAL_FORM: FormState = {
   color: '#0f172a',
 }
 
+const COLOR_NAMES_STORAGE_KEY = 'rpm_servicios_color_names'
+
+function normalizeColorHex(color: string | null | undefined) {
+  const value = (color || '').trim()
+  if (!value) return ''
+  return value.toLowerCase()
+}
+
 const inputClassName = `
   w-full rounded-2xl border border-white/10 bg-white/[0.03]
   px-4 py-3 text-sm text-white outline-none transition
@@ -105,10 +113,51 @@ export default function ServiciosPage() {
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
+  const [notice, setNotice] = useState('')
+  const [colorNames, setColorNames] = useState<Record<string, string>>({})
+  const [colorNameDraft, setColorNameDraft] = useState('')
+  const [expandedColorKey, setExpandedColorKey] = useState('')
+  const [colorNameEdits, setColorNameEdits] = useState<Record<string, string>>({})
 
   useEffect(() => {
     void cargarServicios()
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    try {
+      const raw = window.localStorage.getItem(COLOR_NAMES_STORAGE_KEY)
+      if (!raw) return
+
+      const parsed = JSON.parse(raw) as Record<string, string>
+      if (parsed && typeof parsed === 'object') {
+        setColorNames(parsed)
+      }
+    } catch (err) {
+      console.error('No se pudieron cargar los nombres de colores', err)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!notice) return
+
+    const timeout = window.setTimeout(() => setNotice(''), 2200)
+    return () => window.clearTimeout(timeout)
+  }, [notice])
+
+  useEffect(() => {
+    const key = normalizeColorHex(form.color)
+    setColorNameDraft(key ? colorNames[key] || '' : '')
+  }, [form.color, colorNames])
+
+  useEffect(() => {
+    const nextEdits: Record<string, string> = {}
+    for (const [key, value] of Object.entries(colorNames)) {
+      nextEdits[key] = value || ''
+    }
+    setColorNameEdits((prev) => ({ ...nextEdits, ...prev }))
+  }, [colorNames])
 
   async function cargarServicios() {
     try {
@@ -215,6 +264,105 @@ export default function ServiciosPage() {
     })
     setShowForm(true)
     window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  function aplicarColor(color: string | null | undefined) {
+    const normalized = (color || '').trim()
+    if (!normalized) return
+
+    setForm((prev) => ({
+      ...prev,
+      color: normalized,
+    }))
+  }
+
+  function toggleExpandedColor(color: string | null | undefined) {
+    const key = normalizeColorHex(color)
+    if (!key) return
+
+    aplicarColor(color)
+
+    setExpandedColorKey((prev) => {
+      if (prev === key) return ''
+
+      setColorNameEdits((drafts) => ({
+        ...drafts,
+        [key]: drafts[key] ?? colorNames[key] ?? '',
+      }))
+
+      return key
+    })
+  }
+
+  function setColorNameEdit(color: string | null | undefined, value: string) {
+    const key = normalizeColorHex(color)
+    if (!key) return
+
+    setColorNameEdits((prev) => ({
+      ...prev,
+      [key]: value,
+    }))
+  }
+
+  function guardarNombreColorExpandido(color: string | null | undefined) {
+    const key = normalizeColorHex(color)
+    if (!key) return
+
+    guardarNombreColor(color, colorNameEdits[key] || '')
+    setExpandedColorKey('')
+  }
+
+  function persistColorNames(next: Record<string, string>) {
+    setColorNames(next)
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(COLOR_NAMES_STORAGE_KEY, JSON.stringify(next))
+    }
+  }
+
+  function guardarNombreColor(color: string | null | undefined, name: string) {
+    const key = normalizeColorHex(color)
+    if (!key) return
+
+    const cleaned = name.trim()
+
+    if (!cleaned) {
+      const next = { ...colorNames }
+      delete next[key]
+      persistColorNames(next)
+      setNotice(`Se quitó el nombre del color ${key}`)
+      return
+    }
+
+    persistColorNames({
+      ...colorNames,
+      [key]: cleaned,
+    })
+    setNotice(`Nombre guardado para ${key}`)
+  }
+
+  async function copiarColor(color: string | null | undefined) {
+    const normalized = (color || '').trim()
+    if (!normalized) return
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(normalized)
+        setNotice(`Color copiado: ${normalized}`)
+        return
+      }
+
+      const tempInput = document.createElement('input')
+      tempInput.value = normalized
+      document.body.appendChild(tempInput)
+      tempInput.select()
+      document.execCommand('copy')
+      document.body.removeChild(tempInput)
+      setNotice(`Color copiado: ${normalized}`)
+    } catch (err) {
+      console.error(err)
+      setError('No se pudo copiar el color')
+    }
   }
 
   async function onSubmit(e: FormEvent) {
@@ -339,6 +487,26 @@ export default function ServiciosPage() {
     })
   }, [servicios, search])
 
+  const coloresExistentes = useMemo(() => {
+    const uniqueColors = Array.from(
+      new Set(
+        servicios
+          .map((item) => (item.color || '').trim())
+          .filter(Boolean)
+      )
+    )
+
+    return uniqueColors.map((color) => {
+      const key = normalizeColorHex(color)
+
+      return {
+        color,
+        key,
+        name: colorNames[key] || '',
+      }
+    })
+  }, [servicios, colorNames])
+
   const totalActivos = servicios.filter((s) => s.estado === 'activo').length
   const totalInactivos = servicios.filter((s) => s.estado !== 'activo').length
 
@@ -438,6 +606,20 @@ export default function ServiciosPage() {
         </div>
       )}
 
+      {notice && (
+        <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4">
+          <div className="flex items-start gap-3">
+            <svg className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-emerald-300">Listo</p>
+              <p className="mt-1 text-sm text-emerald-200/90">{notice}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showForm && (
         <Section
           title={editingId ? 'Editar servicio' : 'Crear servicio'}
@@ -515,15 +697,133 @@ export default function ServiciosPage() {
                   />
                 </Field>
 
-                <Field label="Color">
-                  <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3">
-                    <input
-                      type="color"
-                      value={form.color}
-                      onChange={(e) => onChange('color', e.target.value)}
-                      className="h-8 w-12 cursor-pointer rounded-lg border border-white/10 bg-transparent"
-                    />
-                    <span className="text-xs text-white/55">{form.color}</span>
+                <Field label="Color" helper="Puedes ponerle nombre al color, copiarlo y reutilizarlo en otro servicio.">
+                  <div className="space-y-3">
+                    <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-3">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                        <input
+                          type="color"
+                          value={form.color}
+                          onChange={(e) => onChange('color', e.target.value)}
+                          className="h-10 w-14 cursor-pointer rounded-lg border border-white/10 bg-transparent"
+                        />
+
+                        <input
+                          value={form.color}
+                          onChange={(e) => onChange('color', e.target.value)}
+                          className={`${inputClassName} flex-1 py-2`}
+                          placeholder="#0f172a"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => void copiarColor(form.color)}
+                          className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.08]"
+                        >
+                          Copiar color
+                        </button>
+                      </div>
+
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                        <input
+                          value={colorNameDraft}
+                          onChange={(e) => setColorNameDraft(e.target.value)}
+                          className={`${inputClassName} flex-1 py-2`}
+                          placeholder="Ej: Azul terapia, Verde evaluación"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => guardarNombreColor(form.color, colorNameDraft)}
+                          className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.08]"
+                        >
+                          Guardar nombre
+                        </button>
+                      </div>
+                    </div>
+
+                    {coloresExistentes.length > 0 && (
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                        <div className="mb-3">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-white/40">
+                            Colores ya usados
+                          </p>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                          {coloresExistentes.map((item) => {
+                            const isActive = form.color.toLowerCase() === item.color.toLowerCase()
+                            const isExpanded = expandedColorKey === item.key
+                            const draftName = colorNameEdits[item.key] ?? item.name ?? ''
+
+                            return (
+                              <div
+                                key={item.key || item.color}
+                                className={`overflow-hidden rounded-xl border transition-all ${
+                                  isActive
+                                    ? 'border-violet-400/30 bg-violet-500/[0.08]'
+                                    : 'border-white/10 bg-white/[0.04]'
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => toggleExpandedColor(item.color)}
+                                  className="flex w-full items-center gap-3 px-3 py-3 text-left transition hover:bg-white/[0.03]"
+                                  title={`Seleccionar y editar ${item.color}`}
+                                >
+                                  <span
+                                    className="h-9 w-9 shrink-0 rounded-xl border border-white/10"
+                                    style={{ backgroundColor: item.color }}
+                                  />
+
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-sm font-medium text-white/85">
+                                      {item.name || 'Sin nombre'}
+                                    </p>
+                                    <p className="text-[11px] text-white/45">{item.color}</p>
+                                  </div>
+
+                                  <div className="shrink-0 text-lg leading-none text-white/35">
+                                    {isExpanded ? '−' : '+'}
+                                  </div>
+                                </button>
+
+                                {isExpanded && (
+                                  <div className="border-t border-white/10 px-3 py-3">
+                                    <div className="flex flex-col gap-2">
+                                      <input
+                                        value={draftName}
+                                        onChange={(e) => setColorNameEdit(item.color, e.target.value)}
+                                        className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/80 outline-none focus:border-white/20"
+                                        placeholder="Nombre del color"
+                                      />
+
+                                      <div className="flex flex-wrap gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => guardarNombreColorExpandido(item.color)}
+                                          className="rounded-lg border border-white/10 px-3 py-2 text-[11px] font-medium text-white/70 transition hover:bg-white/[0.08]"
+                                        >
+                                          Guardar
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => void copiarColor(item.color)}
+                                          className="rounded-lg border border-white/10 px-3 py-2 text-[11px] font-medium text-white/70 transition hover:bg-white/[0.08]"
+                                        >
+                                          Copiar
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </Field>
               </div>
@@ -781,6 +1081,23 @@ export default function ServiciosPage() {
                             <p className="mt-0.5 truncate text-xs text-white/45">
                               {servicio.descripcion || 'Sin descripción'}
                             </p>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              {colorNames[normalizeColorHex(servicio.color || '#0f172a')] ? (
+                                <span className="inline-flex rounded-lg border border-sky-400/20 bg-sky-400/10 px-2 py-1 text-[11px] font-medium text-sky-200">
+                                  {colorNames[normalizeColorHex(servicio.color || '#0f172a')]}
+                                </span>
+                              ) : null}
+                              <span className="inline-flex rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] font-medium text-white/60">
+                                {servicio.color || '#0f172a'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => void copiarColor(servicio.color || '#0f172a')}
+                                className="text-[11px] font-medium text-white/50 transition hover:text-white/75"
+                              >
+                                Copiar color
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -838,6 +1155,8 @@ export default function ServiciosPage() {
                           >
                             Editar
                           </button>
+
+                          
 
                           <button
                             type="button"
