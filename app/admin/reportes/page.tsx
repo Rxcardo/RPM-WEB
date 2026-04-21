@@ -1034,10 +1034,16 @@ async function exportReportePDF(args: {
   filename: string
   logoSrc?: string
 }) {
-  const { title, subtitle, rows, filename, logoSrc = '/logo-rpm.png' } = args
-  if (!rows.length) { alert('No hay datos para exportar.'); return }
+  const { title, subtitle, rows, filename, logoSrc = '/logo-imprimir.png' } = args
+  if (!rows.length) {
+    alert('No hay datos para exportar.')
+    return
+  }
 
-  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+  const marginX = 15
+  let cursorY = 62
+
   await drawCorporateHeader({
     doc,
     logoSrc,
@@ -1046,18 +1052,63 @@ async function exportReportePDF(args: {
     dateText: `Fecha: ${shortDate(todayISO())}`,
   })
 
-  const headers = Object.keys(rows[0])
+  const headers = Object.keys(rows[0]).filter((h) => h.toLowerCase() !== 'id')
   const body = rows.map((row) => headers.map((header) => normalizeCell(row[header])))
 
+  doc.setFillColor(246, 246, 246)
+  doc.roundedRect(marginX, cursorY, 180, 16, 2, 2, 'F')
+  doc.setDrawColor(205)
+  doc.roundedRect(marginX, cursorY, 180, 16, 2, 2, 'S')
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8.5)
+  doc.setTextColor(60)
+  doc.text('REPORTE GENERAL', 105, cursorY + 6.5, { align: 'center' })
+
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8)
+  doc.setTextColor(95)
+  doc.text(`Total de registros: ${rows.length}`, 105, cursorY + 12, { align: 'center' })
+
+  cursorY += 24
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9)
+  doc.setTextColor(25)
+  doc.text('Detalles del reporte', marginX, cursorY)
+
   autoTable(doc, {
-    startY: 62,
+    startY: cursorY + 4,
+    margin: { left: marginX, right: marginX, bottom: 40 },
     head: [headers],
     body,
     theme: 'grid',
-    styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.2, lineColor: [220, 220, 220], lineWidth: 0.2, overflow: 'linebreak' },
-    headStyles: { fillColor: [65, 65, 65], textColor: [255, 255, 255], fontStyle: 'bold' },
-    alternateRowStyles: { fillColor: [249, 250, 251] },
-    margin: { top: 62, right: 10, bottom: 40, left: 10 },
+    styles: {
+      font: 'helvetica',
+      fontSize: 8,
+      cellPadding: 2.4,
+      lineColor: [210, 210, 210],
+      lineWidth: 0.2,
+      overflow: 'linebreak',
+      textColor: [20, 20, 20],
+      valign: 'middle',
+    },
+    headStyles: {
+      fillColor: [65, 65, 65],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+    },
+    alternateRowStyles: {
+      fillColor: [248, 248, 248],
+    },
+    didParseCell: (data) => {
+      if (data.section === 'body') {
+        const raw = data.cell.raw
+        if (typeof raw === 'number') {
+          data.cell.styles.halign = 'right'
+        }
+      }
+    },
   })
 
   await finalizeCorporatePdf(doc, logoSrc)
@@ -1486,7 +1537,13 @@ export default function ReportesPage() {
   async function handleExportPDF() {
     const data = buildExportRows()
     const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
-    await exportReportePDF({ title: data.title, subtitle: `Período: ${fechaInicio} a ${fechaFin}`, rows: data.rows, filename: `${data.filenameBase}_${stamp}.pdf`, logoSrc: '/logo-rpm.png' })
+    await exportReportePDF({
+      title: data.title,
+      subtitle: `Período: ${fechaInicio} a ${fechaFin}`,
+      rows: data.rows,
+      filename: `${data.filenameBase}_${stamp}.pdf`,
+      logoSrc: '/logo-imprimir.png',
+    })
   }
 
   // ── NUEVO: Cierre PDF ──

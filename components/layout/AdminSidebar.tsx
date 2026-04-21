@@ -27,8 +27,19 @@ import {
 } from 'lucide-react'
 
 type IconType = ComponentType<{ className?: string }>
-type SubItem = { label: string; href: string; icon: IconType; description?: string }
-type NavItem = { label: string; href?: string; icon: IconType; children?: SubItem[] }
+type SubItem = {
+  label: string
+  href: string
+  icon: IconType
+  description?: string
+}
+
+type NavItem = {
+  label: string
+  href?: string
+  icon: IconType
+  children?: SubItem[]
+}
 
 const navItems: NavItem[] = [
   {
@@ -99,12 +110,25 @@ const navItems: NavItem[] = [
   { label: 'Reportes', href: '/admin/reportes', icon: FileText },
 ]
 
+const MOBILE_ALLOWED_LABELS = new Set([
+  'Dashboard',
+  'Personal',
+  'Finanzas',
+  'Reportes',
+])
+
+const MOBILE_LABELS: Record<string, string> = {
+  Dashboard: 'Inicio',
+  Personal: 'Personal',
+  Finanzas: 'Finanzas',
+  Reportes: 'Reportes',
+}
+
 function pathMatches(pathname: string, href?: string) {
   if (!href) return false
   return pathname === href || pathname.startsWith(`${href}/`)
 }
 
-/** Obtiene las iniciales de un nombre o email */
 function getInitials(nameOrEmail: string): string {
   const clean = nameOrEmail.split('@')[0]
   const parts = clean.trim().split(/\s+/)
@@ -112,22 +136,30 @@ function getInitials(nameOrEmail: string): string {
   return clean.slice(0, 2).toUpperCase()
 }
 
-/** Formatea el nombre: si es email muestra la parte local con capitalización */
 function formatDisplayName(nameOrEmail: string): string {
+  if (!nameOrEmail) return ''
   if (!nameOrEmail.includes('@')) return nameOrEmail
   const local = nameOrEmail.split('@')[0]
   return local.charAt(0).toUpperCase() + local.slice(1)
 }
 
-function DesktopNavItem({ item, pathname }: { item: NavItem; pathname: string }) {
+function DesktopNavItem({
+  item,
+  pathname,
+}: {
+  item: NavItem
+  pathname: string
+}) {
   const [isHovered, setIsHovered] = useState(false)
+
   const active =
     (item.href && pathMatches(pathname, item.href)) ||
     item.children?.some((c) => pathMatches(pathname, c.href))
+
   const Icon = item.icon
 
   const buttonClass = `
-    inline-flex h-10 items-center gap-2 rounded-2xl border px-3 text-[13px] font-medium transition-all duration-200
+    inline-flex h-10 items-center gap-2 rounded-2xl border px-3 text-[13px] font-medium transition-all duration-200 whitespace-nowrap
     ${
       active || isHovered
         ? 'border-violet-400/20 bg-gradient-to-r from-violet-600/20 via-purple-500/15 to-fuchsia-500/10 text-white shadow-[0_0_0_1px_rgba(168,85,247,0.08),0_12px_30px_rgba(76,29,149,0.18)]'
@@ -195,22 +227,72 @@ function DesktopNavItem({ item, pathname }: { item: NavItem; pathname: string })
   )
 }
 
+function MobileNavItem({
+  item,
+  pathname,
+}: {
+  item: NavItem
+  pathname: string
+}) {
+  const active =
+    (item.href && pathMatches(pathname, item.href)) ||
+    item.children?.some((c) => pathMatches(pathname, c.href))
+
+  const Icon = item.icon
+  const label = MOBILE_LABELS[item.label] || item.label
+
+  return (
+    <Link
+      href={item.href || '#'}
+      className={`flex h-11 min-w-0 items-center justify-center gap-1.5 rounded-2xl border px-2 transition-all duration-200 ${
+        active
+          ? 'border-violet-400/20 bg-gradient-to-r from-violet-600/20 via-purple-500/15 to-fuchsia-500/10 text-white shadow-[0_0_0_1px_rgba(168,85,247,0.08),0_12px_30px_rgba(76,29,149,0.18)]'
+          : 'border-white/10 bg-white/[0.03] text-white/75 hover:border-white/15 hover:bg-white/[0.05] hover:text-white'
+      }`}
+    >
+      <Icon className="h-3.5 w-3.5 shrink-0" />
+      <span className="truncate text-[11px] font-semibold">{label}</span>
+    </Link>
+  )
+}
+
 export default function AdminSidebar() {
   const pathname = usePathname()
   const router = useRouter()
+
   const [userDisplay, setUserDisplay] = useState<string>('')
   const [userInitials, setUserInitials] = useState<string>('--')
+  const [isMobile, setIsMobile] = useState(false)
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+
+    const media = window.matchMedia('(max-width: 768px)')
+    const updateMobile = () => setIsMobile(media.matches)
+
+    updateMobile()
+
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', updateMobile)
+      return () => media.removeEventListener('change', updateMobile)
+    }
+
+    media.addListener(updateMobile)
+    return () => media.removeListener(updateMobile)
+  }, [])
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       const user = data?.user
       if (!user) return
-      // Prioridad: full_name > email
+
       const raw =
         user.user_metadata?.full_name ||
         user.user_metadata?.name ||
         user.email ||
         ''
+
       setUserDisplay(formatDisplayName(raw))
       setUserInitials(getInitials(raw))
     })
@@ -222,25 +304,68 @@ export default function AdminSidebar() {
     router.refresh()
   }
 
+  const mobileNavItems = navItems.filter((item) => MOBILE_ALLOWED_LABELS.has(item.label))
+
+  if (mounted && isMobile) {
+    return (
+      <div className="sticky top-0 z-40 w-full border-b border-white/10 bg-[#0b0b12]/92 backdrop-blur-2xl">
+        <div className="px-3 pb-3 pt-3">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <Link href="/admin/dashboard" className="flex shrink-0 items-center gap-2">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-white shadow-xl">
+                  <img src="/favicon.ico" alt="RPM" className="h-5 w-5 object-contain" />
+                </div>
+              </Link>
+
+              <div className="min-w-0">
+                <p className="text-[10px] leading-none text-white/35">RPM Admin</p>
+                <p className="truncate text-sm font-semibold leading-tight text-white">
+                  {userDisplay || 'Usuario'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleSignOut}
+              title="Cerrar sesión"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-red-400/15 bg-red-500/8 text-red-300/75 transition hover:border-red-400/30 hover:bg-red-500/15 hover:text-red-200"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+
+          <nav className="grid grid-cols-4 gap-2">
+            {mobileNavItems.map((item) => (
+              <MobileNavItem key={item.label} item={item} pathname={pathname} />
+            ))}
+          </nav>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="sticky top-0 z-40 w-full border-b border-white/10 bg-[#0b0b12]/92 backdrop-blur-2xl">
-      <div className="mx-auto flex h-[78px] max-w-[1720px] items-center justify-between gap-6 px-6">
-
+      <div className="mx-auto flex h-[78px] max-w-[1720px] items-center justify-between gap-3 px-3 md:gap-6 md:px-6">
         {/* ── Logo ── */}
         <Link href="/admin/dashboard" className="flex shrink-0 items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white shadow-xl">
-            <img src="/favicon.ico" alt="RPM" className="h-8 w-8 object-contain" />
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white shadow-xl md:h-12 md:w-12">
+            <img src="/favicon.ico" alt="RPM" className="h-7 w-7 object-contain md:h-8 md:w-8" />
           </div>
-          <div className="min-w-0">
-            <p className="mb-1 text-[10px] uppercase tracking-[0.28em] text-white/28 leading-none">
+
+          <div className="hidden min-w-0 sm:block">
+            <p className="mb-1 text-[10px] uppercase tracking-[0.28em] leading-none text-white/28">
               RPM
             </p>
-            <h2 className="truncate text-base font-semibold text-white leading-none">Admin</h2>
+            <h2 className="truncate text-sm font-semibold leading-none text-white md:text-base">
+              Admin
+            </h2>
           </div>
         </Link>
 
-        {/* ── Nav ── */}
-        <nav className="flex flex-1 items-center justify-center gap-1">
+        {/* ── Nav desktop original ── */}
+        <nav className="flex flex-1 items-center justify-center gap-1 min-w-0">
           {navItems.map((item) => (
             <DesktopNavItem key={item.label} item={item} pathname={pathname} />
           ))}
@@ -248,12 +373,11 @@ export default function AdminSidebar() {
 
         {/* ── Right: user + logout ── */}
         <div className="flex shrink-0 items-center gap-2">
-
-          {/* Avatar + nombre — compacto, sin borde extra */}
-          <div className="flex items-center gap-2 pr-1">
+          <div className="hidden items-center gap-2 pr-1 sm:flex">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-500 text-[11px] font-bold text-white shadow-[0_0_10px_rgba(168,85,247,0.3)]">
               {userInitials}
             </div>
+
             {userDisplay ? (
               <span className="max-w-[100px] truncate text-sm font-medium text-white/80">
                 {userDisplay}
@@ -263,10 +387,8 @@ export default function AdminSidebar() {
             )}
           </div>
 
-          {/* Divider */}
-          <div className="h-5 w-px bg-white/10" />
+          <div className="hidden h-5 w-px bg-white/10 sm:block" />
 
-          {/* Logout — solo ícono con tooltip hover */}
           <button
             onClick={handleSignOut}
             title="Cerrar sesión"
