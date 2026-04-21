@@ -1,45 +1,3 @@
-/**
- * usePagoConDeuda + ejecutarPagoConDeuda
- * ─────────────────────────────────────────────────────────────────
- * Hook y función utilitaria para integrar PagoConDeudaSelector
- * en los flujos de:
- *   - /admin/operaciones/agenda/nueva         (nueva cita)
- *   - /admin/personas/clientes/nuevo          (nuevo cliente, paso 3)
- *   - /admin/personas/clientes/[id]/plan      (gestión de plan)
- *
- * Cómo usar en cada página:
- * ─────────────────────────────────────────────────────────────────
- *
- * 1. Importar y usar el hook:
- *    const { pagoState, setPagoState, ejecutarPago } = usePagoConDeuda()
- *
- * 2. Reemplazar la sección de pago actual por:
- *    <PagoConDeudaSelector
- *      montoTotal={montoBase}
- *      fecha={form.fecha}
- *      metodosPago={metodosPago}
- *      value={pagoState}
- *      onChange={setPagoState}
- *      concepto="..."
- *      clienteNombre="..."
- *    />
- *
- * 3. En el guardar(), reemplazar el bloque de pago por:
- *    await ejecutarPago({
- *      montoTotal: montoBase,
- *      fecha: form.fecha,
- *      clienteId: form.cliente_id,
- *      clienteNombre: clienteNombreStr,
- *      concepto: conceptoStr,
- *      citaId: citaId,             // null si es plan
- *      clientePlanId: planId,      // null si es cita
- *      auditorId: auditorId,
- *      notasGenerales: '',
- *    })
- *
- * ─────────────────────────────────────────────────────────────────
- */
-
 'use client'
 
 import { useState, useCallback } from 'react'
@@ -50,7 +8,7 @@ import {
   buildCuentaPorCobrarPayload,
   buildPagosRpcPayload,
   type PagoConDeudaState,
-} from './PagoConDeudaSelector'
+} from '@/components/pagos/PagoConDeudaSelector'
 
 // ─── Tipos ─────────────────────────────────────────────────────────
 
@@ -60,14 +18,11 @@ export type EjecutarPagoParams = {
   clienteId: string
   clienteNombre: string
   concepto: string
-  // Origen del pago (uno de los dos tendrá valor)
   citaId?: string | null
   clientePlanId?: string | null
   inventarioId?: string | null
   cuentaCobrarId?: string | null
-  // Auditor
   auditorId?: string | null
-  // Tipo para el RPC
   tipoOrigen?: 'cita' | 'plan' | 'otro'
   categoria?: string
   notasGenerales?: string | null
@@ -81,26 +36,16 @@ export type EjecutarPagoResult = {
   deudaGenerada?: number
 }
 
-// ─── Hook principal ─────────────────────────────────────────────────
+// ─── Hook ─────────────────────────────────────────────────────────
 
 export function usePagoConDeuda() {
   const [pagoState, setPagoState] = useState<PagoConDeudaState>(pagoConDeudaInitial())
 
-  /**
-   * Valida el estado del pago.
-   * Retorna null si está OK, o un string con el error.
-   */
   const validar = useCallback(
-    (montoTotal: number): string | null => {
-      return validarPagoConDeuda(pagoState, montoTotal)
-    },
+    (montoTotal: number) => validarPagoConDeuda(pagoState, montoTotal),
     [pagoState]
   )
 
-  /**
-   * Ejecuta el pago: llama al RPC de pagos (si aplica) y crea la
-   * cuenta por cobrar (si hay deuda). Retorna { ok, error }.
-   */
   const ejecutarPago = useCallback(
     async (params: EjecutarPagoParams): Promise<EjecutarPagoResult> => {
       const {
@@ -121,14 +66,17 @@ export function usePagoConDeuda() {
 
       const r2 = (v: number) => Math.round(v * 100) / 100
 
-      // 1. Registrar pago si aplica (no es sin_pago)
+      let montoPagado = 0
+
+      // ─── 1. REGISTRAR PAGO ─────────────────────
       if (pagoState.tipoCobro !== 'sin_pago') {
         const pagosPayload = buildPagosRpcPayload(pagoState, montoTotal)
+
         if (!pagosPayload) {
           return { ok: false, error: 'No se pudo construir el payload de pago.' }
         }
 
-        const { error: pagoError } = await supabase.rpc('registrar_pagos_mixtos', {
+        const { error } = await supabase.rpc('registrar_pagos_mixtos', {
           p_fecha: fecha,
           p_tipo_origen: tipoOrigen,
           p_categoria: categoria,
@@ -143,12 +91,22 @@ export function usePagoConDeuda() {
           p_pagos: pagosPayload,
         })
 
-        if (pagoError) {
-          return { ok: false, error: `Error registrando pago: ${pagoError.message}` }
+        if (error) {
+          return { ok: false, error: error.message }
         }
+
+        // calcular monto pagado
+        montoPagado = r2(
+          pagosPayload.reduce((acc, p) => {
+            if (p.moneda_pago === 'USD') return acc + p.monto
+            if (p.moneda_pago === 'BS' && p.tasa_bcv)
+              return acc + p.monto / p.tasa_bcv
+            return acc
+          }, 0)
+        )
       }
 
-      // 2. Crear cuenta por cobrar si hay deuda
+      // ─── 2. CUENTA POR COBRAR ─────────────────
       const cxcPayload = buildCuentaPorCobrarPayload({
         state: pagoState,
         montoTotal,
@@ -163,16 +121,14 @@ export function usePagoConDeuda() {
       let deudaGenerada = 0
 
       if (cxcPayload) {
-        const { error: cxcError } = await supabase
+        const { error } = await supabase
           .from('cuentas_por_cobrar')
           .insert(cxcPayload)
 
-        if (cxcError) {
-          // Pago ya se registró, pero la deuda falló — retornar warning pero no fallar total
+        if (error) {
           return {
             ok: true,
-            deudaCreada: false,
-            error: `⚠️ Pago registrado, pero no se pudo crear la cuenta por cobrar: ${cxcError.message}`,
+            error: `⚠️ Pago registrado pero falló la deuda: ${error.message}`,
           }
         }
 
@@ -180,28 +136,16 @@ export function usePagoConDeuda() {
         deudaGenerada = cxcPayload.saldo_usd
       }
 
-      // Calcular monto efectivamente pagado
-      const montoAbono = parseFloat(pagoState.montoAbono) || 0
-      const montoAbonoUsd =
-        pagoState.moneda === 'BS' && pagoState.tasaBcv && pagoState.tasaBcv > 0
-          ? r2(montoAbono / pagoState.tasaBcv)
-          : r2(montoAbono)
-
-      const montoPagado =
-        pagoState.tipoCobro === 'sin_pago'
-          ? 0
-          : pagoState.tipoCobro === 'completo'
-            ? montoTotal
-            : montoAbonoUsd
-
-      return { ok: true, deudaCreada, montoPagado, deudaGenerada }
+      return {
+        ok: true,
+        montoPagado,
+        deudaCreada,
+        deudaGenerada,
+      }
     },
     [pagoState]
   )
 
-  /**
-   * Resetea el estado del pago al inicial.
-   */
   const resetPago = useCallback(() => {
     setPagoState(pagoConDeudaInitial())
   }, [])
