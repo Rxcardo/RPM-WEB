@@ -34,6 +34,11 @@ type EmpleadoAsignable = {
   especialidad: string | null; comision_plan_porcentaje: number; comision_cita_porcentaje: number
 }
 
+function esRolTerapeuta(rol: string | null | undefined) {
+  const r = (rol || '').trim().toLowerCase()
+  return r === 'terapeuta' || r === 'fisioterapeuta'
+}
+
 type Plan = {
   id: string; nombre: string; sesiones_totales: number
   vigencia_valor: number; vigencia_tipo: VigenciaTipo
@@ -517,7 +522,7 @@ export default function NuevoClientePage() {
     setLoadingData(true); setErrorMsg('')
     try {
       const [tRes, pRes, sRes, rRes, mRes] = await Promise.all([
-        supabase.from('empleados').select('id, nombre, rol, especialidad, comision_plan_porcentaje, comision_cita_porcentaje').eq('estado', 'activo').neq('rol', 'admin').order('nombre'),
+        supabase.from('empleados').select('id, nombre, rol, especialidad, comision_plan_porcentaje, comision_cita_porcentaje').eq('estado', 'activo').in('rol', ['terapeuta', 'fisioterapeuta']).order('nombre'),
         supabase.from('planes').select('id, nombre, sesiones_totales, vigencia_valor, vigencia_tipo, precio, descripcion, comision_base, comision_rpm, comision_entrenador').eq('estado', 'activo').order('nombre'),
         supabase.from('servicios').select('*').eq('estado', 'activo').order('nombre'),
         supabase.from('recursos').select('id, nombre, tipo, estado, capacidad, hora_inicio, hora_fin').order('nombre'),
@@ -528,7 +533,7 @@ export default function NuevoClientePage() {
       if (sRes.error) throw new Error(`Servicios: ${sRes.error.message}`)
       if (rRes.error) throw new Error(`Recursos: ${rRes.error.message}`)
       if (mRes.error) throw new Error(`Métodos de pago: ${mRes.error.message}`)
-      setEmpleados(((tRes.data || []) as EmpleadoAsignable[]).filter((e) => (e.rol || '').trim().toLowerCase() !== 'admin'))
+      setEmpleados(((tRes.data || []) as EmpleadoAsignable[]).filter((e) => esRolTerapeuta(e.rol)))
       setPlanes((pRes.data || []) as Plan[])
       setServicios(((sRes.data || []) as ServicioRaw[]).filter((s) => s.estado !== 'inactivo').map((s) => ({
         id: s.id, nombre: s.nombre, precio: s.precio ?? null, estado: s.estado ?? null,

@@ -28,7 +28,7 @@ import PagoConDeudaSelector, {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Cliente = { id: string; nombre: string }
-type Terapeuta = { id: string; nombre: string; comision_cita_porcentaje: number }
+type Terapeuta = { id: string; nombre: string; rol?: string | null; comision_cita_porcentaje: number }
 type ServicioRaw = {
   id: string; nombre: string; estado?: string | null; precio?: number | null
   duracion_minutos?: number | null; color?: string | null
@@ -64,6 +64,11 @@ type ValidacionCita = {
 }
 
 type SlotHora = { hora_inicio: string; hora_fin: string }
+
+function esRolTerapeuta(rol: string | null | undefined) {
+  const r = (rol || '').trim().toLowerCase()
+  return r === 'terapeuta' || r === 'fisioterapeuta'
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -366,7 +371,7 @@ function NuevaCitaPageContent() {
     try {
       const [clientesRes, terapeutasRes, serviciosRes, recursosRes, metodosRes] = await Promise.all([
         supabase.from('clientes').select('id, nombre').order('nombre', { ascending: true }),
-        supabase.from('empleados').select('id, nombre, comision_cita_porcentaje').in('rol', ['terapeuta', 'fisioterapeuta']).eq('estado', 'activo').order('nombre', { ascending: true }),
+        supabase.from('empleados').select('id, nombre, rol, comision_cita_porcentaje').in('rol', ['terapeuta', 'fisioterapeuta']).eq('estado', 'activo').order('nombre', { ascending: true }),
         supabase.from('servicios').select('*').eq('estado', 'activo').order('nombre', { ascending: true }),
         supabase.from('recursos').select('id, nombre, estado, capacidad, hora_inicio, hora_fin').order('nombre', { ascending: true }),
         supabase.from('metodos_pago_v2').select(`id, nombre, tipo, moneda, color, icono, cartera:carteras(nombre, codigo)`).eq('activo', true).eq('permite_recibir', true).order('orden', { ascending: true }).order('nombre', { ascending: true }),
@@ -377,7 +382,7 @@ function NuevaCitaPageContent() {
       if (recursosRes.error)   throw new Error(`Recursos: ${recursosRes.error.message}`)
       if (metodosRes.error)    throw new Error(`Métodos de pago: ${metodosRes.error.message}`)
       setClientes((clientesRes.data || []) as Cliente[])
-      setTerapeutas((terapeutasRes.data || []) as Terapeuta[])
+      setTerapeutas(((terapeutasRes.data || []) as any[]).filter((t) => esRolTerapeuta((t as any).rol)) as Terapeuta[])
       setServicios(((serviciosRes.data || []) as ServicioRaw[]).filter((s) => s.estado !== 'inactivo').map((s) => ({
         id: s.id, nombre: s.nombre, precio: s.precio ?? null, estado: s.estado ?? null, color: s.color ?? null,
         duracion_min: getServicioDuracion(s), comision_base: s.comision_base ?? s.precio ?? 0,

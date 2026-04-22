@@ -51,6 +51,11 @@ type Empleado = {
   especialidad: string | null; comision_plan_porcentaje: number; comision_cita_porcentaje: number
 }
 
+function esRolTerapeuta(rol: string | null | undefined) {
+  const r = (rol || '').trim().toLowerCase()
+  return r === 'terapeuta' || r === 'fisioterapeuta'
+}
+
 type Recurso = { id: string; nombre: string; tipo: string | null }
 
 type MetodoPago = {
@@ -361,7 +366,7 @@ export default function ClientePlanPage() {
       supabase.from('clientes').select('id, nombre, estado').eq('id', id).single(),
       supabase.from('planes').select('id, nombre, sesiones_totales, vigencia_valor, vigencia_tipo, precio, estado, descripcion, comision_base, comision_rpm, comision_entrenador').eq('estado', 'activo').order('nombre'),
       supabase.from('clientes_planes').select(`id, cliente_id, plan_id, sesiones_totales, sesiones_usadas, fecha_inicio, fecha_fin, estado, created_at, origen, porcentaje_rpm, monto_base_comision, planes:plan_id (id, nombre, sesiones_totales, vigencia_valor, vigencia_tipo, precio, estado, descripcion, comision_base, comision_rpm, comision_entrenador)`).eq('cliente_id', id).eq('estado', 'activo').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-      supabase.from('empleados').select('id, nombre, rol, especialidad, comision_plan_porcentaje, comision_cita_porcentaje').eq('estado', 'activo').neq('rol', 'admin').order('nombre'),
+      supabase.from('empleados').select('id, nombre, rol, especialidad, comision_plan_porcentaje, comision_cita_porcentaje').eq('estado', 'activo').in('rol', ['terapeuta', 'fisioterapeuta']).order('nombre'),
       supabase.from('recursos').select('id, nombre, tipo').order('nombre'),
       supabase.from('metodos_pago_v2').select(`id, nombre, tipo, moneda, cartera:carteras(nombre, codigo)`).eq('activo', true).eq('permite_recibir', true).order('orden', { ascending: true }).order('nombre', { ascending: true }),
     ])
@@ -369,7 +374,7 @@ export default function ClientePlanPage() {
     setCliente(clienteRes.data as Cliente)
     setPlanes((planesRes.data || []) as Plan[])
     setPlanActivo((planActivoRes.data as ClientePlan | null) || null)
-    setEmpleados(((empleadosRes.data || []) as Empleado[]).filter((e) => (e.rol || '').trim().toLowerCase() !== 'admin'))
+    setEmpleados(((empleadosRes.data || []) as Empleado[]).filter((e) => esRolTerapeuta(e.rol)))
     setRecursos((recursosRes.data || []) as Recurso[])
     setMetodosPago(((metodosRes.data || []) as any[]).map(normalizeMetodoPago))
     setLoading(false)
