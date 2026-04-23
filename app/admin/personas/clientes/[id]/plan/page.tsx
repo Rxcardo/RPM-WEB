@@ -333,6 +333,7 @@ export default function ClientePlanPage() {
   const [usarPrecioPlan, setUsarPrecioPlan] = useState(true)
   const [montoPersonalizado, setMontoPersonalizado] = useState('')
   const [notasPagoGenerales, setNotasPagoGenerales] = useState('')
+  const [fechaPago, setFechaPago]         = useState(getTodayLocal())
   const [pagoState, setPagoState]           = useState<PagoConDeudaState>(pagoConDeudaInitial())
 
   // Cancelar
@@ -490,7 +491,7 @@ export default function ClientePlanPage() {
   function resetForm() {
     setSelectedPlanId(''); setFechaInicio(getTodayLocal()); setEmpleadoId(''); setRecursoId('')
     setDiasSemana([]); setHoraInicio(''); setDuracionMin(60); setRegistrarPago(true)
-    setUsarPrecioPlan(true); setMontoPersonalizado(''); setNotasPagoGenerales('')
+    setUsarPrecioPlan(true); setMontoPersonalizado(''); setNotasPagoGenerales(''); setFechaPago(getTodayLocal())
     setPagoState(pagoConDeudaInitial())
     setMotivoCancelacion(''); setPagoAlCancelar(null); setFechaVistaCal(getTodayLocal())
     setErrorMsg(''); setSuccessMsg(''); setRenovarConPendientes('si'); setTipoRenovacion('mismo_plan'); setRegistrarAjustePlan(true)
@@ -593,7 +594,7 @@ export default function ClientePlanPage() {
       const pagosPayload = buildPagosRpcPayload(pagoState, montoObjetivoPago)
       if (pagosPayload) {
         const { error } = await supabase.rpc('registrar_pagos_mixtos', {
-          p_fecha: fechaInicio, p_tipo_origen: 'plan', p_categoria: 'plan', p_concepto: concepto,
+          p_fecha: fechaPago, p_tipo_origen: 'plan', p_categoria: 'plan', p_concepto: concepto,
           p_cliente_id: id, p_cita_id: null, p_cliente_plan_id: clientePlanId,
           p_cuenta_cobrar_id: null, p_inventario_id: null, p_registrado_por: null,
           p_notas_generales: notasPagoGenerales || null, p_pagos: pagosPayload,
@@ -605,7 +606,7 @@ export default function ClientePlanPage() {
     // Crear cuenta por cobrar si hay deuda
     const cxcPayload = buildCuentaPorCobrarPayload({
       state: pagoState, montoTotal: montoObjetivoPago, clienteId: id,
-      clienteNombre: cliente?.nombre || 'Cliente', concepto, fecha: fechaInicio, registradoPor: null,
+      clienteNombre: cliente?.nombre || 'Cliente', concepto, fecha: fechaPago, registradoPor: null,
     })
     if (cxcPayload) {
       const { error: cxcErr } = await supabase.from('cuentas_por_cobrar').insert(cxcPayload)
@@ -648,7 +649,7 @@ export default function ClientePlanPage() {
       await ensureEntrenamientos(np.id, planificacion.fechas, empleadoId, hiN, hfN, recursoId)
       const concepto = `Plan: ${plan.nombre} — ${cliente?.nombre || 'Cliente'}`
       await registrarPagoPlan(np.id, concepto)
-      if (baseComisionAplicada > 0) await registrarComision(np.id, empleadoId, id, baseComisionAplicada, fechaInicio, montoRpmAplicado, montoEntrenadorAplicado)
+      if (baseComisionAplicada > 0) await registrarComision(np.id, empleadoId, id, baseComisionAplicada, fechaPago, montoRpmAplicado, montoEntrenadorAplicado)
       await supabase.from('clientes_planes').update({ origen: 'manual', porcentaje_rpm: porcentajeRpmAplicado, monto_base_comision: baseComisionAplicada }).eq('id', np.id)
       if (registrarAjustePlan && ajusteFinancieroPlan > 0.009 && planActivo) await registrarCuentaPorCobrarAjustePlan(ajusteFinancieroPlan, `Ajuste por cambio de plan: ${planActivo.planes?.nombre || 'Plan actual'} → ${plan.nombre}`, fechaInicio)
       if (ajusteFinancieroPlan < -0.009 && planActivo) await registrarCreditoClienteCambioPlan(Math.abs(ajusteFinancieroPlan), `Saldo a favor por cambio de plan: ${planActivo.planes?.nombre || 'Plan actual'} → ${plan.nombre}`, fechaInicio)
@@ -697,7 +698,7 @@ export default function ClientePlanPage() {
       await ensureEntrenamientos(np.id, planificacion.fechas, empleadoId, hiN, hfN, recursoId)
       const concepto = renovarConPendientes === 'si' ? `Renovación: ${plan.nombre} — ${cliente?.nombre || 'Cliente'} (+${sesionesRestantes} pendientes)` : `Renovación: ${plan.nombre} — ${cliente?.nombre || 'Cliente'} (sin pendientes)`
       await registrarPagoPlan(np.id, concepto)
-      if (baseComisionAplicada > 0) await registrarComision(np.id, empleadoId, id, baseComisionAplicada, fechaInicio, montoRpmAplicado, montoEntrenadorAplicado)
+      if (baseComisionAplicada > 0) await registrarComision(np.id, empleadoId, id, baseComisionAplicada, fechaPago, montoRpmAplicado, montoEntrenadorAplicado)
       await supabase.from('clientes_planes').update({ origen: 'manual', porcentaje_rpm: porcentajeRpmAplicado, monto_base_comision: baseComisionAplicada }).eq('id', np.id)
       setSuccessMsg(renovarConPendientes === 'si' ? `Plan renovado. Se conservaron ${sesionesRestantes} sesiones pendientes. Total: ${sesN} sesiones.` : `Plan renovado. Total: ${sesN} sesiones.`)
       resetForm(); setModo(null); await fetchAll()
@@ -1028,14 +1029,18 @@ export default function ClientePlanPage() {
                   <p className="text-xs text-white/45">Total a cobrar</p>
                   <p className="text-sm font-semibold text-white">{formatMoney(montoObjetivoPago)}</p>
                 </div>
-                <div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Fecha del pago" helper="Para registrar pagos viejos sin cambiar la vigencia del plan.">
+                    <input type="date" value={fechaPago} onChange={(e) => setFechaPago(e.target.value)} className={inputCls} />
+                  </Field>
                   <Field label="Notas generales del pago (opcional)">
                     <textarea value={notasPagoGenerales} onChange={(e) => setNotasPagoGenerales(e.target.value)} rows={2} className={`${inputCls} resize-none`} placeholder="Notas generales..." />
                   </Field>
                 </div>
                 <PagoConDeudaSelector
+                  key={`plan-pago-${selectedPlanId}-${montoObjetivoPago}-${fechaPago}-${usarPrecioPlan ? 'auto' : 'manual'}`}
                   montoTotal={montoObjetivoPago}
-                  fecha={fechaInicio}
+                  fecha={fechaPago}
                   metodosPago={metodosPago}
                   value={pagoState}
                   onChange={setPagoState}

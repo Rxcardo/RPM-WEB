@@ -399,6 +399,7 @@ export default function NuevoClientePage() {
   const [usarPrecioBase, setUsarPrecioBase]         = useState(true)
   const [montoPersonalizado, setMontoPersonalizado] = useState('')
   const [pagoState, setPagoState]                   = useState<PagoConDeudaState>(pagoConDeudaInitial())
+  const [fechaPago, setFechaPago]                   = useState(getTodayLocal())
   const [porcentajeRpmEditable, setPorcentajeRpmEditable]               = useState(50)
   const [porcentajeEntrenadorEditable, setPorcentajeEntrenadorEditable] = useState(50)
 
@@ -761,7 +762,7 @@ export default function NuevoClientePage() {
           const pagosPayload = buildPagosRpcPayload(pagoState, montoBase)
           if (pagosPayload) {
             const { error: pagoErr } = await supabase.rpc('registrar_pagos_mixtos', {
-              p_fecha: tipoAsignacion === 'plan' ? fechaInicio : citaFecha,
+              p_fecha: fechaPago,
               p_tipo_origen: tipoAsignacion === 'plan' ? 'plan' : 'cita',
               p_categoria: tipoAsignacion === 'plan' ? 'plan' : 'cita',
               p_concepto: concepto, p_cliente_id: clienteId,
@@ -777,7 +778,7 @@ export default function NuevoClientePage() {
 
         const cxcPayload = buildCuentaPorCobrarPayload({
           state: pagoState, montoTotal: montoBase, clienteId, clienteNombre: formCliente.nombre,
-          concepto, fecha: tipoAsignacion === 'plan' ? fechaInicio : citaFecha,
+          concepto, fecha: fechaPago,
           registradoPor: auditorId || null,
         })
         if (cxcPayload) {
@@ -790,7 +791,7 @@ export default function NuevoClientePage() {
             tipoAsignacion === 'plan' ? clientePlanId : null,
             tipoAsignacion === 'cita' ? citaId : null,
             empleadoComisionId, clienteId, baseComisionAplicada,
-            tipoAsignacion === 'plan' ? fechaInicio : citaFecha,
+            fechaPago,
             porcentajeRpmAplicado
           )
           if (tipoAsignacion === 'plan' && clientePlanId) {
@@ -1191,9 +1192,15 @@ export default function NuevoClientePage() {
                       <p className="text-sm font-semibold text-white">{formatMoney(montoBase)}</p>
                     </div>
                   </div>
+                  <div className="mb-4">
+                    <Field label="Fecha del pago" helper="Para registrar pagos viejos sin cambiar la fecha del plan o cita.">
+                      <input type="date" value={fechaPago} onChange={(e) => setFechaPago(e.target.value)} className={inputCls} />
+                    </Field>
+                  </div>
                   <PagoConDeudaSelector
+                    key={`nuevo-cliente-pago-${tipoAsignacion}-${planId}-${citaServicioId}-${montoBase}-${fechaPago}-${usarPrecioBase ? 'auto' : 'manual'}`}
                     montoTotal={montoBase}
-                    fecha={tipoAsignacion === 'plan' ? fechaInicio : citaFecha}
+                    fecha={fechaPago}
                     metodosPago={metodosPago}
                     value={pagoState}
                     onChange={setPagoState}

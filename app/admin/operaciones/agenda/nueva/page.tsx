@@ -293,6 +293,7 @@ function NuevaCitaPageContent() {
   const [usarPrecioServicio, setUsarPrecioServicio] = useState(true)
   const [montoPersonalizado, setMontoPersonalizado] = useState('')
   const [pagoState, setPagoState] = useState<PagoConDeudaState>(pagoConDeudaInitial())
+  const [fechaPago, setFechaPago] = useState(new Date().toISOString().slice(0, 10))
 
   const [porcentajeRpmEditable, setPorcentajeRpmEditable]           = useState(50)
   const [porcentajeEntrenadorEditable, setPorcentajeEntrenadorEditable] = useState(50)
@@ -520,7 +521,7 @@ function NuevaCitaPageContent() {
           const pagosPayload = buildPagosRpcPayload(pagoState, montoBase)
           if (pagosPayload) {
             const { error: pagoErr } = await supabase.rpc('registrar_pagos_mixtos', {
-              p_fecha: form.fecha, p_tipo_origen: 'cita', p_categoria: 'cita', p_concepto: concepto,
+              p_fecha: fechaPago, p_tipo_origen: 'cita', p_categoria: 'cita', p_concepto: concepto,
               p_cliente_id: form.cliente_id, p_cita_id: citaId,
               p_cliente_plan_id: form.tipo_cita === 'plan' ? form.cliente_plan_id : null,
               p_cuenta_cobrar_id: null, p_inventario_id: null,
@@ -534,7 +535,7 @@ function NuevaCitaPageContent() {
         // Cuenta por cobrar si hay deuda
         const cxcPayload = buildCuentaPorCobrarPayload({
           state: pagoState, montoTotal: montoBase, clienteId: form.cliente_id,
-          clienteNombre, concepto, fecha: form.fecha, registradoPor: auditorId || null,
+          clienteNombre, concepto, fecha: fechaPago, registradoPor: auditorId || null,
         })
         if (cxcPayload) {
           const { error: cxcErr } = await supabase.from('cuentas_por_cobrar').insert(cxcPayload)
@@ -544,7 +545,7 @@ function NuevaCitaPageContent() {
         // Comisión
         const { error: comisionErr } = await supabase.from('comisiones_detalle').insert({
           empleado_id: form.terapeuta_id, cliente_id: form.cliente_id,
-          cita_id: citaId, servicio_id: form.servicio_id, fecha: form.fecha,
+          cita_id: citaId, servicio_id: form.servicio_id, fecha: fechaPago,
           tipo: 'cita', estado: 'pendiente', pagado: false,
           base: baseComisionAplicada, rpm: rpmMonto, profesional: terapeutaMonto,
           moneda: tasaReferenciaComision ? 'BS' : 'USD', tasa_bcv: tasaReferenciaComision,
@@ -817,9 +818,16 @@ function NuevaCitaPageContent() {
               </div>
             </div>
             {montoBase > 0 ? (
-              <PagoConDeudaSelector
-                montoTotal={montoTotalLote}
-                fecha={form.fecha}
+              <>
+                <div className="mb-4">
+                  <Field label="Fecha del pago" helper="Para registrar pagos viejos sin cambiar la fecha de la cita.">
+                    <input type="date" value={fechaPago} onChange={(e) => setFechaPago(e.target.value)} className={inputCls} />
+                  </Field>
+                </div>
+                <PagoConDeudaSelector
+                  key={`nueva-cita-pago-${form.servicio_id}-${montoTotalLote}-${fechaPago}-${usarPrecioServicio ? 'auto' : 'manual'}-${slots.length}`}
+                  montoTotal={montoTotalLote}
+                  fecha={fechaPago}
                 metodosPago={metodosPago}
                 value={pagoState}
                 onChange={setPagoState}
@@ -827,6 +835,7 @@ function NuevaCitaPageContent() {
                 clienteNombre={clientes.find((c) => c.id === form.cliente_id)?.nombre || ''}
                 mostrarMontoTotal={false}
               />
+              </>
             ) : (
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                 <p className="text-sm text-white/45">Selecciona un servicio para ver las opciones de pago.</p>
