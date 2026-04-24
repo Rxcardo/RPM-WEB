@@ -631,6 +631,13 @@ function IngresosPageContent() {
     cartera: m.cartera ? { nombre: m.cartera.nombre, codigo: m.cartera.codigo } : null,
   })), [metodosPago])
 
+  // Fuerza a PagoConDeudaSelector a recalcular su monto interno cuando cambia el total.
+  // Sin esto, el componente puede quedarse con el monto anterior hasta reiniciar el formulario.
+  const pagoConDeudaKey = useMemo(
+    () => `producto-${productoId || 'sin-producto'}-${cantidad || 0}-${totalUSD}-${clienteId || 'sin-cliente'}-${fecha}`,
+    [productoId, cantidad, totalUSD, clienteId, fecha]
+  )
+
   // Para venta rápida / edición: calcular totales del pago manual
   const totalPagoMixtoUsd = useMemo(() => {
     return r2(pagoToUsd(pagoMixto1) + pagoToUsd(pagoMixto2))
@@ -750,7 +757,15 @@ function IngresosPageContent() {
   // Reset pagoConDeudaState al cambiar producto/cantidad/cliente
   useEffect(() => {
     setPagoConDeudaState(pagoConDeudaInitial())
-  }, [productoId, cantidad, clienteId, empleadoId, tipoIngreso, tipoConsumidor])
+  }, [productoId, cantidad, clienteId, empleadoId, tipoIngreso, tipoConsumidor, totalUSD])
+
+  // Mantiene el concepto sincronizado con la cantidad sin tener que reiniciar.
+  useEffect(() => {
+    if (editingId) return
+    if (tipoIngreso !== 'producto') return
+    if (!productoSeleccionado) return
+    setConcepto(`Venta de ${productoSeleccionado.nombre} x${cantidad || 1}`)
+  }, [editingId, tipoIngreso, productoSeleccionado?.id, productoSeleccionado?.nombre, cantidad])
 
   // ─── Loaders ──────────────────────────────────────────────────────────────
 
@@ -1930,6 +1945,7 @@ ${notas.trim()}` : ''}`,
                   <div className="space-y-3">
                     <p className="text-sm font-medium text-white/75">Cobro</p>
                     <PagoConDeudaSelector
+                      key={pagoConDeudaKey}
                       montoTotal={totalUSD}
                       fecha={fecha}
                       metodosPago={metodosPagoBase}

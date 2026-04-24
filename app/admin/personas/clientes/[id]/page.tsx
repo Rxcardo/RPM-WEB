@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import StatCard from '@/components/ui/StatCard'
+import AsistenciaRapidaTable from '@/components/ui/AsistenciaRapidaTable'
 
 type AuditorRef = {
   id: string
@@ -177,11 +178,6 @@ function formatDateTime(value: string | null | undefined) {
   }
 }
 
-function formatTime(value: string | null | undefined) {
-  if (!value) return '—'
-  return String(value).slice(0, 5)
-}
-
 function formatAuditDate(value: string | null | undefined) {
   if (!value) return '—'
   try {
@@ -288,48 +284,6 @@ function tipoEventoBadge(tipo: string) {
   }
 }
 
-function asistenciaPlanBadge(estado: string | null | undefined) {
-  switch ((estado || '').toLowerCase()) {
-    case 'asistio':
-      return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
-    case 'no_asistio_aviso':
-      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
-    case 'no_asistio_sin_aviso':
-      return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
-    case 'reprogramado':
-      return 'border-violet-400/20 bg-violet-400/10 text-violet-300'
-    case 'pendiente':
-      return 'border-white/10 bg-white/[0.05] text-white/70'
-    default:
-      return 'border-white/10 bg-white/[0.05] text-white/70'
-  }
-}
-
-function asistenciaPlanLabel(estado: string | null | undefined) {
-  switch ((estado || '').toLowerCase()) {
-    case 'pendiente':
-      return 'Pendiente'
-    case 'asistio':
-      return 'Asistió'
-    case 'no_asistio_aviso':
-      return 'No asistió pero avisó'
-    case 'no_asistio_sin_aviso':
-      return 'No asistió sin aviso'
-    case 'reprogramado':
-      return 'Reprogramado'
-    default:
-      return estado || '—'
-  }
-}
-
-function roleLabel(rol: string | null | undefined) {
-  const value = (rol || '').trim().toLowerCase()
-  if (!value) return 'Sin rol'
-  if (value === 'terapeuta' || value === 'fisioterapeuta') return 'Fisioterapeuta'
-  if (value === 'entrenador') return 'Entrenador'
-  return value.charAt(0).toUpperCase() + value.slice(1)
-}
-
 function estadoFinancieroLabel(estado: EstadoCuentaCliente | null) {
   const pendiente = Number(estado?.saldo_pendiente_neto_usd || 0)
   const credito = Number(estado?.saldo_favor_neto_usd || 0)
@@ -354,35 +308,23 @@ function estadoFinancieroBadge(estado: EstadoCuentaCliente | null) {
 
 function getPlanPriority(estado: string | null | undefined) {
   switch ((estado || '').toLowerCase()) {
-    case 'activo':
-      return 5
-    case 'agotado':
-      return 4
-    case 'vencido':
-      return 3
-    case 'renovado':
-      return 2
-    case 'cancelado':
-      return 1
-    default:
-      return 0
+    case 'activo': return 5
+    case 'agotado': return 4
+    case 'vencido': return 3
+    case 'renovado': return 2
+    case 'cancelado': return 1
+    default: return 0
   }
 }
 
 function getPlanStatusLabel(estado: string | null | undefined) {
   switch ((estado || '').toLowerCase()) {
-    case 'activo':
-      return 'Activo'
-    case 'agotado':
-      return 'Agotado'
-    case 'vencido':
-      return 'Vencido'
-    case 'renovado':
-      return 'Renovado'
-    case 'cancelado':
-      return 'Cancelado'
-    default:
-      return estado || 'Sin estado'
+    case 'activo': return 'Activo'
+    case 'agotado': return 'Agotado'
+    case 'vencido': return 'Vencido'
+    case 'renovado': return 'Renovado'
+    case 'cancelado': return 'Cancelado'
+    default: return estado || 'Sin estado'
   }
 }
 
@@ -712,8 +654,7 @@ export default function ClienteDetallePage() {
       asistio: sesionesPlan.filter((s) => s.asistencia_estado === 'asistio').length,
       aviso: sesionesPlan.filter((s) => s.asistencia_estado === 'no_asistio_aviso').length,
       sinAviso: sesionesPlan.filter((s) => s.asistencia_estado === 'no_asistio_sin_aviso').length,
-      pendientes: sesionesPlan.filter((s) => (s.asistencia_estado || 'pendiente') === 'pendiente')
-        .length,
+      pendientes: sesionesPlan.filter((s) => (s.asistencia_estado || 'pendiente') === 'pendiente').length,
       reprogramables: sesionesPlan.filter((s) => s.reprogramable === true).length,
     }
   }, [sesionesPlan])
@@ -769,9 +710,7 @@ export default function ClienteDetallePage() {
               </div>
 
               <span
-                className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(
-                  estadoCuenta
-                )}`}
+                className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(estadoCuenta)}`}
               >
                 {estadoFinancieroLabel(estadoCuenta)}
               </span>
@@ -942,9 +881,7 @@ export default function ClienteDetallePage() {
                           </td>
                           <td className="px-4 py-3">
                             <span
-                              className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(
-                                item.estado
-                              )}`}
+                              className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(item.estado)}`}
                             >
                               {getPlanStatusLabel(item.estado)}
                             </span>
@@ -958,102 +895,22 @@ export default function ClienteDetallePage() {
             </div>
           </Section>
 
+          {/* ── SESIONES Y ASISTENCIA DEL PLAN ── */}
           <Section
             title="Sesiones y asistencia del plan"
-            description="Historial de sesiones del plan, asistencia y consumo real."
-            className="p-0"
-            contentClassName="overflow-hidden"
+            description="Marcá asistencia directamente desde acá."
+            className="p-4"
           >
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="border-b border-white/10 bg-white/[0.03] text-white/55">
-                  <tr>
-                    <th className="px-4 py-3 text-left font-medium">Fecha</th>
-                    <th className="px-4 py-3 text-left font-medium">Hora</th>
-                    <th className="px-4 py-3 text-left font-medium">Empleado</th>
-                    <th className="px-4 py-3 text-left font-medium">Plan</th>
-                    <th className="px-4 py-3 text-left font-medium">Estado plan</th>
-                    <th className="px-4 py-3 text-left font-medium">Asistencia</th>
-                    <th className="px-4 py-3 text-left font-medium">Consume</th>
-                    <th className="px-4 py-3 text-left font-medium">Detalle</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/10">
-                  {sesionesPlan.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="px-4 py-6 text-white/55">
-                        Este cliente no tiene sesiones de plan registradas.
-                      </td>
-                    </tr>
-                  ) : (
-                    sesionesPlan.map((sesion) => (
-                      <tr key={sesion.id} className="transition hover:bg-white/[0.03]">
-                        <td className="px-4 py-3 text-white/75">{formatDate(sesion.fecha)}</td>
-                        <td className="px-4 py-3 text-white/75">
-                          {formatTime(sesion.hora_inicio)} - {formatTime(sesion.hora_fin)}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="max-w-[240px]">
-                            <p className="font-medium text-white break-words whitespace-normal">
-                              {sesion.empleados?.nombre || 'Sin empleado'}
-                            </p>
-                            <p className="text-xs text-white/45">
-                              {roleLabel(sesion.empleados?.rol)}
-                            </p>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-white/75">
-                          {sesion.clientes_planes?.planes?.nombre || 'Plan'}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(
-                              sesion.clientes_planes?.estado || ''
-                            )}`}
-                          >
-                            {getPlanStatusLabel(sesion.clientes_planes?.estado)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${asistenciaPlanBadge(
-                              sesion.asistencia_estado
-                            )}`}
-                          >
-                            {asistenciaPlanLabel(sesion.asistencia_estado)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          {sesion.consume_sesion ? (
-                            <span className="inline-flex rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-xs font-medium text-emerald-300">
-                              Sí
-                            </span>
-                          ) : (
-                            <span className="inline-flex rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-xs font-medium text-white/70">
-                              No
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="max-w-[320px]">
-                            <p className="text-white/75 break-words whitespace-normal">
-                              {sesion.motivo_asistencia || '—'}
-                            </p>
-                            <div className="mt-1 flex flex-wrap gap-2 text-xs text-white/45">
-                              {sesion.reprogramable ? <span>Reprogramable</span> : null}
-                              {sesion.aviso_previo ? <span>Avisó</span> : null}
-                              {sesion.fecha_asistencia ? (
-                                <span>Marcada: {formatDateTime(sesion.fecha_asistencia)}</span>
-                              ) : null}
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <AsistenciaRapidaTable
+              sesiones={sesionesPlan}
+              onActualizar={(sesionId, nuevoEstado) => {
+                setSesionesPlan((prev) =>
+                  prev.map((s) =>
+                    s.id === sesionId ? { ...s, asistencia_estado: nuevoEstado } : s
+                  )
+                )
+              }}
+            />
           </Section>
 
           <Section
@@ -1104,9 +961,7 @@ export default function ClienteDetallePage() {
                         </td>
                         <td className="px-4 py-3">
                           <span
-                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPagoBadge(
-                              pago.estado
-                            )}`}
+                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPagoBadge(pago.estado)}`}
                           >
                             {pago.estado}
                           </span>
@@ -1140,9 +995,7 @@ export default function ClienteDetallePage() {
                     </p>
                   </div>
                   <span
-                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(
-                      estadoCuenta
-                    )}`}
+                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(estadoCuenta)}`}
                   >
                     {estadoFinancieroLabel(estadoCuenta)}
                   </span>
@@ -1194,9 +1047,7 @@ export default function ClienteDetallePage() {
                   </div>
 
                   <span
-                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(
-                      planPrincipal.estado
-                    )}`}
+                    className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(planPrincipal.estado)}`}
                   >
                     {getPlanStatusLabel(planPrincipal.estado)}
                   </span>
@@ -1253,9 +1104,7 @@ export default function ClienteDetallePage() {
                         ) : null}
                       </div>
                       <span
-                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoCitaBadge(
-                          cita.estado
-                        )}`}
+                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoCitaBadge(cita.estado)}`}
                       >
                         {cita.estado}
                       </span>
@@ -1284,9 +1133,7 @@ export default function ClienteDetallePage() {
                   <Card key={evento.id} className="p-3">
                     <div className="flex items-center justify-between gap-3">
                       <span
-                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${tipoEventoBadge(
-                          evento.tipo
-                        )}`}
+                        className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${tipoEventoBadge(evento.tipo)}`}
                       >
                         {evento.tipo}
                       </span>
