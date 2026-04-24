@@ -26,6 +26,7 @@ interface Cartera { nombre: string; codigo: string }
 interface MetodoPago { id: string; nombre: string; tipo?: string | null; moneda?: string | null; cartera?: Cartera | null }
 interface Producto { id: string; nombre: string; descripcion: string | null; cantidad_actual: number | null; unidad_medida: string | null; precio_venta_usd: number | null; estado: string | null }
 interface Cliente { id: string; nombre: string; telefono?: string | null; email?: string | null }
+interface EmpleadoConsumidor { id: string; nombre: string; telefono?: string | null; email?: string | null; rol?: string | null }
 
 interface CuentaPendienteResumen {
   id: string; cliente_id: string | null; cliente_nombre: string; concepto: string
@@ -39,6 +40,20 @@ interface EstadoCuentaCliente {
   saldo_pendiente_neto_usd?: number | null; saldo_favor_neto_usd?: number | null
   total_pendiente_bs?: number | null; credito_disponible_bs?: number | null
   saldo_pendiente_neto_bs?: number | null; saldo_favor_neto_bs?: number | null
+}
+
+interface EstadoCuentaEmpleado {
+  empleado_id: string
+  nombre?: string | null
+  rol?: string | null
+  total_pendiente_usd?: number | null; credito_disponible_usd?: number | null
+  saldo_pendiente_neto_usd?: number | null; saldo_favor_neto_usd?: number | null
+}
+
+interface CuentaPendienteEmpleadoResumen {
+  id: string; empleado_id: string | null; empleado_nombre: string; concepto: string
+  monto_total_usd: number | null; monto_pagado_usd: number | null; saldo_usd: number | null
+  fecha_venta: string; fecha_vencimiento?: string | null; estado: string
 }
 
 interface PagoItem {
@@ -68,6 +83,8 @@ type EstadoUI = 'pagado' | 'pendiente'
 type EstadoFiltro = 'todos' | 'pagado' | 'pendiente' | 'anulado'
 type TipoIngresoUI = 'producto' | 'saldo'
 type DestinoSaldo = 'credito' | 'deuda'
+type TipoConsumidor = 'cliente' | 'empleado'
+type ModoCobroEmpleadoProducto = 'pagado' | 'deuda'
 
 type RawCartera = { nombre?: unknown; codigo?: unknown } | Array<{ nombre?: unknown; codigo?: unknown }> | null | undefined
 type RawMetodoPago = { id?: unknown; nombre?: unknown; tipo?: unknown; moneda?: unknown; cartera?: RawCartera }
@@ -519,6 +536,7 @@ export default function IngresosPage() {
 function IngresosPageContent() {
   const searchParams = useSearchParams()
   const clientePrefill = searchParams.get('cliente') || searchParams.get('clienteId') || ''
+  const empleadoPrefill = searchParams.get('empleado') || searchParams.get('empleadoId') || ''
   const tipoIngresoPrefill = searchParams.get('tipoIngreso')
   const destinoPrefill = searchParams.get('destino') || ''
   const cuentaPrefill = searchParams.get('cuenta') || searchParams.get('cuentaId') || ''
@@ -530,6 +548,7 @@ function IngresosPageContent() {
   const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([])
   const [productos, setProductos] = useState<Producto[]>([])
   const [clientes, setClientes] = useState<Cliente[]>([])
+  const [empleados, setEmpleados] = useState<EmpleadoConsumidor[]>([])
 
   const [search, setSearch] = useState('')
   const [estadoFiltro, setEstadoFiltro] = useState<EstadoFiltro>('todos')
@@ -539,7 +558,10 @@ function IngresosPageContent() {
 
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10))
   const [tipoIngreso, setTipoIngreso] = useState<TipoIngresoUI>('producto')
+  const [tipoConsumidor, setTipoConsumidor] = useState<TipoConsumidor>('cliente')
   const [clienteId, setClienteId] = useState('')
+  const [empleadoId, setEmpleadoId] = useState('')
+  const [modoCobroEmpleadoProducto, setModoCobroEmpleadoProducto] = useState<ModoCobroEmpleadoProducto>('pagado')
   const [productoId, setProductoId] = useState('')
   const [cantidad, setCantidad] = useState(1)
   const [concepto, setConcepto] = useState('')
@@ -569,6 +591,8 @@ function IngresosPageContent() {
   // ── Saldo / abono a deuda ─────────────────────────────────────────────────
   const [estadoCuentaCliente, setEstadoCuentaCliente] = useState<EstadoCuentaCliente | null>(null)
   const [cuentasPendientesCliente, setCuentasPendientesCliente] = useState<CuentaPendienteResumen[]>([])
+  const [estadoCuentaEmpleado, setEstadoCuentaEmpleado] = useState<EstadoCuentaEmpleado | null>(null)
+  const [cuentasPendientesEmpleado, setCuentasPendientesEmpleado] = useState<CuentaPendienteEmpleadoResumen[]>([])
   const [destinoSaldo, setDestinoSaldo] = useState<DestinoSaldo>('credito')
   const [cuentaCobrarSeleccionadaId, setCuentaCobrarSeleccionadaId] = useState('')
   const [montoAbonoDeuda, setMontoAbonoDeuda] = useState('')
@@ -576,14 +600,21 @@ function IngresosPageContent() {
   // ─── Derived ──────────────────────────────────────────────────────────────
 
   const clienteSeleccionado = useMemo(() => clientes.find((c) => c.id === clienteId) || null, [clientes, clienteId])
+  const empleadoSeleccionado = useMemo(() => empleados.find((e) => e.id === empleadoId) || null, [empleados, empleadoId])
   const productoSeleccionado = useMemo(() => productos.find((p) => p.id === productoId) || null, [productos, productoId])
   const cuentaPendienteSeleccionada = useMemo(
-    () => cuentasPendientesCliente.find((c) => c.id === cuentaCobrarSeleccionadaId) || null,
-    [cuentasPendientesCliente, cuentaCobrarSeleccionadaId]
+    () => tipoConsumidor === 'empleado'
+      ? cuentasPendientesEmpleado.find((c) => c.id === cuentaCobrarSeleccionadaId) || null
+      : cuentasPendientesCliente.find((c) => c.id === cuentaCobrarSeleccionadaId) || null,
+    [tipoConsumidor, cuentasPendientesCliente, cuentasPendientesEmpleado, cuentaCobrarSeleccionadaId]
   )
   const clienteTieneDeuda = useMemo(
     () => cuentasPendientesCliente.some((c) => Number(c.saldo_usd || 0) > 0.01),
     [cuentasPendientesCliente]
+  )
+  const empleadoTieneDeuda = useMemo(
+    () => cuentasPendientesEmpleado.some((c) => Number(c.saldo_usd || 0) > 0.01),
+    [cuentasPendientesEmpleado]
   )
   const precioUnitarioUSD = Number(productoSeleccionado?.precio_venta_usd || 0)
   const totalUSD = useMemo(() => r2(Number((cantidad || 0) * precioUnitarioUSD)), [cantidad, precioUnitarioUSD])
@@ -635,8 +666,12 @@ function IngresosPageContent() {
   useEffect(() => { void cargarDatos() }, [])
 
   useEffect(() => {
-    if (!ventaSinCliente) void cargarEstadoCuentaCliente(clienteId)
-  }, [clienteId, ventaSinCliente])
+    if (!ventaSinCliente && tipoConsumidor === 'cliente') void cargarEstadoCuentaCliente(clienteId)
+  }, [clienteId, ventaSinCliente, tipoConsumidor])
+
+  useEffect(() => {
+    if (!ventaSinCliente && tipoConsumidor === 'empleado') void cargarEstadoCuentaEmpleado(empleadoId)
+  }, [empleadoId, ventaSinCliente, tipoConsumidor])
 
   useEffect(() => {
     if (!clientePrefill || clientes.length === 0 || editingId) return
@@ -651,19 +686,33 @@ function IngresosPageContent() {
   }, [clientePrefill, tipoIngresoPrefill, destinoPrefill, clientes, editingId])
 
   useEffect(() => {
-    if (cuentasPendientesCliente.length > 0) {
-      if (cuentaPrefill && cuentasPendientesCliente.some((c) => c.id === cuentaPrefill)) {
+    if (!empleadoPrefill || empleados.length === 0 || editingId) return
+    if (!empleados.some((e) => e.id === empleadoPrefill)) return
+    setTipoConsumidor('empleado')
+    setEmpleadoId(empleadoPrefill)
+    setShowForm(true)
+    if (tipoIngresoPrefill === 'saldo') {
+      setTipoIngreso('saldo')
+      if (destinoPrefill === 'deuda') { setDestinoSaldo('deuda'); setConcepto('Abono a deuda de empleado') }
+      else { setDestinoSaldo('credito'); setConcepto('Recarga de saldo a favor de empleado') }
+    }
+  }, [empleadoPrefill, tipoIngresoPrefill, destinoPrefill, empleados, editingId])
+
+  useEffect(() => {
+    const cuentasActivas = tipoConsumidor === 'empleado' ? cuentasPendientesEmpleado : cuentasPendientesCliente
+    if (cuentasActivas.length > 0) {
+      if (cuentaPrefill && cuentasActivas.some((c) => c.id === cuentaPrefill)) {
         setCuentaCobrarSeleccionadaId(cuentaPrefill); return
       }
       setCuentaCobrarSeleccionadaId((prev) => {
-        if (prev && cuentasPendientesCliente.some((c) => c.id === prev)) return prev
-        return cuentasPendientesCliente[0].id
+        if (prev && cuentasActivas.some((c) => c.id === prev)) return prev
+        return cuentasActivas[0].id
       })
     } else {
       setCuentaCobrarSeleccionadaId(''); setMontoAbonoDeuda('')
       if (destinoSaldo === 'deuda') setDestinoSaldo('credito')
     }
-  }, [cuentasPendientesCliente, cuentaPrefill, destinoSaldo])
+  }, [tipoConsumidor, cuentasPendientesCliente, cuentasPendientesEmpleado, cuentaPrefill, destinoSaldo])
 
   useEffect(() => {
     if (destinoSaldo === 'deuda' && cuentaPendienteSeleccionada) {
@@ -693,7 +742,7 @@ function IngresosPageContent() {
 
   useEffect(() => {
     if (ventaSinCliente) {
-      setClienteId(''); setEstadoCuentaCliente(null); setCuentasPendientesCliente([])
+      setClienteId(''); setEmpleadoId(''); setEstadoCuentaCliente(null); setCuentasPendientesCliente([]); setEstadoCuentaEmpleado(null); setCuentasPendientesEmpleado([])
       setTipoIngreso('producto'); setDestinoSaldo('credito')
     }
   }, [ventaSinCliente])
@@ -701,13 +750,13 @@ function IngresosPageContent() {
   // Reset pagoConDeudaState al cambiar producto/cantidad/cliente
   useEffect(() => {
     setPagoConDeudaState(pagoConDeudaInitial())
-  }, [productoId, cantidad, clienteId, tipoIngreso])
+  }, [productoId, cantidad, clienteId, empleadoId, tipoIngreso, tipoConsumidor])
 
   // ─── Loaders ──────────────────────────────────────────────────────────────
 
   async function cargarDatos() {
     setLoading(true)
-    const [pagosRes, metodosRes, productosRes, clientesRes] = await Promise.all([
+    const [pagosRes, metodosRes, productosRes, clientesRes, empleadosRes] = await Promise.all([
       supabase.from('pagos')
         .select(`id, operacion_pago_id, pago_item_no, pago_items_total, es_pago_mixto, fecha, concepto, categoria, tipo_origen, estado, moneda_pago, tasa_bcv, monto, monto_pago, monto_equivalente_usd, monto_equivalente_bs, cliente_id, inventario_id, cantidad_producto, metodo_pago_id, metodo_pago_v2_id, notas, referencia, metodos_pago_v2:metodo_pago_v2_id(nombre), clientes:cliente_id(nombre)`)
         .in('categoria', ['producto', 'saldo_cliente'])
@@ -721,11 +770,13 @@ function IngresosPageContent() {
         .select(`id, nombre, descripcion, cantidad_actual, unidad_medida, precio_venta_usd, estado`)
         .eq('estado', 'activo').order('nombre'),
       supabase.from('clientes').select('id, nombre, telefono, email').order('nombre'),
+      supabase.from('empleados').select('id, nombre, telefono, email, rol').eq('estado', 'activo').order('nombre'),
     ])
     if (pagosRes.data) setPagos((pagosRes.data as RawPago[]).map(normalizePago))
     if (metodosRes.data) setMetodosPago((metodosRes.data as RawMetodoPago[]).map(normalizeMetodoPago))
     if (productosRes.data) setProductos(productosRes.data as Producto[])
     if (clientesRes.data) setClientes(clientesRes.data as Cliente[])
+    if (empleadosRes.data) setEmpleados(empleadosRes.data as EmpleadoConsumidor[])
     setLoading(false)
   }
 
@@ -742,6 +793,22 @@ function IngresosPageContent() {
     ])
     setEstadoCuentaCliente((estadoRes.data as EstadoCuentaCliente | null) ?? null)
     setCuentasPendientesCliente((cuentasRes.data || []) as CuentaPendienteResumen[])
+  }
+
+
+  async function cargarEstadoCuentaEmpleado(id: string) {
+    if (!id) { setEstadoCuentaEmpleado(null); setCuentasPendientesEmpleado([]); return }
+    const [estadoRes, cuentasRes] = await Promise.all([
+      supabase.from('v_empleados_estado_cuenta')
+        .select(`empleado_id, nombre, rol, total_pendiente_usd, credito_disponible_usd, saldo_pendiente_neto_usd, saldo_favor_neto_usd`)
+        .eq('empleado_id', id).maybeSingle(),
+      supabase.from('v_empleados_cuentas_por_cobrar_resumen')
+        .select(`id, empleado_id, empleado_nombre, concepto, monto_total_usd, monto_pagado_usd, saldo_usd, fecha_venta, fecha_vencimiento, estado`)
+        .eq('empleado_id', id).in('estado', ['pendiente', 'parcial', 'vencida'])
+        .order('fecha_venta', { ascending: true }),
+    ])
+    setEstadoCuentaEmpleado((estadoRes.data as EstadoCuentaEmpleado | null) ?? null)
+    setCuentasPendientesEmpleado((cuentasRes.data || []) as CuentaPendienteEmpleadoResumen[])
   }
 
   // ─── Helpers de escritura ─────────────────────────────────────────────────
@@ -798,6 +865,75 @@ function IngresosPageContent() {
       monto_total_usd: args.totalUSD, pago_id: args.pagoId || null,
     })
     if (movError) throw movError
+  }
+
+
+  async function crearCreditoEmpleado(args: {
+    empleadoId: string; operacionPagoId?: string | null; montoUsd: number
+    descripcion: string; origenTipo?: string; tasaRef?: number | null
+  }) {
+    const montoUsd = r2(args.montoUsd)
+    if (montoUsd <= 0) return
+    const montoBs = args.tasaRef ? r2(montoUsd * args.tasaRef) : null
+    const { error } = await supabase.from('empleados_credito').insert({
+      empleado_id: args.empleadoId,
+      origen_tipo: args.origenTipo || 'saldo_empleado',
+      origen_id: args.operacionPagoId || null,
+      moneda: 'USD',
+      monto_original: montoUsd,
+      monto_disponible: montoUsd,
+      tasa_bcv: args.tasaRef || null,
+      monto_original_bs: montoBs,
+      monto_disponible_bs: montoBs,
+      descripcion: args.descripcion,
+      fecha,
+      estado: 'activo',
+      registrado_por: null,
+    })
+    if (error) throw error
+  }
+
+  async function crearDeudaEmpleado(args: {
+    empleadoId: string; empleadoNombre: string; concepto: string; montoUsd: number
+    inventarioId?: string | null; cantidadProducto?: number | null; notas?: string | null
+  }) {
+    const montoUsd = r2(args.montoUsd)
+    if (montoUsd <= 0) return
+    const { error } = await supabase.from('empleados_cuentas_por_cobrar').insert({
+      empleado_id: args.empleadoId,
+      empleado_nombre: args.empleadoNombre,
+      concepto: args.concepto,
+      tipo_origen: args.inventarioId ? 'venta_inventario_empleado' : 'saldo_empleado',
+      origen_tipo: args.inventarioId ? 'venta_inventario_empleado' : 'saldo_empleado',
+      inventario_id: args.inventarioId || null,
+      cantidad_producto: args.cantidadProducto || null,
+      monto_total_usd: montoUsd,
+      monto_pagado_usd: 0,
+      saldo_usd: montoUsd,
+      fecha_venta: fecha,
+      fecha_vencimiento: null,
+      estado: 'pendiente',
+      notas: args.notas || null,
+      registrado_por: null,
+      moneda: 'USD',
+    })
+    if (error) throw error
+  }
+
+  async function registrarAbonoDeudaEmpleado(args: {
+    cuentaCobrarId: string; empleadoId: string; montoUsd: number; notas?: string | null
+  }) {
+    const montoUsd = r2(args.montoUsd)
+    if (montoUsd <= 0) return
+    const { error } = await supabase.from('empleados_abonos_cobranza').insert({
+      cuenta_cobrar_id: args.cuentaCobrarId,
+      empleado_id: args.empleadoId,
+      fecha,
+      monto_usd: montoUsd,
+      notas: args.notas || null,
+      registrado_por: null,
+    })
+    if (error) throw error
   }
 
   // ─── Build payloads para pago rápido (venta sin cliente / edición) ─────────
@@ -918,6 +1054,125 @@ function IngresosPageContent() {
         alert('Error: ' + (err.message || 'No se pudo guardar'))
       } finally { setSaving(false) }
       return
+    }
+
+    // ══ CONSUMO / SALDO DE EMPLEADO ════════════════════════════════════════
+    if (!ventaSinCliente && tipoConsumidor === 'empleado') {
+      if (!empleadoId || !empleadoSeleccionado) { alert('Selecciona un empleado'); return }
+
+      // Abono a deuda existente del empleado
+      if (tipoIngreso === 'saldo' && destinoSaldo === 'deuda' && cuentaPendienteSeleccionada) {
+        if (montoAbonoDeudaNumero <= 0) { alert('El monto del abono debe ser mayor a 0'); return }
+        const saldoActual = r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))
+        if (montoAbonoDeudaNumero > saldoActual) {
+          alert(`El abono no puede ser mayor al saldo pendiente (${formatearMoneda(saldoActual, 'USD')})`); return
+        }
+        const errSaldo = validarPagoRapido()
+        if (errSaldo) { alert(errSaldo); return }
+
+        setSaving(true)
+        try {
+          await registrarAbonoDeudaEmpleado({
+            cuentaCobrarId: cuentaPendienteSeleccionada.id,
+            empleadoId: empleadoSeleccionado.id,
+            montoUsd: montoAbonoDeudaNumero,
+            notas: notas.trim() || null,
+          })
+          alert(`✅ Abono de empleado aplicado por ${formatearMoneda(montoAbonoDeudaNumero, 'USD')}`)
+          resetForm()
+          await cargarDatos()
+          await cargarEstadoCuentaEmpleado(empleadoSeleccionado.id)
+        } catch (err: any) {
+          alert('Error: ' + (err.message || 'No se pudo guardar'))
+        } finally { setSaving(false) }
+        return
+      }
+
+      // Crédito / saldo a favor del empleado
+      if (tipoIngreso === 'saldo') {
+        const errSaldo = validarPagoRapido()
+        if (errSaldo) { alert(errSaldo); return }
+        const totalSaldoUsd = tipoPago === 'unico' ? r2(totalUSD) : totalPagoMixtoUsd
+        if (totalSaldoUsd <= 0) { alert('Debes indicar un monto válido para la recarga.'); return }
+
+        setSaving(true)
+        try {
+          const conceptoFinal = concepto.trim() || `Recarga de saldo a favor - ${empleadoSeleccionado.nombre}`
+          await crearCreditoEmpleado({
+            empleadoId: empleadoSeleccionado.id,
+            montoUsd: totalSaldoUsd,
+            descripcion: conceptoFinal,
+            origenTipo: 'saldo_empleado',
+          })
+          alert(`✅ Saldo agregado al empleado: ${formatearMoneda(totalSaldoUsd, 'USD')}`)
+          resetForm()
+          await cargarDatos()
+          await cargarEstadoCuentaEmpleado(empleadoSeleccionado.id)
+        } catch (err: any) {
+          alert('Error: ' + (err.message || 'No se pudo guardar'))
+        } finally { setSaving(false) }
+        return
+      }
+
+      // Venta de producto a empleado: pagar ahora o dejar deuda
+      if (tipoIngreso === 'producto') {
+        if (!productoId) { alert('Selecciona un producto'); return }
+        if (cantidad <= 0) { alert('La cantidad debe ser mayor a 0'); return }
+        if (stockInsuficiente) { alert('No hay suficiente stock disponible'); return }
+
+        setSaving(true)
+        try {
+          const conceptoFinal = concepto.trim() || `Consumo empleado: ${productoSeleccionado?.nombre || ''} x${cantidad} - ${empleadoSeleccionado.nombre}`
+          let operacionPagoId: string | null = null
+
+          if (modoCobroEmpleadoProducto === 'pagado') {
+            const err = validarPagoRapido()
+            if (err) { alert(err); setSaving(false); return }
+            operacionPagoId = await registrarPagoMixtoProducto({
+              fecha,
+              concepto: conceptoFinal,
+              clienteId: null,
+              inventarioId: productoId,
+              cantidad,
+              notasGenerales: `Empleado: ${empleadoSeleccionado.nombre}${notas.trim() ? `
+${notas.trim()}` : ''}`,
+              pagos: buildPagosPayloadRapido(),
+            })
+          } else {
+            await crearDeudaEmpleado({
+              empleadoId: empleadoSeleccionado.id,
+              empleadoNombre: empleadoSeleccionado.nombre,
+              concepto: conceptoFinal,
+              montoUsd: totalUSD,
+              inventarioId: productoId,
+              cantidadProducto: cantidad,
+              notas: notas.trim() || null,
+            })
+          }
+
+          const cantidadAnterior = Number(productoSeleccionado?.cantidad_actual || 0)
+          await descontarInventarioYCrearMovimiento({
+            pagoId: operacionPagoId,
+            productoId,
+            cantidad,
+            cantidadAnterior,
+            cantidadNueva: cantidadAnterior - cantidad,
+            precioUnitarioUSD,
+            totalUSD,
+            conceptoMovimiento: `Consumo empleado - ${empleadoSeleccionado.nombre}`,
+          })
+
+          alert(modoCobroEmpleadoProducto === 'pagado'
+            ? `✅ Consumo de empleado registrado y pagado: ${formatearMoneda(totalUSD, 'USD')}`
+            : `✅ Consumo de empleado registrado como deuda: ${formatearMoneda(totalUSD, 'USD')}`)
+          resetForm()
+          await cargarDatos()
+          await cargarEstadoCuentaEmpleado(empleadoSeleccionado.id)
+        } catch (err: any) {
+          alert('Error: ' + (err.message || 'No se pudo guardar'))
+        } finally { setSaving(false) }
+        return
+      }
     }
 
     // ══ VALIDACIONES COMUNES ════════════════════════════════════════════════
@@ -1103,7 +1358,7 @@ function IngresosPageContent() {
   // ─── Reset ────────────────────────────────────────────────────────────────
 
   function resetForm() {
-    setTipoIngreso('producto'); setProductoId(''); setClienteId('')
+    setTipoIngreso('producto'); setTipoConsumidor('cliente'); setModoCobroEmpleadoProducto('pagado'); setProductoId(''); setClienteId(''); setEmpleadoId('')
     setCantidad(1); setConcepto(''); setNotas('')
     setFecha(new Date().toISOString().slice(0, 10))
     setVentaSinCliente(false)
@@ -1218,7 +1473,8 @@ function IngresosPageContent() {
   // Determina si mostrar bloque de pago rápido (venta sin cliente, recarga saldo, edición, abono a deuda)
   const mostrarPagoRapido = ventaSinCliente ||
     (tipoIngreso === 'saldo') ||
-    !!editingId
+    (!!editingId) ||
+    (tipoConsumidor === 'empleado' && tipoIngreso === 'producto' && modoCobroEmpleadoProducto === 'pagado')
 
   if (loading) return <LoadingIngresos />
 
@@ -1235,8 +1491,8 @@ function IngresosPageContent() {
               <ArrowLeft className="h-4 w-4" />Volver a Finanzas
             </Link>
             <p className="mt-4 text-sm text-white/55">Finanzas</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white sm:text-3xl">Ingresos y saldo de clientes</h1>
-            <p className="mt-2 text-sm text-white/55">Registra ventas del inventario o recargas de saldo a favor del cliente.</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white sm:text-3xl">Ingresos, saldos y consumos</h1>
+            <p className="mt-2 text-sm text-white/55">Registra ventas del inventario, recargas, deudas y créditos de clientes o empleados.</p>
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 xl:w-auto">
             {[
@@ -1316,7 +1572,24 @@ function IngresosPageContent() {
                   <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} required />
                 </div>
 
-                {/* Tipo de ingreso — solo con cliente */}
+                {/* Consumidor */}
+                {!ventaSinCliente && !editingId && (
+                  <div>
+                    <label className={labelCls}>Consumidor *</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button type="button" onClick={() => { setTipoConsumidor('cliente'); setEmpleadoId(''); setEstadoCuentaEmpleado(null); setCuentasPendientesEmpleado([]) }}
+                        className={`rounded-2xl border px-3 py-2.5 text-sm font-medium transition ${tipoConsumidor === 'cliente' ? 'border-violet-400/30 bg-violet-500/15 text-violet-300' : 'border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.06]'}`}>
+                        Cliente
+                      </button>
+                      <button type="button" onClick={() => { setTipoConsumidor('empleado'); setClienteId(''); setEstadoCuentaCliente(null); setCuentasPendientesCliente([]) }}
+                        className={`rounded-2xl border px-3 py-2.5 text-sm font-medium transition ${tipoConsumidor === 'empleado' ? 'border-emerald-400/30 bg-emerald-500/15 text-emerald-300' : 'border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.06]'}`}>
+                        Empleado
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tipo de ingreso — solo con consumidor */}
                 {!ventaSinCliente && (
                   <div>
                     <label className={labelCls}>Tipo de ingreso *</label>
@@ -1336,7 +1609,7 @@ function IngresosPageContent() {
                 )}
 
                 {/* Bloque cliente */}
-                {!ventaSinCliente && (
+                {!ventaSinCliente && tipoConsumidor === 'cliente' && (
                   <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                     <div>
                       <label className={labelCls}>Cliente *</label>
@@ -1454,6 +1727,120 @@ function IngresosPageContent() {
                   </div>
                 )}
 
+                {/* Bloque empleado */}
+                {!ventaSinCliente && tipoConsumidor === 'empleado' && (
+                  <div className="space-y-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4">
+                    <div>
+                      <label className={labelCls}>Empleado *</label>
+                      <ClienteSearch clientes={empleados} value={empleadoId} onChange={(id) => setEmpleadoId(id)} />
+                      {empleadoPrefill && empleadoSeleccionado && <p className="mt-2 text-xs text-cyan-300">Empleado cargado automáticamente desde su ficha.</p>}
+                    </div>
+
+                    {empleadoSeleccionado && (
+                      <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                        <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2">
+                          <User2 className="h-4 w-4 text-white/70" />
+                        </div>
+                        <div className="min-w-0 text-xs text-white/60">
+                          <p className="truncate font-medium text-white">{empleadoSeleccionado.nombre}</p>
+                          {empleadoSeleccionado.rol && <p className="capitalize">{empleadoSeleccionado.rol}</p>}
+                          {empleadoSeleccionado.telefono && <p>{empleadoSeleccionado.telefono}</p>}
+                          {empleadoSeleccionado.email && <p className="truncate">{empleadoSeleccionado.email}</p>}
+                        </div>
+                      </div>
+                    )}
+
+                    {empleadoSeleccionado && estadoCuentaEmpleado && (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
+                          <p className="text-sm font-medium text-white">Estado financiero empleado</p>
+                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${Number(estadoCuentaEmpleado.saldo_pendiente_neto_usd || 0) > 0.01 ? 'border-rose-400/20 bg-rose-400/10 text-rose-300' : Number(estadoCuentaEmpleado.saldo_favor_neto_usd || 0) > 0.01 ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300' : 'border-white/10 bg-white/[0.04] text-white/70'}`}>
+                            {Number(estadoCuentaEmpleado.saldo_pendiente_neto_usd || 0) > 0.01 ? 'Debe' : Number(estadoCuentaEmpleado.saldo_favor_neto_usd || 0) > 0.01 ? 'Crédito' : 'Al día'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          {[
+                            { label: 'Deuda total', val: formatearMoneda(Number(estadoCuentaEmpleado.total_pendiente_usd || 0), 'USD') },
+                            { label: 'Crédito disp.', val: formatearMoneda(Number(estadoCuentaEmpleado.credito_disponible_usd || 0), 'USD') },
+                            { label: 'Neto', val: formatearMoneda(Number(estadoCuentaEmpleado.saldo_pendiente_neto_usd || 0), 'USD') },
+                          ].map((kpi) => (
+                            <div key={kpi.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-2.5">
+                              <p className="text-[10px] uppercase tracking-wide text-white/40">{kpi.label}</p>
+                              <p className="mt-1 text-xs font-semibold text-white">{kpi.val}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {empleadoSeleccionado && tipoIngreso === 'producto' && (
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium uppercase tracking-wide text-white/55">Cobro del consumo</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button type="button" onClick={() => setModoCobroEmpleadoProducto('pagado')}
+                            className={`rounded-2xl border p-3 text-left text-sm transition ${modoCobroEmpleadoProducto === 'pagado' ? 'border-emerald-400/30 bg-emerald-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'}`}>
+                            <p className="font-medium text-white">Paga ahora</p>
+                            <p className="mt-0.5 text-xs text-white/40">Registra el pago.</p>
+                          </button>
+                          <button type="button" onClick={() => setModoCobroEmpleadoProducto('deuda')}
+                            className={`rounded-2xl border p-3 text-left text-sm transition ${modoCobroEmpleadoProducto === 'deuda' ? 'border-rose-400/30 bg-rose-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'}`}>
+                            <p className="font-medium text-white">Dejar deuda</p>
+                            <p className="mt-0.5 text-xs text-white/40">Crea cuenta por cobrar.</p>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {empleadoSeleccionado && empleadoTieneDeuda && tipoIngreso === 'saldo' && (
+                      <div className="space-y-2">
+                        <p className="text-xs font-medium uppercase tracking-wide text-white/55">¿A dónde va este pago?</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button type="button" onClick={() => setDestinoSaldo('deuda')}
+                            className={`rounded-2xl border p-3 text-left text-sm transition ${destinoSaldo === 'deuda' ? 'border-rose-400/30 bg-rose-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'}`}>
+                            <p className="font-medium text-white">Pagar deuda</p>
+                            <p className="mt-0.5 text-xs text-white/40">Aplica a cuenta pendiente.</p>
+                          </button>
+                          <button type="button" onClick={() => setDestinoSaldo('credito')}
+                            className={`rounded-2xl border p-3 text-left text-sm transition ${destinoSaldo === 'credito' ? 'border-emerald-400/30 bg-emerald-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'}`}>
+                            <p className="font-medium text-white">Agregar crédito</p>
+                            <p className="mt-0.5 text-xs text-white/40">Saldo a favor.</p>
+                          </button>
+                        </div>
+
+                        {destinoSaldo === 'deuda' && cuentasPendientesEmpleado.length > 0 && (
+                          <>
+                            <SelectorDeuda cuentas={cuentasPendientesEmpleado as any} seleccionadaId={cuentaCobrarSeleccionadaId}
+                              onSeleccionar={(id) => {
+                                setCuentaCobrarSeleccionadaId(id)
+                                const cuenta = cuentasPendientesEmpleado.find((c) => c.id === id)
+                                if (cuenta) {
+                                  setConcepto(`Abono empleado: ${cuenta.concepto}`)
+                                  setMontoAbonoDeuda(String(r2(Number(cuenta.saldo_usd || 0))))
+                                }
+                              }} />
+                            {cuentaPendienteSeleccionada && (
+                              <div className="rounded-2xl border border-violet-400/20 bg-violet-500/[0.05] p-3">
+                                <div className="mb-3 flex items-center justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-medium text-white">Monto a abonar</p>
+                                    <p className="text-xs text-white/45">Puedes registrar un pago parcial o completo.</p>
+                                  </div>
+                                  <button type="button" onClick={() => setMontoAbonoDeuda(String(r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))))}
+                                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]">
+                                    Usar saldo completo
+                                  </button>
+                                </div>
+                                <input type="number" min={0} max={Number(cuentaPendienteSeleccionada.saldo_usd || 0)} step="0.01"
+                                  value={montoAbonoDeuda} onChange={(e) => setMontoAbonoDeuda(e.target.value)} className={inputCls} placeholder="0.00" />
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Aviso venta rápida */}
                 {ventaSinCliente && !editingId && (
                   <div className="flex items-start gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] p-3">
@@ -1539,7 +1926,7 @@ function IngresosPageContent() {
                 {/* ══ BLOQUE DE PAGO ══ */}
 
                 {/* Caso A: venta con cliente, nuevo registro → PagoConDeudaSelector */}
-                {tipoIngreso === 'producto' && !ventaSinCliente && !editingId && clienteId && productoId && totalUSD > 0 && (
+                {tipoIngreso === 'producto' && !ventaSinCliente && tipoConsumidor === 'cliente' && !editingId && clienteId && productoId && totalUSD > 0 && (
                   <div className="space-y-3">
                     <p className="text-sm font-medium text-white/75">Cobro</p>
                     <PagoConDeudaSelector

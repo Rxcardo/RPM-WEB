@@ -87,6 +87,32 @@ type Liquidacion = {
   egreso_id: string | null
 }
 
+
+type EstadoCuentaEmpleado = {
+  empleado_id: string
+  nombre: string | null
+  rol: string | null
+  total_facturado_usd: number | null
+  total_pagado_usd: number | null
+  total_pendiente_usd: number | null
+  credito_disponible_usd: number | null
+  saldo_pendiente_neto_usd: number | null
+  saldo_favor_neto_usd: number | null
+}
+
+type CuentaPendienteEmpleado = {
+  id: string
+  empleado_id: string | null
+  empleado_nombre: string
+  concepto: string
+  monto_total_usd: number | null
+  monto_pagado_usd: number | null
+  saldo_usd: number | null
+  fecha_venta: string
+  fecha_vencimiento: string | null
+  estado: string
+}
+
 type MetodoPago = {
   id: string
   nombre: string
@@ -375,6 +401,8 @@ export default function VerPersonalPage() {
   const [comisiones, setComisiones] = useState<ComisionDetalle[]>([])
   const [liquidaciones, setLiquidaciones] = useState<Liquidacion[]>([])
   const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([])
+  const [estadoCuentaEmpleado, setEstadoCuentaEmpleado] = useState<EstadoCuentaEmpleado | null>(null)
+  const [cuentasPendientesEmpleado, setCuentasPendientesEmpleado] = useState<CuentaPendienteEmpleado[]>([])
   const [errorMsg, setErrorMsg] = useState('')
   const [facturando, setFacturando] = useState(false)
   const [agendaFiltro, setAgendaFiltro] = useState<'hoy' | 'proximos' | 'todos'>('hoy')
@@ -423,7 +451,7 @@ export default function VerPersonalPage() {
     setLoading(true)
     setErrorMsg('')
 
-    const [empRes, clientesRes, entRes, citasRes, comRes, liqRes, metodosRes] =
+    const [empRes, clientesRes, entRes, citasRes, comRes, liqRes, metodosRes, estadoCuentaRes, cuentasEmpleadoRes] =
       await Promise.all([
         supabase
           .from('empleados')
@@ -531,6 +559,19 @@ export default function VerPersonalPage() {
           .eq('permite_pagar', true)
           .order('orden', { ascending: true })
           .order('nombre', { ascending: true }),
+
+        supabase
+          .from('v_empleados_estado_cuenta')
+          .select('empleado_id, nombre, rol, total_facturado_usd, total_pagado_usd, total_pendiente_usd, credito_disponible_usd, saldo_pendiente_neto_usd, saldo_favor_neto_usd')
+          .eq('empleado_id', id)
+          .maybeSingle(),
+
+        supabase
+          .from('v_empleados_cuentas_por_cobrar_resumen')
+          .select('id, empleado_id, empleado_nombre, concepto, monto_total_usd, monto_pagado_usd, saldo_usd, fecha_venta, fecha_vencimiento, estado')
+          .eq('empleado_id', id)
+          .in('estado', ['pendiente', 'parcial', 'vencida'])
+          .order('fecha_venta', { ascending: true }),
       ])
 
     if (empRes.error || !empRes.data) {
@@ -579,6 +620,8 @@ export default function VerPersonalPage() {
     setComisiones((comRes.data || []) as ComisionDetalle[])
     setLiquidaciones((liqRes.data || []) as Liquidacion[])
     setMetodosPago(metodosNormalizados)
+    setEstadoCuentaEmpleado((estadoCuentaRes.data as EstadoCuentaEmpleado | null) ?? null)
+    setCuentasPendientesEmpleado((cuentasEmpleadoRes.data || []) as CuentaPendienteEmpleado[])
     setLoading(false)
   }
 
@@ -1247,7 +1290,7 @@ export default function VerPersonalPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-6">
         <StatCard title="Clientes" value={clientes.length} color="text-sky-400" />
         <StatCard title="Actividad hoy" value={stats.hoyTotal} color="text-violet-400" />
         <StatCard
@@ -1259,6 +1302,16 @@ export default function VerPersonalPage() {
           title="Disponible Bs"
           value={formatBs(stats.comisionPendienteBs)}
           color="text-amber-300"
+        />
+        <StatCard
+          title="Debe"
+          value={formatMoney(estadoCuentaEmpleado?.saldo_pendiente_neto_usd || 0)}
+          color="text-rose-300"
+        />
+        <StatCard
+          title="Crédito"
+          value={formatMoney(estadoCuentaEmpleado?.saldo_favor_neto_usd || 0)}
+          color="text-cyan-300"
         />
       </div>
 
@@ -1305,6 +1358,82 @@ export default function VerPersonalPage() {
                   </p>
                 </div>
               </div>
+            </Section>
+
+            <Section title="Estado de cuenta" description="Deuda, crédito y consumos registrados al empleado.">
+              <div className="grid gap-3 sm:grid-cols-4">
+                <Card className="border-rose-400/20 bg-rose-400/5 p-4">
+                  <p className="text-xs text-white/45">Deuda total</p>
+                  <p className="mt-1 text-lg font-bold text-rose-300">
+                    {formatMoney(estadoCuentaEmpleado?.total_pendiente_usd || 0)}
+                  </p>
+                </Card>
+                <Card className="border-cyan-400/20 bg-cyan-400/5 p-4">
+                  <p className="text-xs text-white/45">Crédito disponible</p>
+                  <p className="mt-1 text-lg font-bold text-cyan-300">
+                    {formatMoney(estadoCuentaEmpleado?.credito_disponible_usd || 0)}
+                  </p>
+                </Card>
+                <Card className="border-amber-400/20 bg-amber-400/5 p-4">
+                  <p className="text-xs text-white/45">Neto pendiente</p>
+                  <p className="mt-1 text-lg font-bold text-amber-300">
+                    {formatMoney(estadoCuentaEmpleado?.saldo_pendiente_neto_usd || 0)}
+                  </p>
+                </Card>
+                <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
+                  <p className="text-xs text-white/45">Saldo a favor neto</p>
+                  <p className="mt-1 text-lg font-bold text-emerald-300">
+                    {formatMoney(estadoCuentaEmpleado?.saldo_favor_neto_usd || 0)}
+                  </p>
+                </Card>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <Link
+                  href={`/admin/finanzas/ingresos?empleado=${id}&tipoIngreso=producto`}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                >
+                  Registrar consumo
+                </Link>
+                <Link
+                  href={`/admin/finanzas/ingresos?empleado=${id}&tipoIngreso=saldo&destino=deuda`}
+                  className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm font-semibold text-rose-300 transition hover:bg-rose-400/15"
+                >
+                  Abonar deuda
+                </Link>
+                <Link
+                  href={`/admin/finanzas/ingresos?empleado=${id}&tipoIngreso=saldo&destino=credito`}
+                  className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-400/15"
+                >
+                  Agregar crédito
+                </Link>
+              </div>
+
+              {cuentasPendientesEmpleado.length === 0 ? (
+                <p className="mt-4 text-sm text-white/45">Sin deudas pendientes.</p>
+              ) : (
+                <div className="mt-4 space-y-2">
+                  {cuentasPendientesEmpleado.map((cuenta) => (
+                    <div key={cuenta.id} className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
+                      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <p className="font-medium text-white">{cuenta.concepto}</p>
+                          <p className="text-xs text-white/45">
+                            {formatDate(cuenta.fecha_venta)} · {cuenta.estado}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-white/35">Saldo</p>
+                          <p className="font-semibold text-rose-300">{formatMoney(cuenta.saldo_usd)}</p>
+                          <p className="text-xs text-white/35">
+                            Pagado {formatMoney(cuenta.monto_pagado_usd)} de {formatMoney(cuenta.monto_total_usd)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </Section>
 
             <Section
