@@ -76,6 +76,8 @@ type ClienteRow = {
   empleadoNombre: string
 }
 
+type PlanEstadoFiltro = 'todos' | 'con_plan' | 'sin_plan' | 'por_vencer'
+
 type OrdenKey =
   | 'nombre_asc'
   | 'nombre_desc'
@@ -297,11 +299,32 @@ export default function ClientesPage() {
   const [search, setSearch] = useState('')
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
   const [empleadoFiltro, setEmpleadoFiltro] = useState('todos')
+  const [planEstadoFiltro, setPlanEstadoFiltro] = useState<PlanEstadoFiltro>('todos')
+  const [planNombreFiltro, setPlanNombreFiltro] = useState('todos')
   const [ordenPor, setOrdenPor] = useState<OrdenKey>('nombre_asc')
   const [error, setError] = useState('')
 
   useEffect(() => {
     void loadClientes()
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const params = new URLSearchParams(window.location.search)
+    const planEstado = params.get('planEstado')
+
+    if (planEstado === 'activo' || planEstado === 'con_plan') {
+      setPlanEstadoFiltro('con_plan')
+    }
+
+    if (planEstado === 'sin_plan') {
+      setPlanEstadoFiltro('sin_plan')
+    }
+
+    if (planEstado === 'por_vencer') {
+      setPlanEstadoFiltro('por_vencer')
+    }
   }, [])
 
   async function loadClientes() {
@@ -490,6 +513,36 @@ export default function ClientesPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'))
   }, [rows])
 
+  const planOptions = useMemo(() => {
+    const set = new Set<string>()
+
+    for (const row of rows) {
+      const nombrePlan = row.planActivo?.planes?.nombre?.trim()
+      if (nombrePlan) set.add(nombrePlan)
+    }
+
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'))
+  }, [rows])
+
+  function isPlanPorVencer(plan: ClientePlan | null) {
+    if (!plan?.fecha_fin) return false
+    const fin = new Date(`${plan.fecha_fin}T00:00:00`)
+    const hoy = new Date()
+    hoy.setHours(0, 0, 0, 0)
+    const diff = fin.getTime() - hoy.getTime()
+    const dias = Math.ceil(diff / (1000 * 60 * 60 * 24))
+    return dias >= 0 && dias <= 7
+  }
+
+  function limpiarFiltros() {
+    setSearch('')
+    setEstadoFiltro('todos')
+    setEmpleadoFiltro('todos')
+    setPlanEstadoFiltro('todos')
+    setPlanNombreFiltro('todos')
+    setOrdenPor('nombre_asc')
+  }
+
   const clientesFiltrados = useMemo(() => {
     const q = search.trim().toLowerCase()
 
@@ -511,7 +564,17 @@ export default function ClientesPage() {
         empleadoFiltro === 'todos' ||
         empleadoNombre.toLowerCase() === empleadoFiltro.toLowerCase()
 
-      return matchSearch && matchEstado && matchEmpleado
+      const matchPlanEstado =
+        planEstadoFiltro === 'todos' ||
+        (planEstadoFiltro === 'con_plan' && !!planActivo) ||
+        (planEstadoFiltro === 'sin_plan' && !planActivo) ||
+        (planEstadoFiltro === 'por_vencer' && isPlanPorVencer(planActivo))
+
+      const matchPlanNombre =
+        planNombreFiltro === 'todos' ||
+        (planActivo?.planes?.nombre || '').toLowerCase() === planNombreFiltro.toLowerCase()
+
+      return matchSearch && matchEstado && matchEmpleado && matchPlanEstado && matchPlanNombre
     })
 
     filtered.sort((a, b) => {
@@ -540,21 +603,14 @@ export default function ClientesPage() {
     })
 
     return filtered
-  }, [rows, search, estadoFiltro, empleadoFiltro, ordenPor])
+  }, [rows, search, estadoFiltro, empleadoFiltro, planEstadoFiltro, planNombreFiltro, ordenPor])
 
   const stats = useMemo(() => {
     const total = rows.length
     const activos = rows.filter((r) => r.cliente.estado === 'activo').length
     const conPlan = rows.filter((r) => !!r.planActivo).length
     const sinPlan = rows.filter((r) => !r.planActivo).length
-    const porVencer = rows.filter((r) => {
-      if (!r.planActivo?.fecha_fin) return false
-      const fin = new Date(r.planActivo.fecha_fin)
-      const hoy = new Date()
-      const diff = fin.getTime() - hoy.getTime()
-      const dias = Math.ceil(diff / (1000 * 60 * 60 * 24))
-      return dias >= 0 && dias <= 7
-    }).length
+    const porVencer = rows.filter((r) => isPlanPorVencer(r.planActivo)).length
 
     return { total, activos, conPlan, sinPlan, porVencer }
   }, [rows])
@@ -589,18 +645,28 @@ export default function ClientesPage() {
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard title="Total clientes" value={stats.total} />
-        <StatCard title="Clientes activos" value={stats.activos} color="text-emerald-400" />
-        <StatCard title="Con plan activo" value={stats.conPlan} />
-        <StatCard title="Sin plan activo" value={stats.sinPlan} color="text-amber-300" />
-        <StatCard title="Planes por vencer" value={stats.porVencer} color="text-rose-400" />
+        <button type="button" onClick={() => setPlanEstadoFiltro('todos')} className="text-left transition hover:-translate-y-0.5 hover:opacity-90">
+          <StatCard title="Total clientes" value={stats.total} />
+        </button>
+        <button type="button" onClick={() => setEstadoFiltro('activo')} className="text-left transition hover:-translate-y-0.5 hover:opacity-90">
+          <StatCard title="Clientes activos" value={stats.activos} color="text-emerald-400" />
+        </button>
+        <button type="button" onClick={() => setPlanEstadoFiltro('con_plan')} className="text-left transition hover:-translate-y-0.5 hover:opacity-90">
+          <StatCard title="Con plan activo" value={stats.conPlan} />
+        </button>
+        <button type="button" onClick={() => setPlanEstadoFiltro('sin_plan')} className="text-left transition hover:-translate-y-0.5 hover:opacity-90">
+          <StatCard title="Sin plan activo" value={stats.sinPlan} color="text-amber-300" />
+        </button>
+        <button type="button" onClick={() => setPlanEstadoFiltro('por_vencer')} className="text-left transition hover:-translate-y-0.5 hover:opacity-90">
+          <StatCard title="Planes por vencer" value={stats.porVencer} color="text-rose-400" />
+        </button>
       </div>
 
       <Section
         title="Filtros"
         description="Busca por nombre, correo, teléfono, estado, plan o empleado."
       >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
           <div className="xl:col-span-2">
             <Field label="Buscar">
               <input
@@ -649,6 +715,38 @@ export default function ClientesPage() {
           </div>
 
           <div>
+            <Field label="Plan activo">
+              <select
+                value={planEstadoFiltro}
+                onChange={(e) => setPlanEstadoFiltro(e.target.value as PlanEstadoFiltro)}
+                className={inputClassName}
+              >
+                <option value="todos" className="bg-[#11131a] text-white">Todos</option>
+                <option value="con_plan" className="bg-[#11131a] text-white">Con plan activo</option>
+                <option value="sin_plan" className="bg-[#11131a] text-white">Sin plan activo</option>
+                <option value="por_vencer" className="bg-[#11131a] text-white">Por vencer</option>
+              </select>
+            </Field>
+          </div>
+
+          <div>
+            <Field label="Tipo de plan">
+              <select
+                value={planNombreFiltro}
+                onChange={(e) => setPlanNombreFiltro(e.target.value)}
+                className={inputClassName}
+              >
+                <option value="todos" className="bg-[#11131a] text-white">Todos</option>
+                {planOptions.map((plan) => (
+                  <option key={plan} value={plan} className="bg-[#11131a] text-white">
+                    {plan}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          <div>
             <Field label="Ordenar">
               <select
                 value={ordenPor}
@@ -667,6 +765,21 @@ export default function ClientesPage() {
               </select>
             </Field>
           </div>
+        </div>
+
+        <div className="mt-4 flex flex-col gap-3 border-t border-white/10 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-white/45">
+            Mostrando <span className="font-semibold text-white/80">{clientesFiltrados.length}</span> de{' '}
+            <span className="font-semibold text-white/80">{rows.length}</span> cliente(s)
+          </p>
+
+          <button
+            type="button"
+            onClick={limpiarFiltros}
+            className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] sm:w-auto"
+          >
+            Limpiar filtros
+          </button>
         </div>
       </Section>
 

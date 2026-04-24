@@ -9,7 +9,6 @@ import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
 import StatCard from '@/components/ui/StatCard'
-import AsistenciaRapidaTable from '@/components/ui/AsistenciaRapidaTable'
 
 type AuditorRef = {
   id: string
@@ -127,15 +126,19 @@ type EstadoCuentaCliente = {
   saldo_favor_neto_usd?: number | null
 }
 
+type ReagendarForm = {
+  fecha: string
+  hora_inicio: string
+  hora_fin: string
+  motivo: string
+}
+
 function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null
   return value ?? null
 }
 
-function money(
-  value: number | string | null | undefined,
-  moneda: string | null | undefined = 'USD'
-) {
+function money(value: number | string | null | undefined, moneda: string | null | undefined = 'USD') {
   const amount = Number(value || 0)
   const monedaNormalizada = (moneda || 'USD').toUpperCase()
 
@@ -264,6 +267,55 @@ function getPlanStatusLabel(estado: string | null | undefined) {
   }
 }
 
+function onlyHour(value: string | null | undefined) {
+  return (value || '').slice(0, 5)
+}
+
+function normalizeTimeForDb(value: string) {
+  const clean = (value || '').trim()
+  if (!clean) return null
+  return clean.length === 5 ? `${clean}:00` : clean
+}
+
+function dateTimeMs(fecha: string, hora: string) {
+  return new Date(`${fecha}T${hora || '00:00'}`).getTime()
+}
+
+function getDurationMinutes(inicio: string | null | undefined, fin: string | null | undefined) {
+  const hi = onlyHour(inicio)
+  const hf = onlyHour(fin)
+  if (!hi || !hf) return 60
+  const diff = dateTimeMs('2000-01-01', hf) - dateTimeMs('2000-01-01', hi)
+  const minutes = Math.round(diff / 60000)
+  return minutes > 0 ? minutes : 60
+}
+
+function addMinutesToHour(hour: string, minutes: number) {
+  const base = new Date(`2000-01-01T${hour || '00:00'}`)
+  base.setMinutes(base.getMinutes() + minutes)
+  return `${String(base.getHours()).padStart(2, '0')}:${String(base.getMinutes()).padStart(2, '0')}`
+}
+
+function asistenciaLabel(value: string | null | undefined) {
+  switch ((value || 'pendiente').toLowerCase()) {
+    case 'asistio': return 'Asistió'
+    case 'no_asistio_aviso': return 'Avisó'
+    case 'no_asistio_sin_aviso': return 'Sin aviso'
+    default: return 'Pendiente'
+  }
+}
+
+function asistenciaBadge(value: string | null | undefined) {
+  switch ((value || 'pendiente').toLowerCase()) {
+    case 'asistio': return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+    case 'no_asistio_aviso': return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+    case 'no_asistio_sin_aviso': return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+    default: return 'border-white/10 bg-white/[0.05] text-white/65'
+  }
+}
+
+type AsistenciaEstado = 'pendiente' | 'asistio' | 'no_asistio_aviso' | 'no_asistio_sin_aviso'
+
 export default function ClienteDetallePage() {
   const params = useParams()
   const clienteId = Array.isArray(params?.id) ? params.id[0] : params?.id
@@ -281,9 +333,14 @@ export default function ClienteDetallePage() {
 
   const [error, setError] = useState('')
   const [warning, setWarning] = useState('')
+  const [toast, setToast] = useState('')
 
-  // ── Estado del acordeón de sesiones ──
   const [sesionesAbiertas, setSesionesAbiertas] = useState(false)
+  const [sesionReagendar, setSesionReagendar] = useState<SesionPlan | null>(null)
+  const [reagendarForm, setReagendarForm] = useState<ReagendarForm>({ fecha: '', hora_inicio: '', hora_fin: '', motivo: '' })
+  const [guardandoReagenda, setGuardandoReagenda] = useState(false)
+  const [errorReagenda, setErrorReagenda] = useState('')
+  const [actualizandoAsistenciaId, setActualizandoAsistenciaId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!clienteId) return
@@ -295,6 +352,7 @@ export default function ClienteDetallePage() {
     setLoadingExtras(true)
     setError('')
     setWarning('')
+    setToast('')
     setCliente(null)
     setHistorialPlanes([])
     setPagos([])
@@ -458,6 +516,159 @@ export default function ClienteDetallePage() {
     setLoadingExtras(false)
   }
 
+  async function actualizarAsistenciaSesion(sesionId: string, nuevoEstado: AsistenciaEstado) {
+    setActualizandoAsistenciaId(sesionId)
+    setToast('')
+
+    const payload = {
+      asistencia_estado: nuevoEstado,
+      fecha_asistencia: nuevoEstado === 'pendiente' ? null : new Date().toISOString(),
+      reprogramable: nuevoEstado === 'no_asistio_aviso',
+    }
+
+    try {
+      const { error } = await supabase
+        .from('entrenamientos')
+        .update(payload)
+        .eq('id', sesionId)
+
+      if (error) throw new Error(error.message)
+
+      setSesionesPlan((prev) =>
+        prev.map((s) =>
+          s.id === sesionId
+            ? { ...s, asistencia_estado: nuevoEstado, fecha_asistencia: payload.fecha_asistencia, reprogramable: payload.reprogramable }
+            : s
+        )
+      )
+    } catch (err: any) {
+      setWarning(err?.message || 'No se pudo actualizar la asistencia.')
+    } finally {
+      setActualizandoAsistenciaId(null)
+    }
+  }
+
+  function abrirReagendarSesion(sesion: SesionPlan) {
+    const inicio = onlyHour(sesion.hora_inicio) || '08:00'
+    const duracion = getDurationMinutes(sesion.hora_inicio, sesion.hora_fin)
+    const fin = onlyHour(sesion.hora_fin) || addMinutesToHour(inicio, duracion)
+
+    setToast('')
+    setErrorReagenda('')
+    setSesionReagendar(sesion)
+    setReagendarForm({
+      fecha: sesion.fecha || new Date().toISOString().slice(0, 10),
+      hora_inicio: inicio,
+      hora_fin: fin,
+      motivo: '',
+    })
+  }
+
+  function cerrarReagendarSesion() {
+    if (guardandoReagenda) return
+    setSesionReagendar(null)
+    setErrorReagenda('')
+  }
+
+  async function guardarReagendaSesion() {
+    if (!sesionReagendar) return
+
+    const fecha = reagendarForm.fecha.trim()
+    const horaInicio = reagendarForm.hora_inicio.trim()
+    const horaFin = reagendarForm.hora_fin.trim()
+    const motivo = reagendarForm.motivo.trim()
+
+    if (!fecha) {
+      setErrorReagenda('Selecciona la nueva fecha.')
+      return
+    }
+
+    if (!horaInicio || !horaFin) {
+      setErrorReagenda('Selecciona hora inicio y hora fin.')
+      return
+    }
+
+    if (dateTimeMs(fecha, horaFin) <= dateTimeMs(fecha, horaInicio)) {
+      setErrorReagenda('La hora fin debe ser mayor a la hora inicio.')
+      return
+    }
+
+    setGuardandoReagenda(true)
+    setErrorReagenda('')
+    setToast('')
+
+    const anteriorFecha = sesionReagendar.fecha || 'sin fecha'
+    const anteriorInicio = onlyHour(sesionReagendar.hora_inicio) || '—'
+    const anteriorFin = onlyHour(sesionReagendar.hora_fin) || '—'
+    const notaReagenda = `Reagendada desde ${anteriorFecha} ${anteriorInicio}-${anteriorFin} hacia ${fecha} ${horaInicio}-${horaFin}${motivo ? `. Motivo: ${motivo}` : ''}`
+
+    try {
+      const updateRes = await supabase
+        .from('entrenamientos')
+        .update({
+          fecha,
+          hora_inicio: normalizeTimeForDb(horaInicio),
+          hora_fin: normalizeTimeForDb(horaFin),
+          estado: 'programado',
+          asistencia_estado: 'pendiente',
+          reprogramable: false,
+          motivo_asistencia: notaReagenda,
+        })
+        .eq('id', sesionReagendar.id)
+        .select(`
+          id, cliente_plan_id, cliente_id, empleado_id, fecha,
+          hora_inicio, hora_fin, estado, asistencia_estado, aviso_previo,
+          consume_sesion, reprogramable, motivo_asistencia, fecha_asistencia,
+          reprogramado_de_entrenamiento_id,
+          empleados:empleado_id ( nombre, rol ),
+          clientes_planes:cliente_plan_id (
+            id, fecha_fin, estado,
+            planes:plan_id ( nombre )
+          )
+        `)
+        .single()
+
+      if (updateRes.error) throw new Error(updateRes.error.message)
+
+      const row: any = updateRes.data
+      const normalizada: SesionPlan = {
+        ...row,
+        empleados: firstOrNull(row?.empleados),
+        clientes_planes: firstOrNull(row?.clientes_planes)
+          ? {
+              ...firstOrNull(row?.clientes_planes),
+              planes: firstOrNull(firstOrNull(row?.clientes_planes)?.planes),
+            }
+          : null,
+      }
+
+      setSesionesPlan((prev) =>
+        prev
+          .map((s) => (s.id === normalizada.id ? normalizada : s))
+          .sort((a, b) => {
+            const fechaA = `${a.fecha || ''} ${a.hora_inicio || ''}`
+            const fechaB = `${b.fecha || ''} ${b.hora_inicio || ''}`
+            return fechaB.localeCompare(fechaA)
+          })
+      )
+
+      setCitas((prev) =>
+        prev.map((c) =>
+          c.id === normalizada.id
+            ? { ...c, fecha, hora_inicio: normalizeTimeForDb(horaInicio) || horaInicio, hora_fin: normalizeTimeForDb(horaFin) || horaFin, estado: 'programada', notas: notaReagenda }
+            : c
+        )
+      )
+
+      setToast('Sesión reagendada correctamente.')
+      setSesionReagendar(null)
+    } catch (err: any) {
+      setErrorReagenda(err?.message || 'No se pudo reagendar la sesión.')
+    } finally {
+      setGuardandoReagenda(false)
+    }
+  }
+
   const planPrincipal = useMemo(() => {
     if (!historialPlanes.length) return null
     const sorted = [...historialPlanes].sort((a, b) => {
@@ -468,9 +679,7 @@ export default function ClienteDetallePage() {
     return sorted[0] || null
   }, [historialPlanes])
 
-  const planActivo = useMemo(() => {
-    return historialPlanes.find((p) => p.estado === 'activo') || null
-  }, [historialPlanes])
+  const planActivo = useMemo(() => historialPlanes.find((p) => p.estado === 'activo') || null, [historialPlanes])
 
   const resumenPlan = useMemo(() => {
     const planBase = planPrincipal || planActivo
@@ -579,6 +788,12 @@ export default function ClienteDetallePage() {
         </Card>
       ) : null}
 
+      {toast ? (
+        <Card className="border-emerald-400/20 bg-emerald-400/10 p-4">
+          <p className="text-sm font-medium text-emerald-300">{toast}</p>
+        </Card>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard title="Plan" value={truncateText(resumenPlan.nombre, 22)} subtitle={resumenPlan.nombre || 'Resumen actual del cliente'} />
         <StatCard title="Estado del plan" value={getPlanStatusLabel(resumenPlan.estado)} subtitle={resumenPlan.estado ? 'Estado real desde base de datos' : 'Sin plan registrado'} />
@@ -604,8 +819,6 @@ export default function ClienteDetallePage() {
 
       <div className="grid gap-6 xl:grid-cols-3">
         <div className="space-y-6 xl:col-span-2">
-
-          {/* Historial de planes */}
           <Section
             title="Historial de planes"
             description="Registro de planes asignados, renovados, agotados, vencidos o cancelados."
@@ -660,7 +873,6 @@ export default function ClienteDetallePage() {
             </div>
           </Section>
 
-          {/* ── SESIONES Y ASISTENCIA — ACORDEÓN ── */}
           <div className="rounded-3xl border border-white/10 bg-white/[0.02]">
             <button
               type="button"
@@ -682,19 +894,88 @@ export default function ClienteDetallePage() {
 
             {sesionesAbiertas ? (
               <div className="border-t border-white/10 p-4">
-                <AsistenciaRapidaTable
-                  sesiones={sesionesPlan}
-                  onActualizar={(sesionId, nuevoEstado) => {
-                    setSesionesPlan((prev) =>
-                      prev.map((s) => s.id === sesionId ? { ...s, asistencia_estado: nuevoEstado } : s)
-                    )
-                  }}
-                />
+                <div className="overflow-hidden rounded-3xl border border-white/10 bg-black/10">
+                  <div className="border-b border-white/10 px-4 py-3">
+                    <p className="text-sm font-semibold text-white">Asistencia y reagenda</p>
+                    <p className="text-xs text-white/45">Marca asistencia o cambia la fecha de la misma sesión desde una sola lista.</p>
+                  </div>
+
+                  {sesionesPlan.length === 0 ? (
+                    <p className="px-4 py-6 text-sm text-white/55">No hay sesiones del plan registradas.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-sm">
+                        <thead className="border-b border-white/10 bg-white/[0.03] text-white/50">
+                          <tr>
+                            <th className="px-4 py-3 text-left font-medium">Sesión</th>
+                            <th className="px-4 py-3 text-left font-medium">Fecha / hora</th>
+                            <th className="px-4 py-3 text-left font-medium">Asistencia</th>
+                            <th className="px-4 py-3 text-left font-medium">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/10">
+                          {sesionesPlan.map((sesion) => {
+                            const asistenciaActual = (sesion.asistencia_estado || 'pendiente') as AsistenciaEstado
+                            const puedeReagendar = asistenciaActual === 'pendiente' && (sesion.estado || '').toLowerCase() !== 'completado'
+                            const actualizando = actualizandoAsistenciaId === sesion.id
+
+                            return (
+                              <tr key={sesion.id} className="transition hover:bg-white/[0.03]">
+                                <td className="px-4 py-3 align-top">
+                                  <p className="max-w-[240px] truncate font-medium text-white">{sesion.clientes_planes?.planes?.nombre || 'Sesión del plan'}</p>
+                                  <p className="mt-1 text-xs text-white/40">{sesion.empleados?.nombre || 'Sin terapeuta'}</p>
+                                </td>
+                                <td className="px-4 py-3 align-top text-white/70">
+                                  <p>{sesion.fecha || 'Sin fecha'}</p>
+                                  <p className="mt-1 text-xs text-white/45">{onlyHour(sesion.hora_inicio) || '—'} - {onlyHour(sesion.hora_fin) || '—'}</p>
+                                </td>
+                                <td className="px-4 py-3 align-top">
+                                  <div className="flex flex-col gap-2">
+                                    <span className={`w-fit rounded-full border px-2.5 py-1 text-xs font-medium ${asistenciaBadge(asistenciaActual)}`}>
+                                      {asistenciaLabel(asistenciaActual)}
+                                    </span>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {([
+                                        ['asistio', 'Asistió'],
+                                        ['no_asistio_aviso', 'Avisó'],
+                                        ['no_asistio_sin_aviso', 'Sin aviso'],
+                                        ['pendiente', 'Pendiente'],
+                                      ] as [AsistenciaEstado, string][]).map(([estado, label]) => (
+                                        <button
+                                          key={estado}
+                                          type="button"
+                                          disabled={actualizando || asistenciaActual === estado}
+                                          onClick={() => actualizarAsistenciaSesion(sesion.id, estado)}
+                                          className="rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs font-medium text-white/70 transition hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                          {label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 align-top">
+                                  <button
+                                    type="button"
+                                    disabled={!puedeReagendar}
+                                    onClick={() => abrirReagendarSesion(sesion)}
+                                    className="rounded-xl border border-violet-400/20 bg-violet-400/10 px-3 py-1.5 text-xs font-semibold text-violet-200 transition hover:bg-violet-400/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/30"
+                                  >
+                                    Reagendar
+                                  </button>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               </div>
             ) : null}
           </div>
 
-          {/* Pagos */}
           <Section
             title="Pagos del cliente"
             description="Últimos pagos registrados y método utilizado."
@@ -861,6 +1142,104 @@ export default function ClienteDetallePage() {
           </Section>
         </div>
       </div>
+
+      {sesionReagendar ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0f1117] p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-lg font-semibold text-white">Reagendar sesión</p>
+                <p className="mt-1 text-sm text-white/50">
+                  {sesionReagendar.clientes_planes?.planes?.nombre || 'Sesión del plan'} · {sesionReagendar.empleados?.nombre || 'Sin terapeuta'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={cerrarReagendarSesion}
+                className="rounded-full border border-white/10 px-3 py-1 text-sm text-white/60 transition hover:bg-white/[0.06]"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm text-white/65">
+              Actual: {sesionReagendar.fecha || 'Sin fecha'} · {onlyHour(sesionReagendar.hora_inicio) || '—'} - {onlyHour(sesionReagendar.hora_fin) || '—'}
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <label className="block">
+                <span className="text-xs font-medium uppercase tracking-wide text-white/45">Nueva fecha</span>
+                <input
+                  type="date"
+                  value={reagendarForm.fecha}
+                  onChange={(e) => setReagendarForm((prev) => ({ ...prev, fecha: e.target.value }))}
+                  className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-violet-400/40"
+                />
+              </label>
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium uppercase tracking-wide text-white/45">Hora inicio</span>
+                  <input
+                    type="time"
+                    value={reagendarForm.hora_inicio}
+                    onChange={(e) => {
+                      const nextInicio = e.target.value
+                      const duracion = getDurationMinutes(sesionReagendar.hora_inicio, sesionReagendar.hora_fin)
+                      setReagendarForm((prev) => ({ ...prev, hora_inicio: nextInicio, hora_fin: addMinutesToHour(nextInicio, duracion) }))
+                    }}
+                    className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-violet-400/40"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-xs font-medium uppercase tracking-wide text-white/45">Hora fin</span>
+                  <input
+                    type="time"
+                    value={reagendarForm.hora_fin}
+                    onChange={(e) => setReagendarForm((prev) => ({ ...prev, hora_fin: e.target.value }))}
+                    className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-violet-400/40"
+                  />
+                </label>
+              </div>
+
+              <label className="block">
+                <span className="text-xs font-medium uppercase tracking-wide text-white/45">Motivo opcional</span>
+                <textarea
+                  value={reagendarForm.motivo}
+                  onChange={(e) => setReagendarForm((prev) => ({ ...prev, motivo: e.target.value }))}
+                  rows={3}
+                  placeholder="Ej: cliente pidió cambiar la fecha"
+                  className="mt-1 w-full resize-none rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-violet-400/40"
+                />
+              </label>
+            </div>
+
+            {errorReagenda ? (
+              <p className="mt-3 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-300">{errorReagenda}</p>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={cerrarReagendarSesion}
+                disabled={guardandoReagenda}
+                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-white/75 transition hover:bg-white/[0.06] disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={guardarReagendaSesion}
+                disabled={guardandoReagenda}
+                className="rounded-2xl border border-violet-400/20 bg-violet-400/15 px-4 py-2 text-sm font-semibold text-violet-100 transition hover:bg-violet-400/20 disabled:opacity-50"
+              >
+                {guardandoReagenda ? 'Guardando...' : 'Guardar cambio'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

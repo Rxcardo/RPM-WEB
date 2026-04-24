@@ -40,10 +40,15 @@ type Empleado = {
 
 type PlanCliente = {
   id: string
+  cliente_id?: string | null
+  plan_id?: string | null
+  fecha_inicio?: string | null
   fecha_fin?: string | null
   estado?: string | null
   sesiones_totales?: number | null
   sesiones_usadas?: number | null
+  clientes?: { nombre?: string | null; telefono?: string | null; email?: string | null } | { nombre?: string | null; telefono?: string | null; email?: string | null }[] | null
+  planes?: { nombre?: string | null } | { nombre?: string | null }[] | null
 }
 
 type EstadoCuentaCliente = {
@@ -340,11 +345,15 @@ export default function DashboardPage() {
   const [asistenciaFilterFecha, setAsistenciaFilterFecha] = useState(getDateKey(new Date()))
   const [savingAsistenciaId, setSavingAsistenciaId] = useState<string | null>(null)
   const [openReprogramacionId, setOpenReprogramacionId] = useState<string | null>(null)
+  const [openSesionPlanId, setOpenSesionPlanId] = useState<string | null>(null)
+  const [openEmpleadoAsistenciaId, setOpenEmpleadoAsistenciaId] = useState<string | null>(null)
   const [reprogramandoId, setReprogramandoId] = useState<string | null>(null)
   const [reprogramacionDrafts, setReprogramacionDrafts] = useState<Record<string, ReprogramacionDraft>>({})
   const [savingEmpleadoAsistenciaId, setSavingEmpleadoAsistenciaId] = useState<string | null>(null)
   const [sesionesPlanPage, setSesionesPlanPage] = useState(1)
   const [empleadosAsistenciaPage, setEmpleadosAsistenciaPage] = useState(1)
+  const [mostrarPlanesActivos, setMostrarPlanesActivos] = useState(false)
+  const [filtroPlanActivo, setFiltroPlanActivo] = useState('')
 
   const PAGE_SIZE = 10
 
@@ -416,7 +425,20 @@ export default function DashboardPage() {
         supabase.from('citas').select('*'),
         supabase.from('pagos').select('id, fecha, monto, monto_equivalente_usd, estado'),
         supabase.from('empleados').select('id, nombre, estado, rol'),
-        supabase.from('clientes_planes').select('id, fecha_fin, estado, sesiones_totales, sesiones_usadas'),
+        supabase
+          .from('clientes_planes')
+          .select(`
+            id,
+            cliente_id,
+            plan_id,
+            fecha_inicio,
+            fecha_fin,
+            estado,
+            sesiones_totales,
+            sesiones_usadas,
+            clientes:cliente_id ( nombre, telefono, email ),
+            planes:plan_id ( nombre )
+          `),
         supabase
           .from('entrenamientos')
           .select(`
@@ -599,6 +621,53 @@ export default function DashboardPage() {
     }
   }, [clientes, citas, pagos, empleados, clientesPlanes, entrenamientosPlan, today, hoy, asistenciaFilterFecha])
 
+  const planesActivosDetalle = useMemo(() => {
+    return clientesPlanes
+      .filter((cp) => (cp.estado || '').toLowerCase() === 'activo')
+      .map((cp) => {
+        const cliente = firstOrNull(cp.clientes)
+        const plan = firstOrNull(cp.planes)
+        const sesionesTotales = Number(cp.sesiones_totales || 0)
+        const sesionesUsadas = Number(cp.sesiones_usadas || 0)
+        const sesionesDisponibles = Math.max(0, sesionesTotales - sesionesUsadas)
+
+        return {
+          id: cp.id,
+          cliente_id: cp.cliente_id || '',
+          cliente_nombre: cliente?.nombre || 'Cliente sin nombre',
+          cliente_telefono: cliente?.telefono || '',
+          cliente_email: cliente?.email || '',
+          plan_nombre: plan?.nombre || 'Plan sin nombre',
+          fecha_inicio: cp.fecha_inicio || null,
+          fecha_fin: cp.fecha_fin || null,
+          sesiones_totales: sesionesTotales,
+          sesiones_usadas: sesionesUsadas,
+          sesiones_disponibles: sesionesDisponibles,
+        }
+      })
+      .sort((a, b) => a.cliente_nombre.localeCompare(b.cliente_nombre))
+  }, [clientesPlanes])
+
+  const planesActivosDetalleFiltrados = useMemo(() => {
+    const query = filtroPlanActivo.trim().toLowerCase()
+
+    if (!query) return planesActivosDetalle
+
+    return planesActivosDetalle.filter((item) => {
+      const searchable = [
+        item.cliente_nombre,
+        item.cliente_telefono,
+        item.cliente_email,
+        item.plan_nombre,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+
+      return searchable.includes(query)
+    })
+  }, [planesActivosDetalle, filtroPlanActivo])
+
   const topPersonal = useMemo(() => {
     const counts = new Map<string, number>()
 
@@ -709,8 +778,23 @@ export default function DashboardPage() {
   }, [sesionesPlanHoyCompactas, sesionesPlanPage])
 
   const empleadosActivosNoAdmin = useMemo(() => {
-    return empleados.filter((e) => e.estado?.toLowerCase() === 'activo' && (e.rol || '').toLowerCase() !== 'admin')
-  }, [empleados])
+    return empleados
+      .filter((e) => e.estado?.toLowerCase() === 'activo' && (e.rol || '').toLowerCase() !== 'admin')
+      .sort((a, b) => {
+        const registroA = empleadosAsistencia.find(
+          (row) => row.empleado_id === a.id && row.fecha === asistenciaFilterFecha
+        )
+        const registroB = empleadosAsistencia.find(
+          (row) => row.empleado_id === b.id && row.fecha === asistenciaFilterFecha
+        )
+
+        const aMarcado = registroA?.estado ? 1 : 0
+        const bMarcado = registroB?.estado ? 1 : 0
+
+        if (aMarcado !== bMarcado) return aMarcado - bMarcado
+        return String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es')
+      })
+  }, [empleados, empleadosAsistencia, asistenciaFilterFecha])
 
   const empleadosAsistenciaTotalPages = useMemo(
     () => Math.max(1, Math.ceil(empleadosActivosNoAdmin.length / PAGE_SIZE)),
@@ -791,6 +875,18 @@ export default function DashboardPage() {
 
     return items
   }, [stats])
+
+  async function copiarNombrePlanActivo(nombre: string) {
+    const nombreLimpio = (nombre || '').trim()
+    if (!nombreLimpio) return
+
+    try {
+      await navigator.clipboard.writeText(nombreLimpio)
+      showAlert('success', 'Copiado', `${nombreLimpio} copiado al portapapeles.`)
+    } catch {
+      showAlert('warning', 'No se pudo copiar', 'Copia el nombre manualmente.')
+    }
+  }
 
   async function marcarAsistenciaPlan(
     entrenamientoId: string,
@@ -1042,12 +1138,22 @@ export default function DashboardPage() {
           subtitle={`+${stats.clientesNuevosMes} este mes`}
           color="text-sky-400"
         />
-        <StatCard
-          title="Planes activos"
-          value={stats.planesActivos}
-          subtitle={`${stats.totalSesionesDisponibles} sesiones disponibles`}
-          color="text-violet-400"
-        />
+        <button
+          type="button"
+          onClick={() => setMostrarPlanesActivos((prev) => !prev)}
+          className="block rounded-3xl text-left transition hover:-translate-y-0.5 hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-violet-400/40"
+        >
+          <StatCard
+            title="Planes activos"
+            value={stats.planesActivos}
+            subtitle={
+              mostrarPlanesActivos
+                ? 'Ocultar personas'
+                : `${stats.totalSesionesDisponibles} sesiones disponibles`
+            }
+            color="text-violet-400"
+          />
+        </button>
         <StatCard
           title="Citas hoy"
           value={stats.citasHoy}
@@ -1072,6 +1178,89 @@ export default function DashboardPage() {
           color={stats.sesionesPlanPendientes > 0 ? 'text-amber-400' : 'text-white/75'}
         />
       </div>
+
+      {mostrarPlanesActivos ? (
+        <Section
+          title="Personas con planes activos"
+          description="Vista compacta de clientes con plan activo."
+        >
+          <Card className="p-3 sm:p-4">
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <input
+                type="text"
+                value={filtroPlanActivo}
+                onChange={(e) => setFiltroPlanActivo(e.target.value)}
+                placeholder="Buscar nombre, plan, teléfono..."
+                className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none placeholder:text-white/35 focus:border-white/20 focus:bg-white/[0.05] sm:max-w-xs"
+              />
+
+              <p className="text-[11px] text-white/45">
+                {planesActivosDetalleFiltrados.length} de {planesActivosDetalle.length}
+              </p>
+            </div>
+
+            {planesActivosDetalle.length === 0 ? (
+              <p className="text-sm text-white/55">No hay personas con planes activos.</p>
+            ) : planesActivosDetalleFiltrados.length === 0 ? (
+              <p className="text-sm text-white/55">No hay resultados con ese filtro.</p>
+            ) : (
+              <div className="max-h-[360px] overflow-y-auto pr-1">
+                <div className="divide-y divide-white/10">
+                  {planesActivosDetalleFiltrados.map((item) => (
+                    <div
+                      key={item.id}
+                      className="grid grid-cols-1 gap-2 py-2.5 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto] sm:items-center"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-white">
+                          {item.cliente_nombre}
+                        </p>
+                        {item.cliente_telefono || item.cliente_email ? (
+                          <p className="mt-0.5 truncate text-[11px] text-white/40">
+                            {[item.cliente_telefono, item.cliente_email].filter(Boolean).join(' · ')}
+                          </p>
+                        ) : null}
+                      </div>
+
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-medium text-violet-300">
+                          {item.plan_nombre}
+                        </p>
+                        <p className="mt-0.5 truncate text-[11px] text-white/40">
+                          Vence: {formatDate(item.fecha_fin)}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
+                        <span className="rounded-full border border-violet-400/20 bg-violet-400/10 px-2 py-1 text-[11px] font-medium text-violet-300">
+                          {item.sesiones_disponibles}/{item.sesiones_totales} sesiones
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => void copiarNombrePlanActivo(item.cliente_nombre)}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-white/70 transition hover:bg-white/[0.06]"
+                        >
+                          Copiar
+                        </button>
+
+                        {item.cliente_id ? (
+                          <Link
+                            href={`/admin/personas/clientes/${item.cliente_id}`}
+                            className="rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-white/70 transition hover:bg-white/[0.06]"
+                          >
+                            Ver
+                          </Link>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Card>
+        </Section>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <div className="xl:col-span-1">
@@ -1113,171 +1302,195 @@ export default function DashboardPage() {
                   const plan = firstOrNull(clientePlan?.planes)
                   const actor = firstOrNull(row.actualizado_por)
                   const reprogramacionAbierta = openReprogramacionId === row.id
+                  const sesionAbierta = openSesionPlanId === row.id
                   const draft = reprogramacionDrafts[row.id] || initReprogramacionDraft(row)
 
                   return (
-                    <Card key={row.id} className="p-4">
-                      <div className="flex items-start justify-between gap-3">
+                    <Card key={row.id} className="overflow-hidden p-0">
+                      <button
+                        type="button"
+                        onClick={() => setOpenSesionPlanId((current) => (current === row.id ? null : row.id))}
+                        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-white/[0.03]"
+                      >
                         <div className="min-w-0">
-                          <p className="truncate text-base font-semibold text-white">
-                            {cliente?.nombre || 'Cliente'}
-                            <span className={`ml-2 inline-block h-2.5 w-2.5 rounded-full ${asistenciaPlanDotClass(row.asistencia_estado)}`} />
-                          </p>
+                          <div className="flex items-center gap-2">
+                            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${asistenciaPlanDotClass(row.asistencia_estado)}`} />
+                            <p className="truncate text-sm font-semibold text-white">
+                              {cliente?.nombre || 'Cliente'}
+                            </p>
+                          </div>
 
-                          <p className="mt-1 text-sm text-white/55">
-                            {formatTime(row.hora_inicio)} - {formatTime(row.hora_fin)} · {empleado?.nombre || 'Empleado'}
+                          <p className="mt-0.5 truncate pl-4 text-[11px] text-white/45">
+                            {formatTime(row.hora_inicio)} - {formatTime(row.hora_fin)} · {asistenciaLabel(row.asistencia_estado)}
                           </p>
+                        </div>
 
-                          <p className="mt-1 text-xs text-white/40">
-                            {plan?.nombre || 'Plan'} · {roleLabel(empleado?.rol)}
-                          </p>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <span className="hidden rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] font-medium text-white/50 sm:inline-flex">
+                            {plan?.nombre || 'Plan'}
+                          </span>
+                          <span className="text-xs text-white/35">
+                            {sesionAbierta ? '−' : '+'}
+                          </span>
+                        </div>
+                      </button>
 
-                          <p className="mt-1 text-xs text-white/45">
-                            Estado: {asistenciaLabel(row.asistencia_estado)}
-                          </p>
-
-                          {row.cliente_id ? (
-                            <div className="mt-2 space-y-1">
-                              <span
-                                className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${getEstadoCuentaClass(
-                                  mapaEstadoCuentaClientes.get(row.cliente_id)
-                                )}`}
-                              >
-                                {getEstadoCuentaLabel(mapaEstadoCuentaClientes.get(row.cliente_id))}
-                              </span>
-                              <p className="text-[11px] text-white/35">
-                                {getEstadoCuentaDetalle(mapaEstadoCuentaClientes.get(row.cliente_id))}
+                      {sesionAbierta ? (
+                        <div className="border-t border-white/10 px-3 pb-3 pt-2">
+                          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+                            <div className="min-w-0 space-y-1">
+                              <p className="truncate text-xs text-white/60">
+                                {empleado?.nombre || 'Empleado'} · {roleLabel(empleado?.rol)}
                               </p>
+
+                              <p className="truncate text-[11px] text-violet-300/80">
+                                {plan?.nombre || 'Plan'}
+                              </p>
+
+                              {row.cliente_id ? (
+                                <div className="flex flex-wrap items-center gap-2 pt-1">
+                                  <span
+                                    className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${getEstadoCuentaClass(
+                                      mapaEstadoCuentaClientes.get(row.cliente_id)
+                                    )}`}
+                                  >
+                                    {getEstadoCuentaLabel(mapaEstadoCuentaClientes.get(row.cliente_id))}
+                                  </span>
+                                  <span className="text-[10px] text-white/35">
+                                    {getEstadoCuentaDetalle(mapaEstadoCuentaClientes.get(row.cliente_id))}
+                                  </span>
+                                </div>
+                              ) : null}
+
+                              {actor?.nombre ? (
+                                <p className="text-[10px] text-white/30">
+                                  Último registro: {actor.nombre}
+                                  {row.fecha_asistencia ? ` · ${formatDateTime(row.fecha_asistencia)}` : ''}
+                                </p>
+                              ) : null}
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-1.5 sm:w-[132px]">
+                              <button
+                                type="button"
+                                disabled={savingAsistenciaId === row.id}
+                                onClick={() => void marcarAsistenciaPlan(row.id, 'asistio')}
+                                className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-400/15 disabled:opacity-60"
+                              >
+                                ✓
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={savingAsistenciaId === row.id}
+                                onClick={() => void marcarAsistenciaPlan(row.id, 'no_asistio_aviso')}
+                                className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-2 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-400/15 disabled:opacity-60"
+                              >
+                                A
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={savingAsistenciaId === row.id}
+                                onClick={() => void marcarAsistenciaPlan(row.id, 'no_asistio_sin_aviso')}
+                                className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-2 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-400/15 disabled:opacity-60"
+                              >
+                                X
+                              </button>
+                            </div>
+                          </div>
+
+                          {(row.asistencia_estado || '').toLowerCase() === 'no_asistio_aviso' ? (
+                            <div className="mt-2">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenReprogramacion(row)}
+                                className="rounded-lg border border-violet-400/20 bg-violet-400/10 px-2.5 py-1.5 text-[11px] font-semibold text-violet-300 transition hover:bg-violet-400/15"
+                              >
+                                {reprogramacionAbierta ? 'Ocultar reprogramación' : 'Reprogramar'}
+                              </button>
                             </div>
                           ) : null}
 
-                          {actor?.nombre ? (
-                            <p className="mt-1 text-[11px] text-white/35">
-                              Último registro: {actor.nombre}
-                              {row.fecha_asistencia ? ` · ${formatDateTime(row.fecha_asistencia)}` : ''}
-                            </p>
+                          {reprogramacionAbierta ? (
+                            <div className="mt-2 grid gap-2 rounded-xl border border-violet-400/20 bg-violet-400/5 p-2 sm:grid-cols-2">
+                              <input
+                                type="date"
+                                value={draft.fecha}
+                                onChange={(e) =>
+                                  setReprogramacionDrafts((prev) => ({
+                                    ...prev,
+                                    [row.id]: { ...draft, fecha: e.target.value },
+                                  }))
+                                }
+                                className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
+                              />
+
+                              <div className="grid grid-cols-2 gap-2">
+                                <input
+                                  type="time"
+                                  value={draft.hora_inicio}
+                                  onChange={(e) =>
+                                    setReprogramacionDrafts((prev) => ({
+                                      ...prev,
+                                      [row.id]: {
+                                        ...draft,
+                                        hora_inicio: e.target.value,
+                                        hora_fin: draft.hora_fin || addMinutesToTime(e.target.value, 60),
+                                      },
+                                    }))
+                                  }
+                                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
+                                />
+
+                                <input
+                                  type="time"
+                                  value={draft.hora_fin}
+                                  onChange={(e) =>
+                                    setReprogramacionDrafts((prev) => ({
+                                      ...prev,
+                                      [row.id]: { ...draft, hora_fin: e.target.value },
+                                    }))
+                                  }
+                                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <input
+                                  type="text"
+                                  value={draft.motivo}
+                                  onChange={(e) =>
+                                    setReprogramacionDrafts((prev) => ({
+                                      ...prev,
+                                      [row.id]: { ...draft, motivo: e.target.value },
+                                    }))
+                                  }
+                                  placeholder="Motivo"
+                                  className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2 flex gap-2">
+                                <button
+                                  type="button"
+                                  disabled={reprogramandoId === row.id}
+                                  onClick={() => void reprogramarSesion(row)}
+                                  className="rounded-lg border border-violet-400/20 bg-violet-400/10 px-2.5 py-1.5 text-[11px] font-semibold text-violet-300 transition hover:bg-violet-400/15 disabled:opacity-60"
+                                >
+                                  {reprogramandoId === row.id ? 'Guardando...' : 'Guardar'}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => setOpenReprogramacionId(null)}
+                                  className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[11px] font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            </div>
                           ) : null}
-                        </div>
-
-                        <div className="flex flex-col gap-2">
-                          <button
-                            type="button"
-                            disabled={savingAsistenciaId === row.id}
-                            onClick={() => void marcarAsistenciaPlan(row.id, 'asistio')}
-                            className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-400/15 disabled:opacity-60"
-                          >
-                            ✓
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={savingAsistenciaId === row.id}
-                            onClick={() => void marcarAsistenciaPlan(row.id, 'no_asistio_aviso')}
-                            className="rounded-xl border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-400/15 disabled:opacity-60"
-                          >
-                            A
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={savingAsistenciaId === row.id}
-                            onClick={() => void marcarAsistenciaPlan(row.id, 'no_asistio_sin_aviso')}
-                            className="rounded-xl border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-xs font-semibold text-rose-300 transition hover:bg-rose-400/15 disabled:opacity-60"
-                          >
-                            X
-                          </button>
-                        </div>
-                      </div>
-
-                      {(row.asistencia_estado || '').toLowerCase() === 'no_asistio_aviso' ? (
-                        <div className="mt-3">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenReprogramacion(row)}
-                            className="rounded-xl border border-violet-400/20 bg-violet-400/10 px-3 py-2 text-xs font-semibold text-violet-300 transition hover:bg-violet-400/15"
-                          >
-                            {reprogramacionAbierta ? 'Ocultar reprogramación' : 'Reprogramar'}
-                          </button>
-                        </div>
-                      ) : null}
-
-                      {reprogramacionAbierta ? (
-                        <div className="mt-3 grid gap-3 rounded-2xl border border-violet-400/20 bg-violet-400/5 p-3 sm:grid-cols-2">
-                          <input
-                            type="date"
-                            value={draft.fecha}
-                            onChange={(e) =>
-                              setReprogramacionDrafts((prev) => ({
-                                ...prev,
-                                [row.id]: { ...draft, fecha: e.target.value },
-                              }))
-                            }
-                            className={inputClassName}
-                          />
-
-                          <div className="grid grid-cols-2 gap-3">
-                            <input
-                              type="time"
-                              value={draft.hora_inicio}
-                              onChange={(e) =>
-                                setReprogramacionDrafts((prev) => ({
-                                  ...prev,
-                                  [row.id]: {
-                                    ...draft,
-                                    hora_inicio: e.target.value,
-                                    hora_fin: draft.hora_fin || addMinutesToTime(e.target.value, 60),
-                                  },
-                                }))
-                              }
-                              className={inputClassName}
-                            />
-
-                            <input
-                              type="time"
-                              value={draft.hora_fin}
-                              onChange={(e) =>
-                                setReprogramacionDrafts((prev) => ({
-                                  ...prev,
-                                  [row.id]: { ...draft, hora_fin: e.target.value },
-                                }))
-                              }
-                              className={inputClassName}
-                            />
-                          </div>
-
-                          <div className="sm:col-span-2">
-                            <input
-                              type="text"
-                              value={draft.motivo}
-                              onChange={(e) =>
-                                setReprogramacionDrafts((prev) => ({
-                                  ...prev,
-                                  [row.id]: { ...draft, motivo: e.target.value },
-                                }))
-                              }
-                              placeholder="Motivo"
-                              className={inputClassName}
-                            />
-                          </div>
-
-                          <div className="sm:col-span-2 flex gap-2">
-                            <button
-                              type="button"
-                              disabled={reprogramandoId === row.id}
-                              onClick={() => void reprogramarSesion(row)}
-                              className="rounded-xl border border-violet-400/20 bg-violet-400/10 px-3 py-2 text-xs font-semibold text-violet-300 transition hover:bg-violet-400/15 disabled:opacity-60"
-                            >
-                              {reprogramandoId === row.id ? 'Guardando...' : 'Guardar'}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => setOpenReprogramacionId(null)}
-                              className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06]"
-                            >
-                              Cancelar
-                            </button>
-                          </div>
                         </div>
                       ) : null}
                     </Card>
@@ -1317,7 +1530,7 @@ export default function DashboardPage() {
         </div>
 
         <div className="xl:col-span-1">
-          <Section title="Asistencia del personal hoy" description="Acción rápida del día.">
+          <Section title="Asistencia del personal hoy" description="Toca un nombre para marcar asistencia.">
             <div className="mb-3 flex items-center justify-between">
               <input
                 type="date"
@@ -1331,7 +1544,7 @@ export default function DashboardPage() {
               </span>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-2">
               {empleadosActivosNoAdmin.length === 0 ? (
                 <Card className="p-4">
                   <p className="text-sm text-white/55">No hay personal activo.</p>
@@ -1340,85 +1553,105 @@ export default function DashboardPage() {
                 empleadosActivosNoAdminPaginados.map((empleado) => {
                   const registro = mapaAsistenciaPersonalHoy.get(empleado.id)
                   const actor = firstOrNull(registro?.actualizado_por)
+                  const abierto = openEmpleadoAsistenciaId === empleado.id
 
                   return (
-                    <Card key={empleado.id} className="p-4">
-                      <div className="flex items-start justify-between gap-3">
+                    <Card key={empleado.id} className="overflow-hidden p-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setOpenEmpleadoAsistenciaId((current) =>
+                            current === empleado.id ? null : empleado.id
+                          )
+                        }
+                        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-white/[0.04]"
+                      >
                         <div className="min-w-0">
-                          <p className="truncate text-base font-semibold text-white">
-                            {empleado.nombre || 'Empleado'}
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-sm font-semibold text-white">
+                              {empleado.nombre || 'Empleado'}
+                            </p>
                             <span
-                              className={`ml-2 inline-block h-2.5 w-2.5 rounded-full ${asistenciaPersonalDotClass(
+                              className={`h-2 w-2 shrink-0 rounded-full ${asistenciaPersonalDotClass(
                                 registro?.estado
                               )}`}
                             />
+                          </div>
+                          <p className="mt-0.5 truncate text-[11px] text-white/45">
+                            {roleLabel(empleado.rol)} · {asistenciaPersonalLabel(registro?.estado)}
                           </p>
+                        </div>
 
-                          <p className="mt-1 text-sm text-white/55">
-                            {roleLabel(empleado.rol)}
-                          </p>
+                        <span className="shrink-0 text-xs text-white/40">
+                          {abierto ? '−' : '+'}
+                        </span>
+                      </button>
 
-                          <p className="mt-1 text-xs text-white/45">
-                            {asistenciaPersonalLabel(registro?.estado)}
-                          </p>
-
+                      {abierto ? (
+                        <div className="border-t border-white/10 px-3 pb-3 pt-2">
                           {actor?.nombre ? (
-                            <p className="mt-1 text-[11px] text-white/35">
+                            <p className="mb-2 text-[11px] text-white/35">
                               Último registro: {actor.nombre}
                               {registro?.updated_at || registro?.created_at
                                 ? ` · ${formatDateTime(registro?.updated_at || registro?.created_at)}`
                                 : ''}
                             </p>
-                          ) : null}
+                          ) : (
+                            <p className="mb-2 text-[11px] text-white/35">Sin registro todavía.</p>
+                          )}
+
+                          <div className="grid grid-cols-5 gap-1.5">
+                            <button
+                              type="button"
+                              disabled={savingEmpleadoAsistenciaId === empleado.id}
+                              onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'asistio')}
+                              className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-400/15 disabled:opacity-60"
+                            >
+                              ✓
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={savingEmpleadoAsistenciaId === empleado.id}
+                              onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'permiso')}
+                              className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-2 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-400/15 disabled:opacity-60"
+                            >
+                              P
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={savingEmpleadoAsistenciaId === empleado.id}
+                              onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'no_asistio')}
+                              className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-2 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-400/15 disabled:opacity-60"
+                            >
+                              X
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={savingEmpleadoAsistenciaId === empleado.id}
+                              onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'reposo')}
+                              className="rounded-lg border border-fuchsia-400/20 bg-fuchsia-400/10 px-2 py-1.5 text-xs font-semibold text-fuchsia-300 transition hover:bg-fuchsia-400/15 disabled:opacity-60"
+                            >
+                              R
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={savingEmpleadoAsistenciaId === empleado.id}
+                              onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'vacaciones')}
+                              className="rounded-lg border border-sky-400/20 bg-sky-400/10 px-2 py-1.5 text-[11px] font-semibold text-sky-300 transition hover:bg-sky-400/15 disabled:opacity-60"
+                            >
+                              Vac.
+                            </button>
+                          </div>
+
+                          <p className="mt-2 text-[10px] text-white/35">
+                            Al marcar un estado, este empleado baja al final de la lista.
+                          </p>
                         </div>
-
-                        <div className="grid grid-cols-3 gap-2">
-                          <button
-                            type="button"
-                            disabled={savingEmpleadoAsistenciaId === empleado.id}
-                            onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'asistio')}
-                            className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-2 py-2 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-400/15 disabled:opacity-60"
-                          >
-                            ✓
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={savingEmpleadoAsistenciaId === empleado.id}
-                            onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'permiso')}
-                            className="rounded-xl border border-amber-400/20 bg-amber-400/10 px-2 py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-400/15 disabled:opacity-60"
-                          >
-                            P
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={savingEmpleadoAsistenciaId === empleado.id}
-                            onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'no_asistio')}
-                            className="rounded-xl border border-rose-400/20 bg-rose-400/10 px-2 py-2 text-xs font-semibold text-rose-300 transition hover:bg-rose-400/15 disabled:opacity-60"
-                          >
-                            X
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={savingEmpleadoAsistenciaId === empleado.id}
-                            onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'reposo')}
-                            className="rounded-xl border border-fuchsia-400/20 bg-fuchsia-400/10 px-2 py-2 text-xs font-semibold text-fuchsia-300 transition hover:bg-fuchsia-400/15 disabled:opacity-60"
-                          >
-                            R
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={savingEmpleadoAsistenciaId === empleado.id}
-                            onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'vacaciones')}
-                            className="col-span-2 rounded-xl border border-sky-400/20 bg-sky-400/10 px-2 py-2 text-xs font-semibold text-sky-300 transition hover:bg-sky-400/15 disabled:opacity-60"
-                          >
-                            Vacaciones
-                          </button>
-                        </div>
-                      </div>
+                      ) : null}
                     </Card>
                   )
                 })
