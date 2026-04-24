@@ -564,8 +564,6 @@ export default function ClienteDetallePage() {
               ? 'Asistencia marcada. La sesión fue consumida.'
               : 'Sesión devuelta a pendiente.'
       )
-
-      if (clienteId) void loadClienteExtras(String(clienteId))
     } catch (err: any) {
       setWarning(err?.message || 'No se pudo actualizar la asistencia.')
     } finally {
@@ -932,7 +930,7 @@ export default function ClienteDetallePage() {
                 <div className="overflow-hidden rounded-3xl border border-white/10 bg-black/10">
                   <div className="border-b border-white/10 px-4 py-3">
                     <p className="text-sm font-semibold text-white">Asistencia y reagenda</p>
-                    <p className="text-xs text-white/45">Si avisa, la sesión queda congelada y se puede reagendar dentro de la vigencia del plan.</p>
+                    <p className="text-xs text-white/45">Puedes reagendar sesiones pendientes o congeladas por aviso, siempre dentro de la vigencia del plan.</p>
                   </div>
 
                   {sesionesPlan.length === 0 ? (
@@ -952,8 +950,8 @@ export default function ClienteDetallePage() {
                           {sesionesPlan.map((sesion) => {
                             const asistenciaActual = (sesion.asistencia_estado || 'pendiente') as AsistenciaEstado
                             const puedeReagendar =
-                              asistenciaActual === 'no_asistio_aviso' &&
-                              sesion.reprogramable === true &&
+                              (asistenciaActual === 'pendiente' ||
+                                (asistenciaActual === 'no_asistio_aviso' && sesion.reprogramable === true)) &&
                               (sesion.estado || '').toLowerCase() !== 'completado'
                             const actualizando = actualizandoAsistenciaId === sesion.id
 

@@ -912,8 +912,63 @@ export default function DashboardPage() {
       if (error) throw new Error(error.message)
       if (data?.ok === false) throw new Error(data?.error || 'No se pudo marcar la asistencia.')
 
-      showAlert('success', 'Listo', 'Asistencia del plan actualizada.')
-      await loadDashboard()
+      const mensaje =
+        estado === 'no_asistio_aviso'
+          ? 'Sesión congelada: no consume sesión y queda disponible para reprogramar.'
+          : estado === 'no_asistio_sin_aviso'
+            ? 'No asistió sin aviso: la sesión fue consumida.'
+            : 'Asistió: la sesión fue consumida.'
+
+      const fechaAsistencia = new Date().toISOString()
+      const consumeSesion = estado === 'asistio' || estado === 'no_asistio_sin_aviso'
+      const rowAnterior = entrenamientosPlan.find((row) => row.id === entrenamientoId)
+      const consumiaAntes = rowAnterior?.consume_sesion === true
+      const deltaSesiones = consumiaAntes === consumeSesion ? 0 : consumeSesion ? 1 : -1
+
+      setEntrenamientosPlan((prev) =>
+        prev.map((row) =>
+          row.id === entrenamientoId
+            ? {
+                ...row,
+                asistencia_estado: estado,
+                aviso_previo: estado === 'no_asistio_aviso',
+                consume_sesion: consumeSesion,
+                reprogramable: estado === 'no_asistio_aviso',
+                fecha_asistencia: fechaAsistencia,
+                marcado_por: auditorId || row.marcado_por || null,
+                estado: estado === 'asistio' ? 'completado' : 'no_asistio',
+              }
+            : row
+        )
+      )
+
+      if (rowAnterior?.cliente_plan_id && deltaSesiones !== 0) {
+        setClientesPlanes((prev) =>
+          prev.map((plan) => {
+            if (plan.id !== rowAnterior.cliente_plan_id) return plan
+
+            const sesionesTotales = Number(plan.sesiones_totales || 0)
+            const sesionesUsadasActuales = Number(plan.sesiones_usadas || 0)
+            const sesionesUsadas = Math.min(
+              sesionesTotales,
+              Math.max(0, sesionesUsadasActuales + deltaSesiones)
+            )
+
+            return {
+              ...plan,
+              sesiones_usadas: sesionesUsadas,
+              estado:
+                sesionesTotales > 0 && sesionesUsadas >= sesionesTotales
+                  ? 'agotado'
+                  : plan.estado === 'agotado' && sesionesUsadas < sesionesTotales
+                    ? 'activo'
+                    : plan.estado,
+            }
+          })
+        )
+      }
+
+      showAlert('success', 'Listo', mensaje)
     } catch (err: any) {
       showAlert('error', 'Error', err?.message || 'No se pudo marcar la asistencia.')
     } finally {
@@ -952,6 +1007,19 @@ export default function DashboardPage() {
       return
     }
 
+    const clientePlan = firstOrNull(row.clientes_planes)
+    const fechaFinPlan = clientePlan?.fecha_fin || null
+
+    if (fechaFinPlan && draft.fecha > fechaFinPlan) {
+      showAlert('warning', 'Fuera de vigencia', `No puedes reprogramar después del vencimiento del plan (${fechaFinPlan}).`)
+      return
+    }
+
+    if ((row.asistencia_estado || '').toLowerCase() !== 'no_asistio_aviso' || row.reprogramable !== true) {
+      showAlert('warning', 'No disponible', 'Solo puedes reprogramar sesiones congeladas por inasistencia con aviso.')
+      return
+    }
+
     try {
       setReprogramandoId(row.id)
       setAlert(null)
@@ -979,9 +1047,37 @@ export default function DashboardPage() {
       if (error) throw new Error(error.message)
       if (data?.ok === false) throw new Error(data?.error || 'No se pudo reprogramar.')
 
+      const horaInicioNormalizadaLocal = horaInicioNormalizada
+      const horaFinNormalizadaLocal = horaFinNormalizada
+
+      setEntrenamientosPlan((prev) =>
+        prev.map((item) =>
+          item.id === row.id
+            ? {
+                ...item,
+                fecha: draft.fecha,
+                hora_inicio: horaInicioNormalizadaLocal,
+                hora_fin: horaFinNormalizadaLocal,
+                estado: 'programado',
+                asistencia_estado: 'pendiente',
+                aviso_previo: false,
+                consume_sesion: false,
+                reprogramable: false,
+                motivo_asistencia: draft.motivo || null,
+                fecha_asistencia: null,
+                marcado_por: auditorId || item.marcado_por || null,
+              }
+            : item
+        )
+      )
+
+      setReprogramacionDrafts((prev) => {
+        const next = { ...prev }
+        delete next[row.id]
+        return next
+      })
       setOpenReprogramacionId(null)
       showAlert('success', 'Reprogramado', 'La sesión fue reprogramada correctamente.')
-      await loadDashboard()
     } catch (err: any) {
       showAlert('error', 'Error', err?.message || 'No se pudo reprogramar la sesión.')
     } finally {
@@ -1007,6 +1103,8 @@ export default function DashboardPage() {
         (a) => a.empleado_id === empleadoId && a.fecha === asistenciaFilterFecha
       )
 
+      const nowIso = new Date().toISOString()
+
       if (existente) {
         const { error } = await supabase
           .from('empleados_asistencia')
@@ -1018,21 +1116,52 @@ export default function DashboardPage() {
           .eq('id', existente.id)
 
         if (error) throw new Error(error.message)
+
+        setEmpleadosAsistencia((prev) =>
+          prev.map((row) =>
+            row.id === existente.id
+              ? {
+                  ...row,
+                  estado,
+                  observaciones: null,
+                  updated_by: auditorId || null,
+                  updated_at: nowIso,
+                }
+              : row
+          )
+        )
       } else {
-        const { error } = await supabase.from('empleados_asistencia').insert({
-          empleado_id: empleadoId,
-          fecha: asistenciaFilterFecha,
-          estado,
-          observaciones: null,
-          created_by: auditorId || null,
-          updated_by: auditorId || null,
-        })
+        const { data, error } = await supabase
+          .from('empleados_asistencia')
+          .insert({
+            empleado_id: empleadoId,
+            fecha: asistenciaFilterFecha,
+            estado,
+            observaciones: null,
+            created_by: auditorId || null,
+            updated_by: auditorId || null,
+          })
+          .select(`
+            id,
+            empleado_id,
+            fecha,
+            estado,
+            observaciones,
+            created_at,
+            updated_at,
+            created_by,
+            updated_by,
+            empleados:empleado_id ( nombre, rol ),
+            actualizado_por:updated_by ( id, nombre )
+          `)
+          .single()
 
         if (error) throw new Error(error.message)
+
+        setEmpleadosAsistencia((prev) => [data as unknown as EmpleadoAsistenciaRow, ...prev])
       }
 
       showAlert('success', 'Listo', 'Asistencia del personal actualizada.')
-      await loadDashboard()
     } catch (err: any) {
       showAlert('error', 'Error', err?.message || 'No se pudo marcar la asistencia del personal.')
     } finally {
@@ -1400,7 +1529,7 @@ export default function DashboardPage() {
                             </div>
                           </div>
 
-                          {(row.asistencia_estado || '').toLowerCase() === 'no_asistio_aviso' ? (
+                          {(row.asistencia_estado || '').toLowerCase() === 'no_asistio_aviso' && row.reprogramable === true ? (
                             <div className="mt-2">
                               <button
                                 type="button"
