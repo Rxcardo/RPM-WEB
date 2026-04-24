@@ -665,7 +665,7 @@ function NuevaCitaPageContent() {
 
             <Field label="Fecha">
               <input type="date" value={form.fecha}
-                onChange={(e) => { setSlots([]); setForm((prev) => ({ ...prev, fecha: e.target.value, hora_inicio: '', hora_fin: '' })) }}
+                onChange={(e) => { setForm((prev) => ({ ...prev, fecha: e.target.value, hora_inicio: '', hora_fin: '' })) }}
                 className={inputCls} />
             </Field>
 
