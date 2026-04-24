@@ -133,6 +133,9 @@ type ReagendarForm = {
   motivo: string
 }
 
+
+type AsistenciaEstado = 'pendiente' | 'asistio' | 'no_asistio_aviso' | 'no_asistio_sin_aviso'
+
 function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null
   return value ?? null
@@ -281,6 +284,12 @@ function dateTimeMs(fecha: string, hora: string) {
   return new Date(`${fecha}T${hora || '00:00'}`).getTime()
 }
 
+function addDaysToDate(value: string, days: number) {
+  const date = new Date(`${value}T00:00:00`)
+  date.setDate(date.getDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
 function getDurationMinutes(inicio: string | null | undefined, fin: string | null | undefined) {
   const hi = onlyHour(inicio)
   const hf = onlyHour(fin)
@@ -314,7 +323,31 @@ function asistenciaBadge(value: string | null | undefined) {
   }
 }
 
-type AsistenciaEstado = 'pendiente' | 'asistio' | 'no_asistio_aviso' | 'no_asistio_sin_aviso'
+function asistenciaToUpdate(nuevoEstado: AsistenciaEstado) {
+  const consumeSesion = nuevoEstado === 'asistio' || nuevoEstado === 'no_asistio_sin_aviso'
+
+  return {
+    asistencia_estado: nuevoEstado,
+    fecha_asistencia: nuevoEstado === 'pendiente' ? null : new Date().toISOString(),
+    aviso_previo: nuevoEstado === 'no_asistio_aviso',
+    consume_sesion: consumeSesion,
+    reprogramable: nuevoEstado === 'no_asistio_aviso',
+    estado:
+      nuevoEstado === 'asistio'
+        ? 'completado'
+        : nuevoEstado === 'no_asistio_aviso' || nuevoEstado === 'no_asistio_sin_aviso'
+          ? 'no_asistio'
+          : 'programado',
+  }
+}
+
+function canReagendarSesion(sesion: SesionPlan) {
+  const asistenciaActual = (sesion.asistencia_estado || 'pendiente') as AsistenciaEstado
+  return (
+    asistenciaActual === 'pendiente' ||
+    (asistenciaActual === 'no_asistio_aviso' && sesion.reprogramable === true)
+  ) && (sesion.estado || '').toLowerCase() !== 'completado'
+}
 
 export default function ClienteDetallePage() {
   const params = useParams()
@@ -341,6 +374,7 @@ export default function ClienteDetallePage() {
   const [guardandoReagenda, setGuardandoReagenda] = useState(false)
   const [errorReagenda, setErrorReagenda] = useState('')
   const [actualizandoAsistenciaId, setActualizandoAsistenciaId] = useState<string | null>(null)
+
 
   useEffect(() => {
     if (!clienteId) return
@@ -521,21 +555,11 @@ export default function ClienteDetallePage() {
     setToast('')
     setWarning('')
 
-    const consumeSesion = nuevoEstado === 'asistio' || nuevoEstado === 'no_asistio_sin_aviso'
-
-    const updateLocal = {
-      asistencia_estado: nuevoEstado,
-      fecha_asistencia: nuevoEstado === 'pendiente' ? null : new Date().toISOString(),
-      aviso_previo: nuevoEstado === 'no_asistio_aviso',
-      consume_sesion: consumeSesion,
-      reprogramable: nuevoEstado === 'no_asistio_aviso',
-      estado:
-        nuevoEstado === 'asistio'
-          ? 'completado'
-          : nuevoEstado === 'no_asistio_aviso' || nuevoEstado === 'no_asistio_sin_aviso'
-            ? 'no_asistio'
-            : 'programado',
-    }
+    const sesionActual = sesionesPlan.find((s) => s.id === sesionId) || null
+    const updateLocal = asistenciaToUpdate(nuevoEstado)
+    const consumiaAntes = sesionActual?.consume_sesion === true
+    const consumeAhora = updateLocal.consume_sesion === true
+    const deltaUsoPlan = consumeAhora === consumiaAntes ? 0 : consumeAhora ? 1 : -1
 
     try {
       const { error } = await supabase.rpc('marcar_asistencia_entrenamiento', {
@@ -554,6 +578,8 @@ export default function ClienteDetallePage() {
             : s
         )
       )
+
+      ajustarUsoPlanLocal(sesionActual?.cliente_plan_id, deltaUsoPlan)
 
       setToast(
         nuevoEstado === 'no_asistio_aviso'
@@ -593,6 +619,56 @@ export default function ClienteDetallePage() {
     setErrorReagenda('')
   }
 
+  function ajustarUsoPlanLocal(clientePlanId: string | null | undefined, delta: number) {
+    if (!clientePlanId || delta === 0) return
+
+    setHistorialPlanes((prev) =>
+      prev.map((plan) => {
+        if (plan.id !== clientePlanId) return plan
+
+        const total = Number(plan.sesiones_totales || 0)
+        const usadasActuales = Number(plan.sesiones_usadas || 0)
+        const nuevasUsadas = Math.min(total, Math.max(0, usadasActuales + delta))
+
+        return { ...plan, sesiones_usadas: nuevasUsadas }
+      })
+    )
+  }
+
+  async function extenderPlanSiHaceFalta(clientePlanId: string | null | undefined, fechaNueva: string, fechaFinActual: string | null | undefined) {
+    if (!clientePlanId || !fechaFinActual || fechaNueva <= fechaFinActual) return false
+
+    const { error } = await supabase
+      .from('clientes_planes')
+      .update({ fecha_fin: fechaNueva, updated_at: new Date().toISOString() })
+      .eq('id', clientePlanId)
+
+    if (error) throw new Error(`No se pudo extender vencimiento del plan: ${error.message}`)
+
+    setHistorialPlanes((prev) =>
+      prev.map((plan) =>
+        plan.id === clientePlanId
+          ? { ...plan, fecha_fin: fechaNueva }
+          : plan
+      )
+    )
+
+    setSesionesPlan((prev) =>
+      prev.map((sesion) =>
+        sesion.cliente_plan_id === clientePlanId
+          ? {
+              ...sesion,
+              clientes_planes: sesion.clientes_planes
+                ? { ...sesion.clientes_planes, fecha_fin: fechaNueva }
+                : sesion.clientes_planes,
+            }
+          : sesion
+      )
+    )
+
+    return true
+  }
+
   async function guardarReagendaSesion() {
     if (!sesionReagendar) return
 
@@ -616,10 +692,12 @@ export default function ClienteDetallePage() {
       return
     }
 
+    const asistenciaActual = (sesionReagendar.asistencia_estado || 'pendiente').toLowerCase()
     const fechaFinPlan = sesionReagendar.clientes_planes?.fecha_fin || null
+    const puedeExtenderVencimiento = asistenciaActual === 'no_asistio_aviso'
 
-    if (fechaFinPlan && fecha > fechaFinPlan) {
-      setErrorReagenda(`No puedes reagendar después del vencimiento del plan (${fechaFinPlan}).`)
+    if (fechaFinPlan && fecha > fechaFinPlan && !puedeExtenderVencimiento) {
+      setErrorReagenda(`Solo las sesiones en estado Avisó pueden reagendarse después del vencimiento del plan (${fechaFinPlan}).`)
       return
     }
 
@@ -633,21 +711,26 @@ export default function ClienteDetallePage() {
     const notaReagenda = `Reagendada desde ${anteriorFecha} ${anteriorInicio}-${anteriorFin} hacia ${fecha} ${horaInicio}-${horaFin}${motivo ? `. Motivo: ${motivo}` : ''}`
 
     try {
+      const rpcRes = await supabase.rpc('reprogramar_entrenamiento_plan_seguro', {
+        p_entrenamiento_id: sesionReagendar.id,
+        p_nueva_fecha: fecha,
+        p_nueva_hora_inicio: normalizeTimeForDb(horaInicio),
+        p_nueva_hora_fin: normalizeTimeForDb(horaFin),
+        p_motivo: notaReagenda,
+        p_marcado_por: null,
+      })
+
+      if (rpcRes.error) throw new Error(rpcRes.error.message)
+
+      const rpcData = rpcRes.data as { ok?: boolean; error?: string; extendio_plan?: boolean } | null
+      if (rpcData && rpcData.ok === false) {
+        throw new Error(rpcData.error || 'No se pudo reagendar la sesión.')
+      }
+
+      const extendioPlan = !!rpcData?.extendio_plan
+
       const updateRes = await supabase
         .from('entrenamientos')
-        .update({
-          fecha,
-          hora_inicio: normalizeTimeForDb(horaInicio),
-          hora_fin: normalizeTimeForDb(horaFin),
-          estado: 'programado',
-          asistencia_estado: 'pendiente',
-          aviso_previo: false,
-          consume_sesion: false,
-          reprogramable: false,
-          motivo_asistencia: notaReagenda,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', sesionReagendar.id)
         .select(`
           id, cliente_plan_id, cliente_id, empleado_id, fecha,
           hora_inicio, hora_fin, estado, asistencia_estado, aviso_previo,
@@ -659,9 +742,14 @@ export default function ClienteDetallePage() {
             planes:plan_id ( nombre )
           )
         `)
+        .eq('id', sesionReagendar.id)
         .single()
 
       if (updateRes.error) throw new Error(updateRes.error.message)
+
+      if (sesionReagendar.consume_sesion === true) {
+        ajustarUsoPlanLocal(sesionReagendar.cliente_plan_id, -1)
+      }
 
       const row: any = updateRes.data
       const normalizada: SesionPlan = {
@@ -693,7 +781,7 @@ export default function ClienteDetallePage() {
         )
       )
 
-      setToast('Sesión reagendada correctamente.')
+      setToast(extendioPlan ? 'Sesión reagendada y vencimiento del plan extendido correctamente.' : 'Sesión reagendada correctamente.')
       setSesionReagendar(null)
     } catch (err: any) {
       setErrorReagenda(err?.message || 'No se pudo reagendar la sesión.')
@@ -701,6 +789,7 @@ export default function ClienteDetallePage() {
       setGuardandoReagenda(false)
     }
   }
+
 
   const planPrincipal = useMemo(() => {
     if (!historialPlanes.length) return null
@@ -738,6 +827,7 @@ export default function ClienteDetallePage() {
     pendientes: sesionesPlan.filter((s) => (s.asistencia_estado || 'pendiente') === 'pendiente').length,
     reprogramables: sesionesPlan.filter((s) => s.reprogramable === true).length,
   }), [sesionesPlan])
+
 
   if (loading) {
     return (
@@ -930,7 +1020,7 @@ export default function ClienteDetallePage() {
                 <div className="overflow-hidden rounded-3xl border border-white/10 bg-black/10">
                   <div className="border-b border-white/10 px-4 py-3">
                     <p className="text-sm font-semibold text-white">Asistencia y reagenda</p>
-                    <p className="text-xs text-white/45">Puedes reagendar sesiones pendientes o congeladas por aviso, siempre dentro de la vigencia del plan.</p>
+                    <p className="text-xs text-white/45">Puedes reagendar sesiones pendientes o congeladas por aviso. Si una sesión está en Avisó y la reagendas después del vencimiento, el plan se extiende hasta esa fecha.</p>
                   </div>
 
                   {sesionesPlan.length === 0 ? (
@@ -949,12 +1039,8 @@ export default function ClienteDetallePage() {
                         <tbody className="divide-y divide-white/10">
                           {sesionesPlan.map((sesion) => {
                             const asistenciaActual = (sesion.asistencia_estado || 'pendiente') as AsistenciaEstado
-                            const puedeReagendar =
-                              (asistenciaActual === 'pendiente' ||
-                                (asistenciaActual === 'no_asistio_aviso' && sesion.reprogramable === true)) &&
-                              (sesion.estado || '').toLowerCase() !== 'completado'
+                            const puedeReagendar = canReagendarSesion(sesion)
                             const actualizando = actualizandoAsistenciaId === sesion.id
-
                             return (
                               <tr key={sesion.id} className="transition hover:bg-white/[0.03]">
                                 <td className="px-4 py-3 align-top">
@@ -1203,7 +1289,17 @@ export default function ClienteDetallePage() {
 
             <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm text-white/65">
               <p>Actual: {sesionReagendar.fecha || 'Sin fecha'} · {onlyHour(sesionReagendar.hora_inicio) || '—'} - {onlyHour(sesionReagendar.hora_fin) || '—'}</p>
-              {sesionReagendar.clientes_planes?.fecha_fin ? <p className="mt-1 text-xs text-white/40">Vencimiento del plan: {sesionReagendar.clientes_planes.fecha_fin}</p> : null}
+              {sesionReagendar.clientes_planes?.fecha_fin && (
+  <p className="mt-1 text-xs text-white/40">
+    Vencimiento del plan: {sesionReagendar.clientes_planes.fecha_fin}
+  </p>
+)}
+
+{((sesionReagendar.asistencia_estado || '').toLowerCase() === 'no_asistio_aviso') && (
+  <p className="mt-1 text-xs text-violet-300">
+    Si eliges una fecha mayor al vencimiento, el plan se extenderá automáticamente.
+  </p>
+)}
             </div>
 
             <div className="mt-4 space-y-3">
@@ -1280,6 +1376,7 @@ export default function ClienteDetallePage() {
           </div>
         </div>
       ) : null}
+
     </div>
   )
 }
