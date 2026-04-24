@@ -63,7 +63,8 @@ type ValidacionCita = {
   detalle?: { tipo?: string; motivo?: string; detalle?: string; hora_inicio?: string | null; hora_fin?: string | null } | null
 }
 
-type SlotHora = { hora_inicio: string; hora_fin: string }
+// ── SlotHora ahora incluye fecha propia ───────────────────────────────────────
+type SlotHora = { fecha: string; hora_inicio: string; hora_fin: string }
 
 function esRolTerapeuta(rol: string | null | undefined) {
   const r = (rol || '').trim().toLowerCase()
@@ -119,12 +120,10 @@ function toMinutes(hora: string | null | undefined) {
 function formatHoraCorta(hora: string | null | undefined) { return hora ? hora.slice(0, 5) : '—' }
 
 function normHora(hora: string) {
-  // Normaliza a HH:MM (sin segundos) para comparar y mostrar
   return hora ? hora.slice(0, 5) : ''
 }
 
 function normHoraConSegundos(hora: string) {
-  // Para guardar en BD siempre con segundos
   if (!hora) return ''
   if (hora.length === 5) return `${hora}:00`
   return hora
@@ -279,7 +278,7 @@ function NuevaCitaPageContent() {
     servicio_id: '',
     recurso_id: '',
     fecha: new Date().toISOString().slice(0, 10),
-    hora_inicio: '',   // hora actualmente seleccionada en el calendario (pendiente de agregar)
+    hora_inicio: '',
     hora_fin: '',
     estado: 'programada',
     notas: '',
@@ -287,7 +286,7 @@ function NuevaCitaPageContent() {
     cliente_plan_id: '',
   })
 
-  // Lista de slots ya confirmados para el lote
+  // Lista de slots ya confirmados para el lote — cada uno con su propia fecha
   const [slots, setSlots] = useState<SlotHora[]>([])
 
   const [usarPrecioServicio, setUsarPrecioServicio] = useState(true)
@@ -342,9 +341,7 @@ function NuevaCitaPageContent() {
     [usarPrecioServicio, servicioSeleccionado, montoPersonalizado]
   )
 
-
   const baseComisionOriginal  = useMemo(() => r2(servicioSeleccionado?.comision_base ?? servicioSeleccionado?.precio ?? 0), [servicioSeleccionado])
-  // baseComisionAplicada se recalcula tras totalCitas — ver línea debajo de montoTotalLote
 
   const porcentajeRpmOriginal = useMemo(() => {
     const base = Number(servicioSeleccionado?.comision_base ?? servicioSeleccionado?.precio ?? 0)
@@ -352,7 +349,6 @@ function NuevaCitaPageContent() {
     if (!base) return 50
     return clamp(r2((rpm / base) * 100), 0, 100)
   }, [servicioSeleccionado])
-
 
   async function resolveEmpleadoActualId(): Promise<string> {
     try {
@@ -426,17 +422,24 @@ function NuevaCitaPageContent() {
   function agregarSlot() {
     const hi = normHora(form.hora_inicio)
     const hf = normHora(form.hora_fin)
+    const fecha = form.fecha
     if (!hi || !hf) { alert('Selecciona una hora en el calendario antes de agregar.'); return }
-    if (slots.some((s) => normHora(s.hora_inicio) === hi)) {
-      alert(`La hora ${hi} ya está en el lote.`); return
+    if (!fecha) { alert('Selecciona una fecha antes de agregar.'); return }
+    // Duplicado: misma fecha + misma hora_inicio
+    if (slots.some((s) => s.fecha === fecha && normHora(s.hora_inicio) === hi)) {
+      alert(`La hora ${hi} del ${fecha} ya está en el lote.`); return
     }
-    setSlots((prev) => [...prev, { hora_inicio: hi, hora_fin: hf }].sort((a, b) => (toMinutes(a.hora_inicio) || 0) - (toMinutes(b.hora_inicio) || 0)))
-    // Limpia la selección del calendario para poder elegir otra
+    setSlots((prev) =>
+      [...prev, { fecha, hora_inicio: hi, hora_fin: hf }].sort((a, b) =>
+        a.fecha.localeCompare(b.fecha) || (toMinutes(a.hora_inicio) || 0) - (toMinutes(b.hora_inicio) || 0)
+      )
+    )
+    // Limpia solo la selección de hora, NO la fecha — para poder seguir agregando en la misma fecha
     setForm((prev) => ({ ...prev, hora_inicio: '', hora_fin: '' }))
   }
 
-  function quitarSlot(hi: string) {
-    setSlots((prev) => prev.filter((s) => normHora(s.hora_inicio) !== normHora(hi)))
+  function quitarSlot(fecha: string, hi: string) {
+    setSlots((prev) => prev.filter((s) => !(s.fecha === fecha && normHora(s.hora_inicio) === normHora(hi))))
   }
 
   function limpiarSlots() {
@@ -450,14 +453,18 @@ function NuevaCitaPageContent() {
     // Construir lista final: slots confirmados + el que está seleccionado ahora si no está en la lista
     const horaActual = normHora(form.hora_inicio)
     const finActual  = normHora(form.hora_fin)
+    const fechaActual = form.fecha
     let slotsFinal   = [...slots]
-    if (horaActual && finActual && !slotsFinal.some((s) => normHora(s.hora_inicio) === horaActual)) {
-      slotsFinal = [...slotsFinal, { hora_inicio: horaActual, hora_fin: finActual }]
-        .sort((a, b) => (toMinutes(a.hora_inicio) || 0) - (toMinutes(b.hora_inicio) || 0))
+    if (
+      horaActual && finActual && fechaActual &&
+      !slotsFinal.some((s) => s.fecha === fechaActual && normHora(s.hora_inicio) === horaActual)
+    ) {
+      slotsFinal = [...slotsFinal, { fecha: fechaActual, hora_inicio: horaActual, hora_fin: finActual }]
+        .sort((a, b) => a.fecha.localeCompare(b.fecha) || (toMinutes(a.hora_inicio) || 0) - (toMinutes(b.hora_inicio) || 0))
     }
 
-    if (!form.cliente_id || !form.terapeuta_id || !form.servicio_id || !form.fecha || slotsFinal.length === 0) {
-      alert('Completa cliente, fisioterapeuta, servicio, fecha y agrega al menos una hora al lote.')
+    if (!form.cliente_id || !form.terapeuta_id || !form.servicio_id || slotsFinal.length === 0) {
+      alert('Completa cliente, fisioterapeuta, servicio y agrega al menos una hora al lote.')
       return
     }
     if (form.tipo_cita === 'plan' && !form.cliente_plan_id) { alert('Debes seleccionar el plan del cliente.'); return }
@@ -487,30 +494,32 @@ function NuevaCitaPageContent() {
           throw new Error(`La hora fin de ${slot.hora_inicio} debe ser mayor que la hora inicio.`)
         }
 
-        // Validar disponibilidad
+        // Validar disponibilidad — usa la fecha propia del slot
         const { data: validacion, error: valErr } = await supabase.rpc('validar_disponibilidad_cita', {
           p_cliente_id: form.cliente_id, p_terapeuta_id: form.terapeuta_id,
-          p_recurso_id: form.recurso_id || null, p_fecha: form.fecha,
+          p_recurso_id: form.recurso_id || null,
+          p_fecha: slot.fecha,   // ← fecha propia del slot
           p_hora_inicio: hiN, p_hora_fin: hfN,
         })
-        if (valErr) throw new Error(`Error validando (${slot.hora_inicio}): ${valErr.message}`)
+        if (valErr) throw new Error(`Error validando (${slot.fecha} ${slot.hora_inicio}): ${valErr.message}`)
         if (!(validacion as ValidacionCita)?.disponible) {
-          throw new Error(`${slot.hora_inicio}: ${buildErrorFromValidacion(validacion as ValidacionCita)}`)
+          throw new Error(`${slot.fecha} ${slot.hora_inicio}: ${buildErrorFromValidacion(validacion as ValidacionCita)}`)
         }
 
-        // Crear cita
+        // Crear cita — usa la fecha propia del slot
         const { data: citaData, error: citaErr } = await supabase.from('citas').insert({
           cliente_id: form.cliente_id, terapeuta_id: form.terapeuta_id,
           servicio_id: form.servicio_id, recurso_id: form.recurso_id || null,
-          fecha: form.fecha, hora_inicio: hiN, hora_fin: hfN,
+          fecha: slot.fecha,   // ← fecha propia del slot
+          hora_inicio: hiN, hora_fin: hfN,
           estado: form.estado, notas: form.notas || null,
           cliente_plan_id: form.tipo_cita === 'plan' ? form.cliente_plan_id : null,
           created_by: auditorId || null, updated_by: auditorId || null,
         }).select('id').single()
-        if (citaErr) throw new Error(`${slot.hora_inicio}: ${citaErr.message}`)
+        if (citaErr) throw new Error(`${slot.fecha} ${slot.hora_inicio}: ${citaErr.message}`)
         const citaId = citaData.id
 
-        const conceptoBase = `${nombreServicio} - ${clienteNombre} - ${slot.hora_inicio}`
+        const conceptoBase = `${nombreServicio} - ${clienteNombre} - ${slot.fecha} ${slot.hora_inicio}`
         const concepto =
           form.tipo_cita === 'plan'        ? `${conceptoBase} [Plan]`
           : form.tipo_cita === 'recovery'  ? `${conceptoBase} [Recovery]`
@@ -528,7 +537,7 @@ function NuevaCitaPageContent() {
               p_registrado_por: auditorId || null, p_notas_generales: null,
               p_pagos: pagosPayload,
             })
-            if (pagoErr) throw new Error(`Error pago (${slot.hora_inicio}): ${pagoErr.message}`)
+            if (pagoErr) throw new Error(`Error pago (${slot.fecha} ${slot.hora_inicio}): ${pagoErr.message}`)
           }
         }
 
@@ -554,7 +563,7 @@ function NuevaCitaPageContent() {
           monto_rpm_usd: comisionEq.monto_rpm_usd,   monto_rpm_bs: comisionEq.monto_rpm_bs,
           monto_profesional_usd: comisionEq.monto_profesional_usd, monto_profesional_bs: comisionEq.monto_profesional_bs,
         })
-        if (comisionErr) throw new Error(`Error comisión (${slot.hora_inicio}): ${comisionErr.message}`)
+        if (comisionErr) throw new Error(`Error comisión (${slot.fecha} ${slot.hora_inicio}): ${comisionErr.message}`)
       }
 
       router.push('/admin/operaciones/agenda')
@@ -565,9 +574,11 @@ function NuevaCitaPageContent() {
 
   // ─── JSX ──────────────────────────────────────────────────────────────
 
-  // Citas que se van a crear (slots confirmados + la seleccionada si no está)
-  // totalCitas = slots confirmados + hora seleccionada si aún no está en slots
-  const horaActualPendiente = !!(normHora(form.hora_inicio) && !slots.some((s) => normHora(s.hora_inicio) === normHora(form.hora_inicio)))
+  const horaActualPendiente = !!(
+    normHora(form.hora_inicio) &&
+    form.fecha &&
+    !slots.some((s) => s.fecha === form.fecha && normHora(s.hora_inicio) === normHora(form.hora_inicio))
+  )
   const totalCitas = slots.length + (horaActualPendiente ? 1 : 0)
   const montoTotalLote = useMemo(() => r2(montoBase * Math.max(totalCitas, 1)), [montoBase, totalCitas])
   const baseComisionAplicada  = useMemo(() => usarPrecioServicio ? r2(baseComisionOriginal * Math.max(totalCitas, 1)) : montoTotalLote, [usarPrecioServicio, baseComisionOriginal, totalCitas, montoTotalLote])
@@ -588,6 +599,15 @@ function NuevaCitaPageContent() {
     }
   }, [baseComisionAplicada, rpmMonto, terapeutaMonto, tasaReferenciaComision])
 
+  // Agrupa slots por fecha para mostrar en la UI
+  const slotsPorFecha = useMemo(() => {
+    const map: Record<string, SlotHora[]> = {}
+    for (const s of slots) {
+      if (!map[s.fecha]) map[s.fecha] = []
+      map[s.fecha].push(s)
+    }
+    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b))
+  }, [slots])
 
   return (
     <div className="space-y-6">
@@ -663,9 +683,10 @@ function NuevaCitaPageContent() {
               </select>
             </Field>
 
-            <Field label="Fecha">
+            {/* Fecha — NO limpia los slots al cambiar */}
+            <Field label="Fecha" helper="Cambia la fecha para agregar citas en días distintos. Los slots de otras fechas se conservan.">
               <input type="date" value={form.fecha}
-                onChange={(e) => { setForm((prev) => ({ ...prev, fecha: e.target.value, hora_inicio: '', hora_fin: '' })) }}
+                onChange={(e) => setForm((prev) => ({ ...prev, fecha: e.target.value, hora_inicio: '', hora_fin: '' }))}
                 className={inputCls} />
             </Field>
 
@@ -697,7 +718,7 @@ function NuevaCitaPageContent() {
               </select>
             </Field>
 
-            {/* Calendario */}
+            {/* Calendario — muestra disponibilidad para form.fecha */}
             <div className="md:col-span-2">
               <DisponibilidadTerapeuta
                 terapeutaId={form.terapeuta_id}
@@ -718,14 +739,14 @@ function NuevaCitaPageContent() {
                   <div>
                     <p className="text-sm font-semibold text-white">Horas seleccionadas para este lote</p>
                     <p className="mt-1 text-xs text-white/45">
-                      Haz clic en el calendario para elegir una hora, luego presiona <strong className="text-white/70">Agregar al lote</strong>. Repite para cada hora adicional.
+                      Elige una hora en el calendario, presiona <strong className="text-white/70">Agregar al lote</strong>.
+                      Cambia la fecha para agregar citas en otros días — el lote se conserva.
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2 shrink-0">
-                    {/* Hora seleccionada actualmente */}
                     {form.hora_inicio && (
                       <div className="flex items-center gap-2 rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
-                        <span>Seleccionada: <strong>{normHora(form.hora_inicio)}</strong></span>
+                        <span>Seleccionada: <strong>{form.fecha} {normHora(form.hora_inicio)}</strong></span>
                       </div>
                     )}
                     <button type="button" onClick={agregarSlot} disabled={!form.hora_inicio}
@@ -744,7 +765,7 @@ function NuevaCitaPageContent() {
                 {/* Stats */}
                 <div className="mt-4 grid grid-cols-3 gap-3">
                   <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                    <p className="text-[11px] uppercase tracking-wide text-white/40">Fecha</p>
+                    <p className="text-[11px] uppercase tracking-wide text-white/40">Fecha activa</p>
                     <p className="mt-1 text-sm font-semibold text-white">{form.fecha || '—'}</p>
                   </div>
                   <div className={`rounded-2xl border p-3 transition ${slots.length > 0 ? 'border-violet-400/20 bg-violet-400/5' : 'border-white/10 bg-white/[0.03]'}`}>
@@ -757,17 +778,24 @@ function NuevaCitaPageContent() {
                   </div>
                 </div>
 
-                {/* Lista de slots confirmados */}
+                {/* Lista de slots confirmados agrupados por fecha */}
                 {slots.length === 0 ? (
                   <div className="mt-4 rounded-2xl border border-dashed border-white/10 p-4 text-center text-sm text-white/35">
                     Sin horas en el lote todavía. Selecciona una en el calendario y presiona "Agregar al lote".
                   </div>
                 ) : (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {slots.map((slot) => (
-                      <div key={slot.hora_inicio} className="flex items-center gap-2 rounded-2xl border border-violet-400/20 bg-violet-500/10 px-3 py-2 text-sm text-violet-100">
-                        <span className="font-mono">{normHora(slot.hora_inicio)} – {normHora(slot.hora_fin)}</span>
-                        <button type="button" onClick={() => quitarSlot(slot.hora_inicio)} className="ml-1 text-violet-300/70 transition hover:text-white" title="Quitar">×</button>
+                  <div className="mt-4 space-y-3">
+                    {slotsPorFecha.map(([fecha, fechaSlots]) => (
+                      <div key={fecha}>
+                        <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-white/40">{fecha}</p>
+                        <div className="flex flex-wrap gap-2">
+                          {fechaSlots.map((slot) => (
+                            <div key={`${slot.fecha}-${slot.hora_inicio}`} className="flex items-center gap-2 rounded-2xl border border-violet-400/20 bg-violet-500/10 px-3 py-2 text-sm text-violet-100">
+                              <span className="font-mono">{normHora(slot.hora_inicio)} – {normHora(slot.hora_fin)}</span>
+                              <button type="button" onClick={() => quitarSlot(slot.fecha, slot.hora_inicio)} className="ml-1 text-violet-300/70 transition hover:text-white" title="Quitar">×</button>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -828,13 +856,13 @@ function NuevaCitaPageContent() {
                   key={`nueva-cita-pago-${form.servicio_id}-${montoTotalLote}-${fechaPago}-${usarPrecioServicio ? 'auto' : 'manual'}-${slots.length}`}
                   montoTotal={montoTotalLote}
                   fecha={fechaPago}
-                metodosPago={metodosPago}
-                value={pagoState}
-                onChange={setPagoState}
-                concepto={servicioSeleccionado?.nombre || 'Servicio'}
-                clienteNombre={clientes.find((c) => c.id === form.cliente_id)?.nombre || ''}
-                mostrarMontoTotal={false}
-              />
+                  metodosPago={metodosPago}
+                  value={pagoState}
+                  onChange={setPagoState}
+                  concepto={servicioSeleccionado?.nombre || 'Servicio'}
+                  clienteNombre={clientes.find((c) => c.id === form.cliente_id)?.nombre || ''}
+                  mostrarMontoTotal={false}
+                />
               </>
             ) : (
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
