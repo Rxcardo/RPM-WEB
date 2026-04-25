@@ -332,7 +332,16 @@ function NuevaCitaPageContent() {
     setPorcentajeRpmEditable(pct); setPorcentajeEntrenadorEditable(r2(100 - pct))
   }, [servicioSeleccionado])
 
-  useEffect(() => { setPagoState(pagoConDeudaInitial()) }, [form.servicio_id, usarPrecioServicio])
+  useEffect(() => {
+  setPagoState(pagoConDeudaInitial())
+}, [
+  form.servicio_id,
+  usarPrecioServicio,
+  montoPersonalizado,
+  slots.length,
+  form.hora_inicio,
+  form.fecha,
+])
 
   // ─── Derived ──────────────────────────────────────────────────────────
 
@@ -475,7 +484,7 @@ function NuevaCitaPageContent() {
     if (montoBase <= 0) { alert('El monto de la cita debe ser mayor a 0.'); return }
     if (baseComisionAplicada <= 0) { alert('La base de comisión debe ser mayor a 0.'); return }
     if (!comisionBalanceOk) { alert('La distribución de comisión no cuadra correctamente.'); return }
-    const errorPago = validarPagoConDeuda(pagoState, montoBase)
+    const errorPago = validarPagoConDeuda(pagoState, montoTotalLote)
     if (errorPago) { alert(errorPago); return }
 
     setLoading(true)
@@ -853,7 +862,7 @@ function NuevaCitaPageContent() {
                   </Field>
                 </div>
                 <PagoConDeudaSelector
-                  key={`nueva-cita-pago-${form.servicio_id}-${montoTotalLote}-${fechaPago}-${usarPrecioServicio ? 'auto' : 'manual'}-${slots.length}`}
+                  key={`nueva-cita-pago-${form.servicio_id}-${montoBase}-${montoTotalLote}-${totalCitas}-${fechaPago}-${usarPrecioServicio ? 'auto' : 'manual'}-${form.hora_inicio || 'sin-hora'}-${slots.length}`}
                   montoTotal={montoTotalLote}
                   fecha={fechaPago}
                   metodosPago={metodosPago}

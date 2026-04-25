@@ -1,21 +1,13 @@
 'use client'
 
 /**
- * PagoConDeudaSelector — v2
+ * PagoConDeudaSelector — v3 corregido
  * ─────────────────────────────────────────────────────────────────
- * Maneja 3 casos de cobro × 2 modos de pago:
- *
- * Casos de cobro:
- *   1. Pago completo  → registra el monto total, sin deuda
- *   2. Abono parcial  → registra lo abonado + genera cuenta por cobrar
- *   3. Sin pago       → no registra pago, genera cuenta por cobrar total
- *
- * Modos de pago (aplica en casos 1 y 2):
- *   - Pago único  → un solo método
- *   - Pago mixto  → dos métodos (USD + BS u otro combo)
- *
- * Ruta: /components/pagos/PagoConDeudaSelector.tsx
- * ─────────────────────────────────────────────────────────────────
+ * Corrige:
+ * - Pago completo USD muestra el monto automáticamente al cambiar montoTotal.
+ * - Al agregar/quitar citas del lote se actualiza el monto sin cambiar a Bs y volver a USD.
+ * - Abono parcial deja escribir el monto abonado.
+ * - Validación no depende de que el input readonly haya escrito el monto en el state.
  */
 
 import { memo, useEffect, useMemo } from 'react'
@@ -24,7 +16,7 @@ import SelectorTasaBCV from '@/components/finanzas/SelectorTasaBCV'
 // ─── Types ─────────────────────────────────────────────────────────
 
 export type TipoCobro = 'completo' | 'abono' | 'sin_pago'
-export type ModoPago  = 'unico' | 'mixto'
+export type ModoPago = 'unico' | 'mixto'
 export type MonedaPago = 'USD' | 'BS'
 
 export type MetodoPagoBase = {
@@ -82,14 +74,23 @@ export function pagoConDeudaInitial(): PagoConDeudaState {
   }
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────
+
+const r2 = (v: number) => Math.round(Number(v || 0) * 100) / 100
+
+function montoToInput(v: number) {
+  if (!Number.isFinite(v) || v <= 0) return ''
+  return String(r2(v))
+}
+
 // ─── Detección de moneda ────────────────────────────────────────────
 
 export function detectarMetodoBs(metodo: MetodoPagoBase | null) {
   if (!metodo) return false
   const moneda = (metodo.moneda || '').toUpperCase()
   const nombre = (metodo.nombre || '').toLowerCase()
-  const tipo   = (metodo.tipo || '').toLowerCase()
-  const cc     = (metodo.cartera?.codigo || '').toLowerCase()
+  const tipo = (metodo.tipo || '').toLowerCase()
+  const cc = (metodo.cartera?.codigo || '').toLowerCase()
   return (
     moneda === 'BS' || moneda === 'VES' || moneda === 'BOLIVARES' ||
     nombre.includes('bs') || nombre.includes('bolívar') || nombre.includes('bolivar') ||
@@ -105,7 +106,7 @@ export function detectarMetodoUsd(metodo: MetodoPagoBase | null) {
   if (!metodo) return false
   const moneda = (metodo.moneda || '').toUpperCase()
   const nombre = (metodo.nombre || '').toLowerCase()
-  const cc     = (metodo.cartera?.codigo || '').toLowerCase()
+  const cc = (metodo.cartera?.codigo || '').toLowerCase()
   return (
     moneda === 'USD' ||
     nombre.includes('usd') || nombre.includes('zelle') ||
@@ -115,8 +116,6 @@ export function detectarMetodoUsd(metodo: MetodoPagoBase | null) {
 }
 
 // ─── Cálculos internos ──────────────────────────────────────────────
-
-const r2 = (v: number) => Math.round(v * 100) / 100
 
 function itemToUsd(item: PagoItemState): number {
   const monto = parseFloat(item.monto) || 0
@@ -156,14 +155,20 @@ function formatBs(v: number | null | undefined) {
 export function validarPagoConDeuda(state: PagoConDeudaState, montoTotal: number): string | null {
   if (state.tipoCobro === 'sin_pago') return null
 
-  const totalUsd = calcTotalUsd(state)
+  const totalUsd =
+    state.tipoCobro === 'completo' && state.modoPago === 'unico' && state.pagoUnico.moneda === 'USD'
+      ? r2(montoTotal)
+      : calcTotalUsd(state)
 
   if (state.modoPago === 'unico') {
     const item = state.pagoUnico
+    const esCompletoUsd = state.tipoCobro === 'completo' && item.moneda === 'USD'
+
     if (!item.metodoId) return 'Selecciona el método de pago.'
-    if ((parseFloat(item.monto) || 0) <= 0) return 'El monto debe ser mayor a 0.'
-    if (item.moneda === 'BS' && (!item.tasaBcv || item.tasaBcv <= 0))
+    if (!esCompletoUsd && (parseFloat(item.monto) || 0) <= 0) return 'El monto debe ser mayor a 0.'
+    if (item.moneda === 'BS' && (!item.tasaBcv || item.tasaBcv <= 0)) {
       return 'Selecciona una tasa BCV válida para el pago en bolívares.'
+    }
   } else {
     const p1 = state.pagoMixto1
     const p2 = state.pagoMixto2
@@ -173,14 +178,16 @@ export function validarPagoConDeuda(state: PagoConDeudaState, montoTotal: number
     if (!p2.metodoId) return 'Pago 2: selecciona el método.'
     if ((parseFloat(p2.monto) || 0) <= 0) return 'Pago 2: monto requerido.'
     if (p2.moneda === 'BS' && (!p2.tasaBcv || p2.tasaBcv <= 0)) return 'Pago 2: selecciona una tasa BCV válida.'
-    if (state.tipoCobro === 'completo' && Math.abs(totalUsd - montoTotal) > 0.01)
+    if (state.tipoCobro === 'completo' && Math.abs(totalUsd - montoTotal) > 0.01) {
       return `La suma de pagos no cuadra. Total: ${formatMoney(montoTotal)} | Registrado: ${formatMoney(totalUsd)} | Faltante: ${formatMoney(Math.max(montoTotal - totalUsd, 0))}`
+    }
   }
 
   if (state.tipoCobro === 'abono') {
     if (totalUsd <= 0) return 'El monto abonado debe ser mayor a 0.'
-    if (totalUsd >= montoTotal - 0.01)
+    if (totalUsd >= montoTotal - 0.01) {
       return `El abono (${formatMoney(totalUsd)}) es igual o mayor al total. Usa "Pago completo".`
+    }
   }
 
   return null
@@ -226,8 +233,8 @@ export function buildCuentaPorCobrarPayload(params: {
     cliente_nombre: clienteNombre,
     concepto,
     tipo_origen: 'otro',
-    monto_total_usd: montoTotal,
-    monto_pagado_usd: montoAbonadoUsd,
+    monto_total_usd: r2(montoTotal),
+    monto_pagado_usd: r2(montoAbonadoUsd),
     saldo_usd: deuda,
     fecha_venta: fecha,
     estado: 'pendiente',
@@ -253,8 +260,9 @@ export function buildPagosRpcPayload(
     const item = state.pagoUnico
     const montoNum =
       state.tipoCobro === 'completo' && item.moneda === 'USD'
-        ? montoTotal
-        : parseFloat(item.monto) || 0
+        ? r2(montoTotal)
+        : r2(parseFloat(item.monto) || 0)
+
     return [{
       metodo_pago_v2_id: item.metodoId,
       moneda_pago: item.moneda,
@@ -268,7 +276,7 @@ export function buildPagosRpcPayload(
   return [state.pagoMixto1, state.pagoMixto2].map((item) => ({
     metodo_pago_v2_id: item.metodoId,
     moneda_pago: item.moneda,
-    monto: parseFloat(item.monto) || 0,
+    monto: r2(parseFloat(item.monto) || 0),
     tasa_bcv: item.moneda === 'BS' ? item.tasaBcv : null,
     referencia: item.referencia || null,
     notas: item.notas || null,
@@ -304,14 +312,21 @@ function Field({ label, children, helper }: { label: string; children: React.Rea
 const BsSelector = memo(function BsSelector({
   fecha, montoUsd, montoBs, onChangeTasa, onChangeMontoBs,
 }: {
-  fecha: string; montoUsd: number; montoBs: number | null
-  onChangeTasa: (t: number | null) => void; onChangeMontoBs: (m: number) => void
+  fecha: string
+  montoUsd: number
+  montoBs: number | null
+  onChangeTasa: (t: number | null) => void
+  onChangeMontoBs: (m: number) => void
 }) {
   return (
     <SelectorTasaBCV
-      fecha={fecha} monedaPago="BS" monedaReferencia="EUR"
-      montoUSD={montoUsd} montoBs={montoBs || undefined}
-      onTasaChange={onChangeTasa} onMontoBsChange={onChangeMontoBs}
+      fecha={fecha}
+      monedaPago="BS"
+      monedaReferencia="EUR"
+      montoUSD={montoUsd}
+      montoBs={montoBs || undefined}
+      onTasaChange={onChangeTasa}
+      onMontoBsChange={onChangeMontoBs}
     />
   )
 })
@@ -322,16 +337,24 @@ function PagoItemForm({
   label, badge, item, metodosPago, fecha, montoUsdRef, readonlyMonto, onChange,
   colorBorder, colorBadge, colorEquiv,
 }: {
-  label: string; badge?: number; item: PagoItemState; metodosPago: MetodoPagoBase[]
-  fecha: string; montoUsdRef: number; readonlyMonto?: boolean
+  label: string
+  badge?: number
+  item: PagoItemState
+  metodosPago: MetodoPagoBase[]
+  fecha: string
+  montoUsdRef: number
+  readonlyMonto?: boolean
   onChange: (patch: Partial<PagoItemState>) => void
-  colorBorder: string; colorBadge: string; colorEquiv: string
+  colorBorder: string
+  colorBadge: string
+  colorEquiv: string
 }) {
   const isBS = item.moneda === 'BS'
   const metodosUsd = useMemo(() => metodosPago.filter(detectarMetodoUsd), [metodosPago])
-  const metodosBS  = useMemo(() => metodosPago.filter(detectarMetodoBs),  [metodosPago])
+  const metodosBS = useMemo(() => metodosPago.filter(detectarMetodoBs), [metodosPago])
   const metodosActuales = isBS ? metodosBS : metodosUsd
-  const montoNum = parseFloat(item.monto) || 0
+  const montoMostrado = readonlyMonto && !isBS ? montoToInput(montoUsdRef) : item.monto
+  const montoNum = parseFloat(montoMostrado) || 0
 
   return (
     <div className={`rounded-2xl border ${colorBorder} bg-white/[0.02] p-5`}>
@@ -361,11 +384,22 @@ function PagoItemForm({
 
       <div className="mb-3 grid grid-cols-2 gap-3">
         <Field label="Moneda">
-          <select value={item.moneda}
-            onChange={(e) => onChange({ moneda: e.target.value as MonedaPago, metodoId: '', monto: '', tasaBcv: null, montoBs: null })}
-            className={inputCls}>
+          <select
+            value={item.moneda}
+            onChange={(e) => {
+              const moneda = e.target.value as MonedaPago
+              onChange({
+                moneda,
+                metodoId: '',
+                monto: readonlyMonto && moneda === 'USD' ? montoToInput(montoUsdRef) : '',
+                tasaBcv: null,
+                montoBs: null,
+              })
+            }}
+            className={inputCls}
+          >
             <option value="USD" className="bg-[#11131a]">USD</option>
-            <option value="BS"  className="bg-[#11131a]">Bolívares</option>
+            <option value="BS" className="bg-[#11131a]">Bolívares</option>
           </select>
         </Field>
         <Field label={isBS ? 'Método Bs' : 'Método USD'}>
@@ -382,30 +416,49 @@ function PagoItemForm({
 
       <div className="mb-3">
         <Field label={isBS ? 'Monto Bs' : 'Monto USD'}>
-          <input type="number" min={0} step="0.01" value={item.monto}
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={montoMostrado}
             readOnly={readonlyMonto && !isBS}
             onChange={(e) => onChange({ monto: e.target.value })}
             className={`${inputCls} ${readonlyMonto && !isBS ? 'cursor-not-allowed opacity-70' : ''}`}
-            placeholder="0.00" />
+            placeholder="0.00"
+          />
         </Field>
       </div>
 
       {isBS && (
         <div className="mb-3">
-          <BsSelector fecha={fecha} montoUsd={montoUsdRef} montoBs={montoNum || null}
+          <BsSelector
+            fecha={fecha}
+            montoUsd={montoUsdRef}
+            montoBs={montoNum || null}
             onChangeTasa={(t) => onChange({ tasaBcv: t })}
-            onChangeMontoBs={(m) => onChange({ monto: String(m), montoBs: m })} />
+            onChangeMontoBs={(m) => onChange({ monto: String(m), montoBs: m })}
+          />
         </div>
       )}
 
       <div className="grid grid-cols-2 gap-3">
         <Field label="Referencia">
-          <input type="text" value={item.referencia} onChange={(e) => onChange({ referencia: e.target.value })}
-            className={inputCls} placeholder="Comprobante..." />
+          <input
+            type="text"
+            value={item.referencia}
+            onChange={(e) => onChange({ referencia: e.target.value })}
+            className={inputCls}
+            placeholder="Comprobante..."
+          />
         </Field>
         <Field label="Notas">
-          <input type="text" value={item.notas} onChange={(e) => onChange({ notas: e.target.value })}
-            className={inputCls} placeholder="Opcional..." />
+          <input
+            type="text"
+            value={item.notas}
+            onChange={(e) => onChange({ notas: e.target.value })}
+            className={inputCls}
+            placeholder="Opcional..."
+          />
         </Field>
       </div>
     </div>
@@ -417,81 +470,96 @@ function PagoItemForm({
 export const PagoConDeudaSelector = memo(function PagoConDeudaSelector({
   montoTotal, fecha, metodosPago, value, onChange, mostrarMontoTotal = true,
 }: PagoConDeudaProps) {
+  const montoTotalSeguro = r2(montoTotal)
   const isCompleto = value.tipoCobro === 'completo'
-  const isAbono    = value.tipoCobro === 'abono'
-  const isSinPago  = value.tipoCobro === 'sin_pago'
-  const isMixto    = value.modoPago  === 'mixto'
+  const isAbono = value.tipoCobro === 'abono'
+  const isSinPago = value.tipoCobro === 'sin_pago'
+  const isMixto = value.modoPago === 'mixto'
 
-  const totalUsd = useMemo(() => calcTotalUsd(value), [value])
-  const totalBs  = useMemo(() => calcTotalBs(value),  [value])
+  const totalUsd = useMemo(() => {
+    if (isSinPago) return 0
+    if (isCompleto && !isMixto && value.pagoUnico.moneda === 'USD') return montoTotalSeguro
+    return calcTotalUsd(value)
+  }, [isSinPago, isCompleto, isMixto, value, montoTotalSeguro])
+
+  const totalBs = useMemo(() => calcTotalBs(value), [value])
 
   const deudaGenerada = useMemo(() => {
     if (isCompleto) return 0
-    if (isSinPago)  return r2(montoTotal)
-    return r2(Math.max(montoTotal - totalUsd, 0))
-  }, [isCompleto, isSinPago, montoTotal, totalUsd])
+    if (isSinPago) return r2(montoTotalSeguro)
+    return r2(Math.max(montoTotalSeguro - totalUsd, 0))
+  }, [isCompleto, isSinPago, montoTotalSeguro, totalUsd])
 
   const montoPagarMostrar = useMemo(() => {
-    if (isSinPago)  return 0
-    if (isCompleto) return montoTotal
+    if (isSinPago) return 0
+    if (isCompleto) return montoTotalSeguro
     return totalUsd
-  }, [isSinPago, isCompleto, montoTotal, totalUsd])
+  }, [isSinPago, isCompleto, montoTotalSeguro, totalUsd])
 
-  // Mixto barra
-  const pct1 = montoTotal > 0 ? Math.round((itemToUsd(value.pagoMixto1) / montoTotal) * 100) : 0
-  const pct2 = montoTotal > 0 ? Math.round((itemToUsd(value.pagoMixto2) / montoTotal) * 100) : 0
-  const faltanteMixto = r2(Math.max(montoTotal - totalUsd, 0))
-  const cuadraMixto   = Math.abs(montoTotal - totalUsd) < 0.01 && montoTotal > 0
+  const pct1 = montoTotalSeguro > 0 ? Math.round((itemToUsd(value.pagoMixto1) / montoTotalSeguro) * 100) : 0
+  const pct2 = montoTotalSeguro > 0 ? Math.round((itemToUsd(value.pagoMixto2) / montoTotalSeguro) * 100) : 0
+  const faltanteMixto = r2(Math.max(montoTotalSeguro - totalUsd, 0))
+  const cuadraMixto = Math.abs(montoTotalSeguro - totalUsd) < 0.01 && montoTotalSeguro > 0
 
   function setTipoCobro(tipo: TipoCobro) {
-    onChange({ ...value, tipoCobro: tipo,
-      pagoUnico: pagoItemVacio('USD'), pagoMixto1: pagoItemVacio('USD'), pagoMixto2: pagoItemVacio('BS') })
+    onChange({
+      ...value,
+      tipoCobro: tipo,
+      pagoUnico: tipo === 'completo' ? { ...pagoItemVacio('USD'), monto: montoToInput(montoTotalSeguro) } : pagoItemVacio('USD'),
+      pagoMixto1: pagoItemVacio('USD'),
+      pagoMixto2: pagoItemVacio('BS'),
+    })
   }
 
   function setModoPago(modo: ModoPago) {
-    onChange({ ...value, modoPago: modo,
-      pagoUnico: pagoItemVacio('USD'), pagoMixto1: pagoItemVacio('USD'), pagoMixto2: pagoItemVacio('BS') })
+    onChange({
+      ...value,
+      modoPago: modo,
+      pagoUnico: value.tipoCobro === 'completo' ? { ...pagoItemVacio('USD'), monto: montoToInput(montoTotalSeguro) } : pagoItemVacio('USD'),
+      pagoMixto1: pagoItemVacio('USD'),
+      pagoMixto2: pagoItemVacio('BS'),
+    })
   }
 
-  // Auto-set monto USD en pago único completo
+  // Sincroniza el monto visible/real del pago único completo en USD.
+  // Esto es lo que evita tener que cambiar a Bs y volver a USD.
   useEffect(() => {
-    if (isCompleto && !isMixto && value.pagoUnico.moneda === 'USD') {
-      if (value.pagoUnico.monto !== String(montoTotal)) {
-        onChange({ ...value, pagoUnico: { ...value.pagoUnico, monto: String(montoTotal) } })
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [montoTotal, isCompleto, isMixto, value.pagoUnico.moneda])
+    if (!isCompleto || isMixto || value.pagoUnico.moneda !== 'USD') return
+    const nextMonto = montoToInput(montoTotalSeguro)
+    if (value.pagoUnico.monto === nextMonto) return
+    onChange({
+      ...value,
+      pagoUnico: { ...value.pagoUnico, monto: nextMonto },
+    })
+  }, [montoTotalSeguro, isCompleto, isMixto, value.pagoUnico.moneda, value.pagoUnico.monto])
 
   return (
     <div className="space-y-5">
-
-      {/* ── 1. Tipo de cobro ── */}
       <div className="grid grid-cols-3 gap-3">
         {([
-          { key: 'completo' as TipoCobro, label: 'Pago completo', desc: 'Cancela el total ahora',
-            active: isCompleto, color: 'border-emerald-400/40 bg-emerald-500/15 text-emerald-300' },
-          { key: 'abono'    as TipoCobro, label: 'Abono parcial',  desc: 'Paga una parte ahora',
-            active: isAbono,   color: 'border-amber-400/40 bg-amber-500/15 text-amber-300' },
-          { key: 'sin_pago' as TipoCobro, label: 'Sin pago',       desc: 'Queda como deuda total',
-            active: isSinPago, color: 'border-rose-400/40 bg-rose-500/15 text-rose-300' },
+          { key: 'completo' as TipoCobro, label: 'Pago completo', desc: 'Cancela el total ahora', active: isCompleto, color: 'border-emerald-400/40 bg-emerald-500/15 text-emerald-300' },
+          { key: 'abono' as TipoCobro, label: 'Abono parcial', desc: 'Paga una parte ahora', active: isAbono, color: 'border-amber-400/40 bg-amber-500/15 text-amber-300' },
+          { key: 'sin_pago' as TipoCobro, label: 'Sin pago', desc: 'Queda como deuda total', active: isSinPago, color: 'border-rose-400/40 bg-rose-500/15 text-rose-300' },
         ]).map((op) => (
-          <button key={op.key} type="button" onClick={() => setTipoCobro(op.key)}
+          <button
+            key={op.key}
+            type="button"
+            onClick={() => setTipoCobro(op.key)}
             className={`rounded-2xl border px-3 py-3 text-left transition ${
               op.active ? op.color : 'border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.06]'
-            }`}>
+            }`}
+          >
             <p className="text-sm font-semibold">{op.label}</p>
             <p className="mt-0.5 text-xs opacity-70">{op.desc}</p>
           </button>
         ))}
       </div>
 
-      {/* ── 2. Resumen montos ── */}
       {mostrarMontoTotal && (
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
             <p className="text-xs text-white/45">Total servicio</p>
-            <p className="mt-1 text-sm font-semibold text-white">{formatMoney(montoTotal)}</p>
+            <p className="mt-1 text-sm font-semibold text-white">{formatMoney(montoTotalSeguro)}</p>
           </div>
           <div className={`rounded-2xl border p-3 ${montoPagarMostrar > 0 ? 'border-emerald-400/20 bg-emerald-400/5' : 'border-white/10 bg-white/[0.03]'}`}>
             <p className="text-xs text-white/45">Se paga ahora</p>
@@ -508,35 +576,36 @@ export const PagoConDeudaSelector = memo(function PagoConDeudaSelector({
         </div>
       )}
 
-      {/* ── 3. Formulario de pago ── */}
       {!isSinPago && (
         <div className="space-y-4">
-          {/* Selector único/mixto */}
           <div className="grid grid-cols-2 gap-3">
             {([
-              { key: 'unico' as ModoPago, label: 'Pago único',  desc: 'Un solo método' },
-              { key: 'mixto' as ModoPago, label: 'Pago mixto',  desc: 'Dos métodos' },
+              { key: 'unico' as ModoPago, label: 'Pago único', desc: 'Un solo método' },
+              { key: 'mixto' as ModoPago, label: 'Pago mixto', desc: 'Dos métodos' },
             ]).map((op) => (
-              <button key={op.key} type="button" onClick={() => setModoPago(op.key)}
+              <button
+                key={op.key}
+                type="button"
+                onClick={() => setModoPago(op.key)}
                 className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition ${
                   value.modoPago === op.key
                     ? 'border-violet-400/40 bg-violet-500/20 text-violet-300'
                     : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]'
-                }`}>
+                }`}
+              >
                 <p>{op.label}</p>
                 <p className="mt-0.5 text-xs font-normal opacity-60">{op.desc}</p>
               </button>
             ))}
           </div>
 
-          {/* Pago único */}
           {!isMixto && (
             <PagoItemForm
               label="Método de pago"
               item={value.pagoUnico}
               metodosPago={metodosPago}
               fecha={fecha}
-              montoUsdRef={isCompleto ? montoTotal : itemToUsd(value.pagoUnico)}
+              montoUsdRef={isCompleto ? montoTotalSeguro : itemToUsd(value.pagoUnico)}
               readonlyMonto={isCompleto}
               onChange={(patch) => onChange({ ...value, pagoUnico: { ...value.pagoUnico, ...patch } })}
               colorBorder="border-emerald-400/20"
@@ -545,14 +614,12 @@ export const PagoConDeudaSelector = memo(function PagoConDeudaSelector({
             />
           )}
 
-          {/* Pago mixto */}
           {isMixto && (
             <div className="space-y-4">
-              {/* Barra progreso */}
               <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
                 <div className="mb-3 flex items-baseline justify-between">
                   <div className="flex items-baseline gap-2">
-                    <span className="text-2xl font-semibold text-white">{formatMoney(montoTotal)}</span>
+                    <span className="text-2xl font-semibold text-white">{formatMoney(montoTotalSeguro)}</span>
                     <span className="text-sm text-white/45">total a cobrar</span>
                   </div>
                   {totalUsd > 0 && (
@@ -562,7 +629,7 @@ export const PagoConDeudaSelector = memo(function PagoConDeudaSelector({
                   )}
                 </div>
                 <div className="flex h-2 overflow-hidden rounded-full bg-white/[0.06]">
-                  <div className="bg-blue-500 transition-all duration-300"   style={{ width: `${Math.min(pct1, 100)}%` }} />
+                  <div className="bg-blue-500 transition-all duration-300" style={{ width: `${Math.min(pct1, 100)}%` }} />
                   <div className="bg-violet-500 transition-all duration-300" style={{ width: `${Math.min(pct2, 100 - pct1)}%` }} />
                 </div>
                 {totalUsd > 0 && (
@@ -573,39 +640,48 @@ export const PagoConDeudaSelector = memo(function PagoConDeudaSelector({
                 )}
               </div>
 
-              <PagoItemForm label="Pago 1" badge={1}
-                item={value.pagoMixto1} metodosPago={metodosPago} fecha={fecha}
+              <PagoItemForm
+                label="Pago 1"
+                badge={1}
+                item={value.pagoMixto1}
+                metodosPago={metodosPago}
+                fecha={fecha}
                 montoUsdRef={itemToUsd(value.pagoMixto1)}
                 onChange={(patch) => onChange({ ...value, pagoMixto1: { ...value.pagoMixto1, ...patch } })}
-                colorBorder="border-blue-400/20" colorBadge="bg-blue-500/15 text-blue-300" colorEquiv="text-blue-300" />
+                colorBorder="border-blue-400/20"
+                colorBadge="bg-blue-500/15 text-blue-300"
+                colorEquiv="text-blue-300"
+              />
 
               <div className="flex items-center justify-center gap-2 py-1 text-white/30">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M7 2v10M3 8l4 4 4-4"/>
-                </svg>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M7 2v10M3 8l4 4 4-4" /></svg>
                 <span className="text-xs">+</span>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M7 2v10M3 8l4 4 4-4"/>
-                </svg>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M7 2v10M3 8l4 4 4-4" /></svg>
               </div>
 
-              <PagoItemForm label="Pago 2" badge={2}
-                item={value.pagoMixto2} metodosPago={metodosPago} fecha={fecha}
+              <PagoItemForm
+                label="Pago 2"
+                badge={2}
+                item={value.pagoMixto2}
+                metodosPago={metodosPago}
+                fecha={fecha}
                 montoUsdRef={itemToUsd(value.pagoMixto2)}
                 onChange={(patch) => onChange({ ...value, pagoMixto2: { ...value.pagoMixto2, ...patch } })}
-                colorBorder="border-violet-400/20" colorBadge="bg-violet-500/15 text-violet-300" colorEquiv="text-violet-300" />
+                colorBorder="border-violet-400/20"
+                colorBadge="bg-violet-500/15 text-violet-300"
+                colorEquiv="text-violet-300"
+              />
 
-              {/* Status cuadre */}
               <div className={`rounded-2xl border p-4 ${cuadraMixto ? 'border-emerald-400/20 bg-emerald-400/5' : 'border-amber-400/20 bg-amber-400/5'}`}>
                 <p className={`text-sm font-medium ${cuadraMixto ? 'text-emerald-300' : 'text-amber-300'}`}>
                   {cuadraMixto
                     ? '✓ La suma de pagos cuadra correctamente.'
                     : faltanteMixto > 0
                       ? `Faltan ${formatMoney(faltanteMixto)} para completar el total.`
-                      : `Excedente de ${formatMoney(r2(totalUsd - montoTotal))} sobre el total.`}
+                      : `Excedente de ${formatMoney(r2(totalUsd - montoTotalSeguro))} sobre el total.`}
                 </p>
                 <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-white/50">
-                  <div>Objetivo: <span className="text-white/80">{formatMoney(montoTotal)}</span></div>
+                  <div>Objetivo: <span className="text-white/80">{formatMoney(montoTotalSeguro)}</span></div>
                   <div>Registrado: <span className="text-white/80">{formatMoney(totalUsd)}</span></div>
                   {totalBs > 0 && <div>Bs total: <span className="text-white/80">{formatBs(totalBs)}</span></div>}
                 </div>
@@ -615,13 +691,12 @@ export const PagoConDeudaSelector = memo(function PagoConDeudaSelector({
         </div>
       )}
 
-      {/* ── 4. Aviso de deuda generada ── */}
       {deudaGenerada > 0.009 && (
         <div className="space-y-3 rounded-2xl border border-rose-400/20 bg-rose-400/5 p-4">
           <div className="flex items-start gap-3">
             <svg className="mt-0.5 shrink-0 text-rose-400" width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5"/>
-              <path d="M8 5v3.5M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M8 5v3.5M8 11v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
             <div>
               <p className="text-sm font-medium text-rose-300">
@@ -635,21 +710,24 @@ export const PagoConDeudaSelector = memo(function PagoConDeudaSelector({
             </div>
           </div>
           <Field label="Notas para la cuenta por cobrar (opcional)">
-            <input type="text" value={value.notasDeuda}
+            <input
+              type="text"
+              value={value.notasDeuda}
               onChange={(e) => onChange({ ...value, notasDeuda: e.target.value })}
-              className={inputCls} placeholder="Ej: Cliente acordó pagar el 30 de enero..." />
+              className={inputCls}
+              placeholder="Ej: Cliente acordó pagar el 30 de enero..."
+            />
           </Field>
         </div>
       )}
 
-      {/* ── 5. Resumen abono ── */}
       {isAbono && totalUsd > 0 && deudaGenerada > 0 && (
         <div className="rounded-2xl border border-amber-400/15 bg-amber-400/5 p-4">
           <p className="text-sm font-medium text-amber-300">Resumen del abono</p>
           <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
             <div>
               <p className="text-xs text-white/45">Total</p>
-              <p className="font-semibold text-white">{formatMoney(montoTotal)}</p>
+              <p className="font-semibold text-white">{formatMoney(montoTotalSeguro)}</p>
             </div>
             <div>
               <p className="text-xs text-white/45">Abono ahora</p>
