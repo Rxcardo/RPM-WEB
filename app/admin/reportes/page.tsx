@@ -244,7 +244,7 @@ function todayISO() { return new Date().toISOString().slice(0, 10) }
 function firstDayOfMonthISO() { const now = new Date(); return new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10) }
 function firstDayOfYearISO() { const now = new Date(); return new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10) }
 function daysAgoISO(days: number) { const d = new Date(); d.setDate(d.getDate() - days); return d.toISOString().slice(0, 10) }
-function shortDate(value: string) { try { return new Date(value).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) } catch { return value } }
+function shortDate(value: string) { try { return new Date(`${value.slice(0,10)}T12:00:00`).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) } catch { return value } }
 function formatDateTime(value: string) { try { return new Date(value).toLocaleString('es-ES', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) } catch { return value } }
 function titleCase(value: string) { return value.toLowerCase().replace(/(^|\s)\S/g, (l) => l.toUpperCase()) }
 function formatDateLong(value: string) { try { return new Date(`${value}T12:00:00`).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) } catch { return value } }
@@ -257,8 +257,18 @@ function calcularEdadDesdeFecha(fechaNacimiento?: string | null) { if (!fechaNac
 function formatBudgetDate(value: string) { try { return new Date(`${value}T12:00:00`).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: '2-digit' }) } catch { return value } }
 function timeToMinutes(value: string) { const [h, m] = String(value || '00:00').slice(0, 5).split(':').map(Number); return (h || 0) * 60 + (m || 0) }
 function inTimeRange(time: string, from: string, to: string) { if (!from || !to) return true; const t = timeToMinutes(time || '00:00'); return t >= timeToMinutes(from) && t <= timeToMinutes(to) }
-function buildDateTimeStart(fecha: string, hora: string) { return `${fecha}T${hora || '00:00'}:00` }
-function buildDateTimeEnd(fecha: string, hora: string) { return `${fecha}T${hora || '23:59'}:59` }
+function createdAtInTurno(created_at: string | undefined, horaInicio: string, horaFin: string): boolean {
+  // turno completo = no filtrar
+  if (horaInicio === '00:00' && horaFin === '23:59') return true
+  if (!created_at) return true
+  // Extraer hora Venezuela (UTC-4) del timestamp
+  const d = new Date(created_at)
+  const veHoras = d.getUTCHours() - 4
+  const horasVE = ((veHoras % 24) + 24) % 24
+  const minutosVE = d.getUTCMinutes()
+  const totalMinutos = horasVE * 60 + minutosVE
+  return totalMinutos >= timeToMinutes(horaInicio) && totalMinutos <= timeToMinutes(horaFin)
+}
 function getPeriodoTexto(fechaInicio: string, fechaFin: string, horaInicio: string, horaFin: string) { return `Período: ${shortDate(fechaInicio)} al ${shortDate(fechaFin)} · Hora: ${horaInicio} a ${horaFin}` }
 
 function normalizeClienteRow(row: any): ClienteRow { const empleado = firstOrNull(row?.empleados); return { id: String(row?.id ?? ''), nombre: String(row?.nombre ?? ''), telefono: row?.telefono ?? null, email: row?.email ?? null, fecha_nacimiento: row?.fecha_nacimiento ?? null, genero: row?.genero ?? null, direccion: row?.direccion ?? null, cedula: row?.cedula ?? null, estado: String(row?.estado ?? ''), created_at: String(row?.created_at ?? ''), terapeuta_id: row?.terapeuta_id ?? null, empleados: empleado ? { nombre: String(empleado?.nombre ?? '') } : null } }
@@ -523,19 +533,129 @@ export default function ReportesPage() {
 
   function limpiarDatos() { setClientes([]); setPlanes([]); setCitas([]); setIngresos([]); setEgresos([]); setCobranzas([]); setInventario([]); setNomina([]) }
 
+  // ─── FUNCIÓN CORREGIDA ────────────────────────────────────────────────────────
   async function loadReporte() {
     try {
       setLoading(true); setError(''); limpiarDatos()
-      if (tipo === 'clientes') { const { data, error } = await supabase.from('clientes').select('id,nombre,telefono,email,fecha_nacimiento,genero,direccion,cedula,estado,created_at,terapeuta_id,empleados:terapeuta_id(nombre)').order('created_at', { ascending: false }); if (error) throw error; setClientes(((data || []) as any[]).map(normalizeClienteRow)) }
-      if (tipo === 'planes') { const { data, error } = await supabase.from('clientes_planes').select('id,fecha_inicio,fecha_fin,sesiones_totales,sesiones_usadas,estado,created_at,precio_final_usd,monto_final_bs,moneda_venta,clientes:cliente_id(nombre),planes:plan_id(nombre,precio)').order('created_at', { ascending: false }); if (error) throw error; setPlanes(((data || []) as any[]).map(normalizePlanRow)) }
-      if (tipo === 'citas') { let query = supabase.from('citas').select('id,fecha,hora_inicio,hora_fin,estado,clientes:cliente_id(nombre),empleados:terapeuta_id(nombre),servicios:servicio_id(nombre,precio),recursos:recurso_id(nombre)').order('fecha', { ascending: false }).order('hora_inicio', { ascending: false }); if (fechaInicio) query = query.gte('fecha', fechaInicio); if (fechaFin) query = query.lte('fecha', fechaFin); const { data, error } = await query; if (error) throw error; setCitas(((data || []) as any[]).map(normalizeCitaRow).filter((row) => inTimeRange(row.hora_inicio, horaInicio, horaFin))) }
-      if (tipo === 'ingresos' || tipo === 'financiero') { let query = supabase.from('pagos').select('id,fecha,concepto,categoria,monto,estado,tipo_origen,created_at,moneda_pago,monto_equivalente_usd,monto_equivalente_bs,referencia,clientes:cliente_id(nombre),metodos_pago_v2:metodo_pago_v2_id(nombre,moneda)').order('created_at', { ascending: false }); if (fechaInicio) query = query.gte('created_at', buildDateTimeStart(fechaInicio, horaInicio)); if (fechaFin) query = query.lte('created_at', buildDateTimeEnd(fechaFin, horaFin)); const { data, error } = await query; if (error) throw error; setIngresos(((data || []) as any[]).map(normalizeIngresoRow)) }
-      if (tipo === 'egresos' || tipo === 'financiero') { let query = supabase.from('egresos').select('id,fecha,concepto,categoria,proveedor,monto,estado,created_at,moneda,monto_equivalente_usd,monto_equivalente_bs,referencia,metodos_pago_v2:metodo_pago_v2_id(nombre,moneda),empleados:empleado_id(nombre)').order('created_at', { ascending: false }); if (fechaInicio) query = query.gte('created_at', buildDateTimeStart(fechaInicio, horaInicio)); if (fechaFin) query = query.lte('created_at', buildDateTimeEnd(fechaFin, horaFin)); const { data, error } = await query; if (error) throw error; setEgresos(((data || []) as any[]).map(normalizeEgresoRow)) }
-      if (tipo === 'cobranzas') { let query = supabase.from('cuentas_por_cobrar').select('id,cliente_nombre,concepto,tipo_origen,monto_total_usd,monto_pagado_usd,saldo_usd,fecha_venta,fecha_vencimiento,estado,created_at,clientes:cliente_id(nombre)').order('created_at', { ascending: false }); if (fechaInicio) query = query.gte('created_at', buildDateTimeStart(fechaInicio, horaInicio)); if (fechaFin) query = query.lte('created_at', buildDateTimeEnd(fechaFin, horaFin)); const { data, error } = await query; if (error) throw error; setCobranzas(((data || []) as any[]).map(normalizeCobranzaRow)) }
-      if (tipo === 'inventario') { let query = supabase.from('movimientos_inventario').select('id,inventario_id,tipo,cantidad,cantidad_anterior,cantidad_nueva,concepto,precio_unitario_usd,monto_total_usd,created_at,inventario:inventario_id(nombre)').order('created_at', { ascending: false }); if (fechaInicio) query = query.gte('created_at', buildDateTimeStart(fechaInicio, horaInicio)); if (fechaFin) query = query.lte('created_at', buildDateTimeEnd(fechaFin, horaFin)); const { data, error } = await query; if (error) throw error; setInventario(((data || []) as any[]).map(normalizeInventarioRow)) }
-      if (tipo === 'nomina') { let query = supabase.from('pagos_empleados').select('id,empleado_id,fecha,tipo,moneda_pago,monto_pago,tasa_bcv,monto_equivalente_usd,monto_equivalente_bs,notas,created_at,referencia,empleados:empleado_id(nombre),metodos_pago_v2:metodo_pago_v2_id(nombre)').order('created_at', { ascending: false }); if (fechaInicio) query = query.gte('created_at', buildDateTimeStart(fechaInicio, horaInicio)); if (fechaFin) query = query.lte('created_at', buildDateTimeEnd(fechaFin, horaFin)); const { data, error } = await query; if (error) throw error; setNomina(((data || []) as any[]).map(normalizeNominaRow)) }
-    } catch (err: any) { console.error(err); setError(err.message || 'No se pudo generar el reporte.'); limpiarDatos() } finally { setLoading(false) }
+
+      // igual que finanzas: filtrar por campo `fecha` (date), sin timezone
+
+      if (tipo === 'clientes') {
+        const { data, error } = await supabase
+          .from('clientes')
+          .select('id,nombre,telefono,email,fecha_nacimiento,genero,direccion,cedula,estado,created_at,terapeuta_id,empleados:terapeuta_id(nombre)')
+          .order('created_at', { ascending: false })
+        if (error) throw error
+        setClientes(((data || []) as any[]).map(normalizeClienteRow))
+      }
+
+      if (tipo === 'planes') {
+        const { data, error } = await supabase
+          .from('clientes_planes')
+          .select('id,fecha_inicio,fecha_fin,sesiones_totales,sesiones_usadas,estado,created_at,precio_final_usd,monto_final_bs,moneda_venta,clientes:cliente_id(nombre),planes:plan_id(nombre,precio)')
+          .order('created_at', { ascending: false })
+        if (error) throw error
+        setPlanes(((data || []) as any[]).map(normalizePlanRow))
+      }
+
+      if (tipo === 'citas') {
+        let query = supabase
+          .from('citas')
+          .select('id,fecha,hora_inicio,hora_fin,estado,clientes:cliente_id(nombre),empleados:terapeuta_id(nombre),servicios:servicio_id(nombre,precio),recursos:recurso_id(nombre)')
+          .order('fecha', { ascending: false })
+          .order('hora_inicio', { ascending: false })
+        if (fechaInicio) query = query.gte('fecha', fechaInicio)
+        if (fechaFin)    query = query.lte('fecha', fechaFin)
+        const { data, error } = await query
+        if (error) throw error
+        setCitas(
+          ((data || []) as any[])
+            .map(normalizeCitaRow)
+            .filter((row) => inTimeRange(row.hora_inicio, horaInicio, horaFin))
+        )
+      }
+
+      if (tipo === 'ingresos' || tipo === 'financiero') {
+        let query = supabase
+          .from('pagos')
+          .select('id,fecha,concepto,categoria,monto,estado,tipo_origen,created_at,moneda_pago,monto_equivalente_usd,monto_equivalente_bs,referencia,clientes:cliente_id(nombre),metodos_pago_v2:metodo_pago_v2_id(nombre,moneda)')
+          .gte('fecha', fechaInicio)
+          .lte('fecha', fechaFin)
+          .order('fecha', { ascending: false })
+          .order('created_at', { ascending: false })
+        const { data, error } = await query
+        if (error) throw error
+        setIngresos(
+          ((data || []) as any[])
+            .map(normalizeIngresoRow)
+            .filter((row) => createdAtInTurno(row.created_at, horaInicio, horaFin))
+        )
+      }
+
+      if (tipo === 'egresos' || tipo === 'financiero') {
+        let query = supabase
+          .from('egresos')
+          .select('id,fecha,concepto,categoria,proveedor,monto,estado,created_at,moneda,monto_equivalente_usd,monto_equivalente_bs,referencia,metodos_pago_v2:metodo_pago_v2_id(nombre,moneda),empleados:empleado_id(nombre)')
+          .gte('fecha', fechaInicio)
+          .lte('fecha', fechaFin)
+          .order('fecha', { ascending: false })
+          .order('created_at', { ascending: false })
+        const { data, error } = await query
+        if (error) throw error
+        setEgresos(
+          ((data || []) as any[])
+            .map(normalizeEgresoRow)
+            .filter((row) => createdAtInTurno(row.created_at, horaInicio, horaFin))
+        )
+      }
+
+      if (tipo === 'cobranzas') {
+        let query = supabase
+          .from('cuentas_por_cobrar')
+          .select('id,cliente_nombre,concepto,tipo_origen,monto_total_usd,monto_pagado_usd,saldo_usd,fecha_venta,fecha_vencimiento,estado,created_at,clientes:cliente_id(nombre)')
+          .gte('fecha_venta', fechaInicio)
+          .lte('fecha_venta', fechaFin)
+          .order('fecha_venta', { ascending: false })
+        const { data, error } = await query
+        if (error) throw error
+        setCobranzas(((data || []) as any[]).map(normalizeCobranzaRow))
+      }
+
+      if (tipo === 'inventario') {
+        // inventario solo tiene created_at, se deja sin filtro de fecha por ahora
+        const { data, error } = await supabase
+          .from('movimientos_inventario')
+          .select('id,inventario_id,tipo,cantidad,cantidad_anterior,cantidad_nueva,concepto,precio_unitario_usd,monto_total_usd,created_at,inventario:inventario_id(nombre)')
+          .order('created_at', { ascending: false })
+        if (error) throw error
+        setInventario(((data || []) as any[]).map(normalizeInventarioRow))
+      }
+
+      if (tipo === 'nomina') {
+        const { data, error } = await supabase
+          .from('pagos_empleados')
+          .select('id,empleado_id,fecha,tipo,moneda_pago,monto_pago,tasa_bcv,monto_equivalente_usd,monto_equivalente_bs,notas,created_at,referencia,empleados:empleado_id(nombre),metodos_pago_v2:metodo_pago_v2_id(nombre)')
+          .gte('fecha', fechaInicio)
+          .lte('fecha', fechaFin)
+          .order('fecha', { ascending: false })
+          .order('created_at', { ascending: false })
+        if (error) throw error
+        setNomina(
+          ((data || []) as any[])
+            .map(normalizeNominaRow)
+            .filter((row) => createdAtInTurno(row.created_at, horaInicio, horaFin))
+        )
+      }
+
+    } catch (err: any) {
+      console.error(err)
+      setError(err.message || 'No se pudo generar el reporte.')
+      limpiarDatos()
+    } finally {
+      setLoading(false)
+    }
   }
+  // ─────────────────────────────────────────────────────────────────────────────
 
   const matchSearch = (values: any[]) => { const q = search.trim().toLowerCase(); if (!q) return true; return values.filter(Boolean).some((v) => String(v).toLowerCase().includes(q)) }
   const clientesFiltrados = useMemo(() => clientes.filter((r) => matchSearch([r.nombre, r.telefono, r.email, r.estado, r.empleados?.nombre])), [clientes, search])
@@ -664,7 +784,7 @@ export default function ReportesPage() {
         {categoriaChart.length > 0 && <Section title={`Distribución por categoría (${monedaVista})`} description="Top categorías del período."><div className="h-80"><ResponsiveContainer width="100%" height="100%"><BarChart data={categoriaChart} layout="vertical"><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" /><XAxis type="number" stroke="rgba(255,255,255,0.45)" /><YAxis type="category" dataKey="name" stroke="rgba(255,255,255,0.45)" width={120} /><Tooltip formatter={(value) => money(Number(value), monedaVista === 'USD' ? 'USD' : 'VES')} /><Bar dataKey="value" fill="#60a5fa" radius={[0, 8, 8, 0]} /></BarChart></ResponsiveContainer></div></Section>}
       </div>}
 
-      {tipo === 'clientes' && <Section title="Reporte de clientes" description={`${clientesFiltrados.length} registros`} className="p-0" contentClassName="overflow-hidden"><SimpleTable headers={['Nombre', 'Cédula', 'Teléfono', 'Email', 'Dirección', 'Terapeuta', 'Estado', 'Creado']} empty="No hay clientes." rows={clientesFiltrados.map((r) => [r.nombre, r.cedula || '—', r.telefono || '—', r.email || '—', r.direccion || '—', r.empleados?.nombre || '—', r.estado, shortDate(r.created_at.slice(0, 10))])} /></Section>}
+      {tipo === 'clientes' && <Section title="Reporte de clientes" description={`${clientesFiltrados.length} registros`} className="p-0" contentClassName="overflow-hidden"><SimpleTable headers={['Nombre', 'Cédula', 'Teléfono', 'Email', 'Dirección', 'Terapeuta', 'Estado', 'Creado']} empty="No hay clientes." rows={clientesFiltrados.map((r) => [r.nombre, r.cedula || '—', r.telefono || '—', r.email || '—', r.direccion || '—', r.empleados?.nombre || '—', r.estado, r.created_at.slice(0, 10)])} /></Section>}
       {tipo === 'planes' && <Section title="Reporte de planes" description={`${planesFiltrados.length} registros`} className="p-0" contentClassName="overflow-hidden"><SimpleTable headers={['Cliente', 'Plan', 'Precio Final', 'Moneda', 'Inicio', 'Fin', 'Usadas', 'Restantes', 'Estado']} empty="No hay planes." rows={planesFiltrados.map((r) => { const precioFinal = r.moneda_venta === 'USD' ? r.precio_final_usd || r.planes?.precio || 0 : r.monto_final_bs || 0; return [r.clientes?.nombre || '—', r.planes?.nombre || '—', r.moneda_venta === 'BS' ? money(precioFinal, 'VES') : money(precioFinal, 'USD'), r.moneda_venta || '—', r.fecha_inicio ? shortDate(r.fecha_inicio) : '—', r.fecha_fin ? shortDate(r.fecha_fin) : '—', r.sesiones_usadas, Number(r.sesiones_totales || 0) - Number(r.sesiones_usadas || 0), r.estado] })} /></Section>}
       {tipo === 'citas' && <Section title="Reporte de citas" description={`${citasFiltradas.length} registros`} className="p-0" contentClassName="overflow-hidden"><SimpleTable headers={['Fecha', 'Hora', 'Cliente', 'Terapeuta', 'Servicio', 'Recurso', 'Precio', 'Estado']} empty="No hay citas." rows={citasFiltradas.map((r) => [shortDate(r.fecha), `${r.hora_inicio} - ${r.hora_fin}`, r.clientes?.nombre || '—', r.empleados?.nombre || '—', r.servicios?.nombre || '—', r.recursos?.nombre || '—', money(Number(r.servicios?.precio || 0), 'USD'), r.estado])} /></Section>}
       {tipo === 'ingresos' && <Section title="Reporte de ingresos" description={`${ingresosFiltrados.length} registros`} className="p-0" contentClassName="overflow-hidden"><SimpleTable headers={['Fecha', 'Hora', 'Concepto', 'Categoría', 'Cliente', 'Método', 'Monto USD', 'Monto BS', 'Estado']} empty="No hay ingresos." rows={ingresosFiltrados.map((r) => [shortDate(r.fecha), r.created_at ? new Date(r.created_at).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' }) : '—', r.concepto, r.categoria, r.clientes?.nombre || '—', r.metodos_pago_v2?.nombre || '—', money(Number(r.monto_equivalente_usd || 0), 'USD'), money(Number(r.monto_equivalente_bs || 0), 'VES'), r.estado])} /></Section>}
