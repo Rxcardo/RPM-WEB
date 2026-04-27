@@ -150,13 +150,6 @@ function sameDay(dateStr: string | null | undefined, todayStr: string) {
   return dateStr === todayStr
 }
 
-function getFirstExistingKey(obj: Record<string, any>, keys: string[]) {
-  for (const key of keys) {
-    if (key in obj) return key
-  }
-  return null
-}
-
 function getDateKey(date: Date) {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -266,6 +259,79 @@ function roleLabel(rol: string | null | undefined) {
   return r.charAt(0).toUpperCase() + r.slice(1)
 }
 
+
+function normalizeSearch(value: string | null | undefined) {
+  return (value || '')
+    .toString()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+function matchesSearch(query: string, values: Array<string | number | null | undefined>) {
+  const q = normalizeSearch(query)
+  if (!q) return true
+  return values.some((value) => normalizeSearch(String(value ?? '')).includes(q))
+}
+
+function getCitaCliente(cita: CitaRaw) {
+  const cliente = firstOrNull(cita.clientes || cita.cliente || null)
+  return cliente?.nombre || cita.cliente_nombre || cita.nombre_cliente || 'Cliente'
+}
+
+function getCitaEmpleado(cita: CitaRaw) {
+  const empleado = firstOrNull(cita.empleados || cita.terapeuta || cita.personal || null)
+  return empleado?.nombre || cita.empleado_nombre || cita.terapeuta_nombre || cita.personal_nombre || 'Personal'
+}
+
+function getCitaServicio(cita: CitaRaw) {
+  const servicio = firstOrNull(cita.servicios || cita.servicio || null)
+  return servicio?.nombre || cita.servicio_nombre || cita.tipo_servicio || 'Servicio'
+}
+
+function getCitaHoraInicio(cita: CitaRaw) {
+  return cita.hora_inicio || cita.hora || cita.inicio || null
+}
+
+function getCitaHoraFin(cita: CitaRaw) {
+  return cita.hora_fin || cita.fin || null
+}
+
+function citaEstadoLabel(estado: string | null | undefined) {
+  switch ((estado || '').toLowerCase()) {
+    case 'programada':
+      return 'Programada'
+    case 'confirmada':
+      return 'Confirmada'
+    case 'completada':
+      return 'Completada'
+    case 'cancelada':
+      return 'Cancelada'
+    case 'reprogramada':
+      return 'Reprogramada'
+    default:
+      return estado || 'Sin estado'
+  }
+}
+
+function citaDotClass(estado: string | null | undefined) {
+  switch ((estado || '').toLowerCase()) {
+    case 'completada':
+      return 'bg-emerald-400'
+    case 'confirmada':
+      return 'bg-sky-400'
+    case 'programada':
+      return 'bg-amber-400'
+    case 'cancelada':
+      return 'bg-rose-400'
+    case 'reprogramada':
+      return 'bg-violet-400'
+    default:
+      return 'bg-white/30'
+  }
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) return '—'
   try {
@@ -343,6 +409,15 @@ export default function DashboardPage() {
   const [empleadoActualId, setEmpleadoActualId] = useState<string>('')
 
   const [asistenciaFilterFecha, setAsistenciaFilterFecha] = useState(getDateKey(new Date()))
+  const [mostrarCitasHoy, setMostrarCitasHoy] = useState(false)
+  const [mostrarSesionesPlanHoy, setMostrarSesionesPlanHoy] = useState(false)
+  const [mostrarAsistenciaPersonalHoy, setMostrarAsistenciaPersonalHoy] = useState(false)
+  const [mostrarSaldosPendientes, setMostrarSaldosPendientes] = useState(false)
+  const [filtroCitasHoy, setFiltroCitasHoy] = useState('')
+  const [filtroSesionesPlan, setFiltroSesionesPlan] = useState('')
+  const [filtroAsistenciaPersonal, setFiltroAsistenciaPersonal] = useState('')
+  const [savingCitaId, setSavingCitaId] = useState<string | null>(null)
+  const [citasHoyPage, setCitasHoyPage] = useState(1)
   const [savingAsistenciaId, setSavingAsistenciaId] = useState<string | null>(null)
   const [openReprogramacionId, setOpenReprogramacionId] = useState<string | null>(null)
   const [openSesionPlanId, setOpenSesionPlanId] = useState<string | null>(null)
@@ -422,7 +497,12 @@ export default function DashboardPage() {
         cuentasPorCobrarRes,
       ] = await Promise.all([
         supabase.from('clientes').select('id, estado, created_at'),
-        supabase.from('citas').select('*'),
+        supabase.from('citas').select(`
+            *,
+            clientes:cliente_id ( nombre, telefono, email ),
+            empleados:terapeuta_id ( nombre, rol ),
+            servicios:servicio_id ( nombre )
+          `),
         supabase.from('pagos').select('id, fecha, monto, monto_equivalente_usd, estado'),
         supabase.from('empleados').select('id, nombre, estado, rol'),
         supabase
@@ -621,6 +701,32 @@ export default function DashboardPage() {
     }
   }, [clientes, citas, pagos, empleados, clientesPlanes, entrenamientosPlan, today, hoy, asistenciaFilterFecha])
 
+  const citasHoyFiltradas = useMemo(() => {
+    return citas
+      .filter((cita) => {
+        if (!sameDay(cita.fecha, asistenciaFilterFecha)) return false
+        if ((cita.estado || '').toLowerCase() === 'cancelada') return false
+        return matchesSearch(filtroCitasHoy, [
+          getCitaCliente(cita),
+          getCitaEmpleado(cita),
+          getCitaServicio(cita),
+          cita.estado,
+          getCitaHoraInicio(cita),
+        ])
+      })
+      .sort((a, b) => String(getCitaHoraInicio(a) || '').localeCompare(String(getCitaHoraInicio(b) || '')))
+  }, [citas, asistenciaFilterFecha, filtroCitasHoy])
+
+  const citasHoyTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(citasHoyFiltradas.length / PAGE_SIZE)),
+    [citasHoyFiltradas.length]
+  )
+
+  const citasHoyPaginadas = useMemo(() => {
+    const start = (citasHoyPage - 1) * PAGE_SIZE
+    return citasHoyFiltradas.slice(start, start + PAGE_SIZE)
+  }, [citasHoyFiltradas, citasHoyPage])
+
   const planesActivosDetalle = useMemo(() => {
     return clientesPlanes
       .filter((cp) => (cp.estado || '').toLowerCase() === 'activo')
@@ -667,38 +773,6 @@ export default function DashboardPage() {
       return searchable.includes(query)
     })
   }, [planesActivosDetalle, filtroPlanActivo])
-
-  const topPersonal = useMemo(() => {
-    const counts = new Map<string, number>()
-
-    for (const cita of citas) {
-      if (!sameMonth(cita.fecha, today)) continue
-
-      const empleadoKey = getFirstExistingKey(cita, [
-        'empleado_id',
-        'personal_id',
-        'staff_id',
-        'terapeuta_id',
-        'trainer_id',
-        'empleadoId',
-        'personalId',
-      ])
-
-      const empleadoId = empleadoKey ? cita[empleadoKey] : null
-      if (!empleadoId) continue
-
-      counts.set(empleadoId, (counts.get(empleadoId) || 0) + 1)
-    }
-
-    return empleados
-      .map((empleado) => ({
-        id: empleado.id,
-        nombre: empleado.nombre || 'Sin nombre',
-        total: counts.get(empleado.id) || 0,
-      }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 5)
-  }, [citas, empleados, today])
 
   const mapaEstadoCuentaClientes = useMemo(() => {
     const map = new Map<string, EstadoCuentaCliente>()
@@ -763,9 +837,19 @@ export default function DashboardPage() {
       const cp = firstOrNull(row.clientes_planes)
       if (!cp) return false
       if ((cp.estado || '').toLowerCase() === 'cancelado') return false
-      return true
+      const cliente = firstOrNull(row.clientes)
+      const empleado = firstOrNull(row.empleados)
+      const plan = firstOrNull(cp.planes)
+      return matchesSearch(filtroSesionesPlan, [
+        cliente?.nombre,
+        empleado?.nombre,
+        empleado?.rol,
+        plan?.nombre,
+        row.asistencia_estado,
+        row.hora_inicio,
+      ])
     })
-  }, [entrenamientosPlan, asistenciaFilterFecha])
+  }, [entrenamientosPlan, asistenciaFilterFecha, filtroSesionesPlan])
 
   const sesionesPlanTotalPages = useMemo(
     () => Math.max(1, Math.ceil(sesionesPlanHoyCompactas.length / PAGE_SIZE)),
@@ -779,7 +863,18 @@ export default function DashboardPage() {
 
   const empleadosActivosNoAdmin = useMemo(() => {
     return empleados
-      .filter((e) => e.estado?.toLowerCase() === 'activo' && (e.rol || '').toLowerCase() !== 'admin')
+      .filter((e) => {
+        if (e.estado?.toLowerCase() !== 'activo') return false
+        if ((e.rol || '').toLowerCase() === 'admin') return false
+        const registro = empleadosAsistencia.find(
+          (row) => row.empleado_id === e.id && row.fecha === asistenciaFilterFecha
+        )
+        return matchesSearch(filtroAsistenciaPersonal, [
+          e.nombre,
+          e.rol,
+          registro?.estado,
+        ])
+      })
       .sort((a, b) => {
         const registroA = empleadosAsistencia.find(
           (row) => row.empleado_id === a.id && row.fecha === asistenciaFilterFecha
@@ -794,7 +889,7 @@ export default function DashboardPage() {
         if (aMarcado !== bMarcado) return aMarcado - bMarcado
         return String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es')
       })
-  }, [empleados, empleadosAsistencia, asistenciaFilterFecha])
+  }, [empleados, empleadosAsistencia, asistenciaFilterFecha, filtroAsistenciaPersonal])
 
   const empleadosAsistenciaTotalPages = useMemo(
     () => Math.max(1, Math.ceil(empleadosActivosNoAdmin.length / PAGE_SIZE)),
@@ -815,8 +910,16 @@ export default function DashboardPage() {
   }, [empleadosAsistencia, asistenciaFilterFecha])
 
   useEffect(() => {
+    setCitasHoyPage(1)
     setSesionesPlanPage(1)
-  }, [asistenciaFilterFecha])
+    setEmpleadosAsistenciaPage(1)
+  }, [asistenciaFilterFecha, filtroCitasHoy, filtroSesionesPlan, filtroAsistenciaPersonal])
+
+  useEffect(() => {
+    if (citasHoyPage > citasHoyTotalPages) {
+      setCitasHoyPage(citasHoyTotalPages)
+    }
+  }, [citasHoyPage, citasHoyTotalPages])
 
   useEffect(() => {
     if (sesionesPlanPage > sesionesPlanTotalPages) {
@@ -875,6 +978,37 @@ export default function DashboardPage() {
 
     return items
   }, [stats])
+
+  async function marcarCitaCompletada(citaId: string) {
+    try {
+      setSavingCitaId(citaId)
+      setAlert(null)
+
+      const { error } = await supabase
+        .from('citas')
+        .update({ estado: 'completada' })
+        .eq('id', citaId)
+
+      if (error) throw new Error(error.message)
+
+      setCitas((prev) =>
+        prev.map((cita) =>
+          cita.id === citaId
+            ? {
+                ...cita,
+                estado: 'completada',
+              }
+            : cita
+        )
+      )
+
+      showAlert('success', 'Cita completada', 'La cita fue marcada como completada correctamente.')
+    } catch (err: any) {
+      showAlert('error', 'Error', err?.message || 'No se pudo completar la cita.')
+    } finally {
+      setSavingCitaId(null)
+    }
+  }
 
   async function copiarNombrePlanActivo(nombre: string) {
     const nombreLimpio = (nombre || '').trim()
@@ -1393,570 +1527,499 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
         <div className="xl:col-span-1">
-          <Section title="Sesiones del plan de hoy" description="Acción rápida compacta.">
-            <div className="mb-3 flex items-center justify-between">
-              <input
-                type="date"
-                value={asistenciaFilterFecha}
-                onChange={(e) => setAsistenciaFilterFecha(e.target.value)}
-                className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
-              />
+          <Section title="Citas de hoy" description="Citas del día para completar rápido.">
+            <Card className="p-3 sm:p-4">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <input
+                    type="date"
+                    value={asistenciaFilterFecha}
+                    onChange={(e) => setAsistenciaFilterFecha(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
+                  />
 
-              <div className="flex items-center gap-3 text-xs text-white/55">
-                <span className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-full bg-amber-400" />
-                  {sesionesPlanHoyCompactas.filter((x) => (x.asistencia_estado || 'pendiente') === 'pendiente').length}
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                  {sesionesPlanHoyCompactas.filter((x) => (x.asistencia_estado || '') === 'asistio').length}
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-full bg-rose-400" />
-                  {sesionesPlanHoyCompactas.filter((x) => (x.asistencia_estado || '') === 'no_asistio_sin_aviso').length}
-                </span>
+                  <button
+                    type="button"
+                    onClick={() => setMostrarCitasHoy((prev) => !prev)}
+                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                  >
+                    {mostrarCitasHoy ? 'Ocultar' : 'Mostrar'} · {citasHoyFiltradas.length}
+                  </button>
+                </div>
+
+                <input
+                  type="text"
+                  value={filtroCitasHoy}
+                  onChange={(e) => setFiltroCitasHoy(e.target.value)}
+                  placeholder="Buscar cita, cliente, terapeuta, servicio..."
+                  className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none placeholder:text-white/35 focus:border-white/20 focus:bg-white/[0.05]"
+                />
               </div>
-            </div>
 
-            <div className="space-y-3">
-              {sesionesPlanHoyCompactas.length === 0 ? (
-                <Card className="p-4">
-                  <p className="text-sm text-white/55">No hay sesiones del plan hoy.</p>
-                </Card>
+              {!mostrarCitasHoy ? (
+                <p className="mt-3 text-xs text-white/45">
+                  Lista oculta. Usa el buscador y toca Mostrar para revisar o completar citas.
+                </p>
+              ) : citasHoyFiltradas.length === 0 ? (
+                <p className="mt-3 text-sm text-white/55">No hay citas con ese filtro.</p>
               ) : (
-                sesionesPlanHoyPaginadas.map((row) => {
-                  const cliente = firstOrNull(row.clientes)
-                  const empleado = firstOrNull(row.empleados)
-                  const clientePlan = firstOrNull(row.clientes_planes)
-                  const plan = firstOrNull(clientePlan?.planes)
-                  const actor = firstOrNull(row.actualizado_por)
-                  const reprogramacionAbierta = openReprogramacionId === row.id
-                  const sesionAbierta = openSesionPlanId === row.id
-                  const draft = reprogramacionDrafts[row.id] || initReprogramacionDraft(row)
+                <div className="mt-3 space-y-2">
+                  {citasHoyPaginadas.map((cita) => {
+                    const estado = (cita.estado || '').toLowerCase()
+                    const completada = estado === 'completada'
 
-                  return (
-                    <Card key={row.id} className="overflow-hidden p-0">
-                      <button
-                        type="button"
-                        onClick={() => setOpenSesionPlanId((current) => (current === row.id ? null : row.id))}
-                        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-white/[0.03]"
+                    return (
+                      <div
+                        key={cita.id}
+                        className="rounded-2xl border border-white/10 bg-white/[0.03] p-3"
                       >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${asistenciaPlanDotClass(row.asistencia_estado)}`} />
-                            <p className="truncate text-sm font-semibold text-white">
-                              {cliente?.nombre || 'Cliente'}
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${citaDotClass(cita.estado)}`} />
+                              <p className="truncate text-sm font-semibold text-white">
+                                {getCitaCliente(cita)}
+                              </p>
+                            </div>
+                            <p className="mt-0.5 truncate pl-4 text-[11px] text-white/45">
+                              {formatTime(getCitaHoraInicio(cita))} - {formatTime(getCitaHoraFin(cita))} · {getCitaServicio(cita)}
+                            </p>
+                            <p className="mt-0.5 truncate pl-4 text-[11px] text-white/35">
+                              {getCitaEmpleado(cita)} · {citaEstadoLabel(cita.estado)}
                             </p>
                           </div>
 
-                          <p className="mt-0.5 truncate pl-4 text-[11px] text-white/45">
-                            {formatTime(row.hora_inicio)} - {formatTime(row.hora_fin)} · {asistenciaLabel(row.asistencia_estado)}
-                          </p>
+                          <button
+                            type="button"
+                            disabled={savingCitaId === cita.id || completada}
+                            onClick={() => void marcarCitaCompletada(cita.id)}
+                            className={`shrink-0 rounded-xl border px-3 py-2 text-xs font-semibold transition disabled:opacity-50 ${
+                              completada
+                                ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+                                : 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/15'
+                            }`}
+                          >
+                            {completada ? 'Completada' : savingCitaId === cita.id ? 'Guardando...' : 'Completar'}
+                          </button>
                         </div>
+                      </div>
+                    )
+                  })}
 
-                        <div className="flex shrink-0 items-center gap-2">
-                          <span className="hidden rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] font-medium text-white/50 sm:inline-flex">
-                            {plan?.nombre || 'Plan'}
-                          </span>
-                          <span className="text-xs text-white/35">
+                  {citasHoyFiltradas.length > PAGE_SIZE ? (
+                    <div className="flex items-center justify-between gap-3 pt-2">
+                      <p className="text-xs text-white/45">
+                        Página {citasHoyPage} de {citasHoyTotalPages}
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={citasHoyPage <= 1}
+                          onClick={() => setCitasHoyPage((prev) => Math.max(prev - 1, 1))}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
+                        >
+                          Anterior
+                        </button>
+                        <button
+                          type="button"
+                          disabled={citasHoyPage >= citasHoyTotalPages}
+                          onClick={() => setCitasHoyPage((prev) => Math.min(prev + 1, citasHoyTotalPages))}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
+                        >
+                          Siguiente
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </Card>
+          </Section>
+        </div>
+
+        <div className="xl:col-span-1">
+          <Section title="Sesiones del plan de hoy" description="Asistencia de planes cerrada por defecto.">
+            <Card className="p-3 sm:p-4">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <input
+                    type="date"
+                    value={asistenciaFilterFecha}
+                    onChange={(e) => setAsistenciaFilterFecha(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => setMostrarSesionesPlanHoy((prev) => !prev)}
+                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                  >
+                    {mostrarSesionesPlanHoy ? 'Ocultar' : 'Mostrar'} · {sesionesPlanHoyCompactas.length}
+                  </button>
+                </div>
+
+                <input
+                  type="text"
+                  value={filtroSesionesPlan}
+                  onChange={(e) => setFiltroSesionesPlan(e.target.value)}
+                  placeholder="Buscar César Quintero, plan, terapeuta..."
+                  className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none placeholder:text-white/35 focus:border-white/20 focus:bg-white/[0.05]"
+                />
+
+                <div className="flex items-center gap-3 text-xs text-white/55">
+                  <span className="flex items-center gap-1">
+                    <span className="h-2 w-2 rounded-full bg-amber-400" />
+                    {sesionesPlanHoyCompactas.filter((x) => (x.asistencia_estado || 'pendiente') === 'pendiente').length}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                    {sesionesPlanHoyCompactas.filter((x) => (x.asistencia_estado || '') === 'asistio').length}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="h-2 w-2 rounded-full bg-rose-400" />
+                    {sesionesPlanHoyCompactas.filter((x) => (x.asistencia_estado || '') === 'no_asistio_sin_aviso').length}
+                  </span>
+                </div>
+              </div>
+
+              {!mostrarSesionesPlanHoy ? (
+                <p className="mt-3 text-xs text-white/45">
+                  Lista oculta para mantener el dashboard compacto.
+                </p>
+              ) : sesionesPlanHoyCompactas.length === 0 ? (
+                <p className="mt-3 text-sm text-white/55">No hay sesiones del plan con ese filtro.</p>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {sesionesPlanHoyPaginadas.map((row) => {
+                    const cliente = firstOrNull(row.clientes)
+                    const empleado = firstOrNull(row.empleados)
+                    const clientePlan = firstOrNull(row.clientes_planes)
+                    const plan = firstOrNull(clientePlan?.planes)
+                    const sesionAbierta = openSesionPlanId === row.id
+
+                    return (
+                      <Card key={row.id} className="overflow-hidden p-0">
+                        <button
+                          type="button"
+                          onClick={() => setOpenSesionPlanId((current) => (current === row.id ? null : row.id))}
+                          className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-white/[0.03]"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${asistenciaPlanDotClass(row.asistencia_estado)}`} />
+                              <p className="truncate text-sm font-semibold text-white">
+                                {cliente?.nombre || 'Cliente'}
+                              </p>
+                            </div>
+                            <p className="mt-0.5 truncate pl-4 text-[11px] text-white/45">
+                              {formatTime(row.hora_inicio)} - {formatTime(row.hora_fin)} · {asistenciaLabel(row.asistencia_estado)}
+                            </p>
+                          </div>
+
+                          <span className="shrink-0 text-xs text-white/40">
                             {sesionAbierta ? '−' : '+'}
                           </span>
-                        </div>
-                      </button>
+                        </button>
 
-                      {sesionAbierta ? (
-                        <div className="border-t border-white/10 px-3 pb-3 pt-2">
-                          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
-                            <div className="min-w-0 space-y-1">
-                              <p className="truncate text-xs text-white/60">
-                                {empleado?.nombre || 'Empleado'} · {roleLabel(empleado?.rol)}
-                              </p>
+                        {sesionAbierta ? (
+                          <div className="border-t border-white/10 px-3 pb-3 pt-2">
+                            <p className="truncate text-xs text-white/60">
+                              {empleado?.nombre || 'Empleado'} · {roleLabel(empleado?.rol)}
+                            </p>
+                            <p className="mt-1 truncate text-[11px] text-violet-300/80">
+                              {plan?.nombre || 'Plan'}
+                            </p>
 
-                              <p className="truncate text-[11px] text-violet-300/80">
-                                {plan?.nombre || 'Plan'}
-                              </p>
-
-                              {row.cliente_id ? (
-                                <div className="flex flex-wrap items-center gap-2 pt-1">
-                                  <span
-                                    className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${getEstadoCuentaClass(
-                                      mapaEstadoCuentaClientes.get(row.cliente_id)
-                                    )}`}
-                                  >
-                                    {getEstadoCuentaLabel(mapaEstadoCuentaClientes.get(row.cliente_id))}
-                                  </span>
-                                  <span className="text-[10px] text-white/35">
-                                    {getEstadoCuentaDetalle(mapaEstadoCuentaClientes.get(row.cliente_id))}
-                                  </span>
-                                </div>
-                              ) : null}
-
-                              {actor?.nombre ? (
-                                <p className="text-[10px] text-white/30">
-                                  Último registro: {actor.nombre}
-                                  {row.fecha_asistencia ? ` · ${formatDateTime(row.fecha_asistencia)}` : ''}
-                                </p>
-                              ) : null}
-                            </div>
-
-                            <div className="grid grid-cols-3 gap-1.5 sm:w-[132px]">
+                            <div className="mt-3 grid grid-cols-3 gap-1.5">
                               <button
                                 type="button"
                                 disabled={savingAsistenciaId === row.id}
                                 onClick={() => void marcarAsistenciaPlan(row.id, 'asistio')}
                                 className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-400/15 disabled:opacity-60"
                               >
-                                ✓
+                                ✓ Asistió
                               </button>
-
                               <button
                                 type="button"
                                 disabled={savingAsistenciaId === row.id}
                                 onClick={() => void marcarAsistenciaPlan(row.id, 'no_asistio_aviso')}
                                 className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-2 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-400/15 disabled:opacity-60"
                               >
-                                A
+                                Avisó
                               </button>
-
                               <button
                                 type="button"
                                 disabled={savingAsistenciaId === row.id}
                                 onClick={() => void marcarAsistenciaPlan(row.id, 'no_asistio_sin_aviso')}
                                 className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-2 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-400/15 disabled:opacity-60"
                               >
-                                X
+                                Sin aviso
                               </button>
                             </div>
                           </div>
+                        ) : null}
+                      </Card>
+                    )
+                  })}
 
-                          {(row.asistencia_estado || '').toLowerCase() === 'no_asistio_aviso' && row.reprogramable === true ? (
-                            <div className="mt-2">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenReprogramacion(row)}
-                                className="rounded-lg border border-violet-400/20 bg-violet-400/10 px-2.5 py-1.5 text-[11px] font-semibold text-violet-300 transition hover:bg-violet-400/15"
-                              >
-                                {reprogramacionAbierta ? 'Ocultar reprogramación' : 'Reprogramar'}
-                              </button>
-                            </div>
-                          ) : null}
-
-                          {reprogramacionAbierta ? (
-                            <div className="mt-2 grid gap-2 rounded-xl border border-violet-400/20 bg-violet-400/5 p-2 sm:grid-cols-2">
-                              <input
-                                type="date"
-                                value={draft.fecha}
-                                onChange={(e) =>
-                                  setReprogramacionDrafts((prev) => ({
-                                    ...prev,
-                                    [row.id]: { ...draft, fecha: e.target.value },
-                                  }))
-                                }
-                                className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
-                              />
-
-                              <div className="grid grid-cols-2 gap-2">
-                                <input
-                                  type="time"
-                                  value={draft.hora_inicio}
-                                  onChange={(e) =>
-                                    setReprogramacionDrafts((prev) => ({
-                                      ...prev,
-                                      [row.id]: {
-                                        ...draft,
-                                        hora_inicio: e.target.value,
-                                        hora_fin: draft.hora_fin || addMinutesToTime(e.target.value, 60),
-                                      },
-                                    }))
-                                  }
-                                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
-                                />
-
-                                <input
-                                  type="time"
-                                  value={draft.hora_fin}
-                                  onChange={(e) =>
-                                    setReprogramacionDrafts((prev) => ({
-                                      ...prev,
-                                      [row.id]: { ...draft, hora_fin: e.target.value },
-                                    }))
-                                  }
-                                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-2">
-                                <input
-                                  type="text"
-                                  value={draft.motivo}
-                                  onChange={(e) =>
-                                    setReprogramacionDrafts((prev) => ({
-                                      ...prev,
-                                      [row.id]: { ...draft, motivo: e.target.value },
-                                    }))
-                                  }
-                                  placeholder="Motivo"
-                                  className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-2 flex gap-2">
-                                <button
-                                  type="button"
-                                  disabled={reprogramandoId === row.id}
-                                  onClick={() => void reprogramarSesion(row)}
-                                  className="rounded-lg border border-violet-400/20 bg-violet-400/10 px-2.5 py-1.5 text-[11px] font-semibold text-violet-300 transition hover:bg-violet-400/15 disabled:opacity-60"
-                                >
-                                  {reprogramandoId === row.id ? 'Guardando...' : 'Guardar'}
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={() => setOpenReprogramacionId(null)}
-                                  className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[11px] font-semibold text-white/80 transition hover:bg-white/[0.06]"
-                                >
-                                  Cancelar
-                                </button>
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </Card>
-                  )
-                })
-              )}
-            </div>
-
-            {sesionesPlanHoyCompactas.length > PAGE_SIZE ? (
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <p className="text-xs text-white/45">
-                  Página {sesionesPlanPage} de {sesionesPlanTotalPages} · {sesionesPlanHoyCompactas.length} sesión(es)
-                </p>
-
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    disabled={sesionesPlanPage <= 1}
-                    onClick={() => setSesionesPlanPage((prev) => Math.max(prev - 1, 1))}
-                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
-                  >
-                    Anterior
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={sesionesPlanPage >= sesionesPlanTotalPages}
-                    onClick={() => setSesionesPlanPage((prev) => Math.min(prev + 1, sesionesPlanTotalPages))}
-                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
-                  >
-                    Siguiente
-                  </button>
+                  {sesionesPlanHoyCompactas.length > PAGE_SIZE ? (
+                    <div className="flex items-center justify-between gap-3 pt-2">
+                      <p className="text-xs text-white/45">
+                        Página {sesionesPlanPage} de {sesionesPlanTotalPages}
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={sesionesPlanPage <= 1}
+                          onClick={() => setSesionesPlanPage((prev) => Math.max(prev - 1, 1))}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
+                        >
+                          Anterior
+                        </button>
+                        <button
+                          type="button"
+                          disabled={sesionesPlanPage >= sesionesPlanTotalPages}
+                          onClick={() => setSesionesPlanPage((prev) => Math.min(prev + 1, sesionesPlanTotalPages))}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
+                        >
+                          Siguiente
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-              </div>
-            ) : null}
+              )}
+            </Card>
           </Section>
         </div>
 
         <div className="xl:col-span-1">
-          <Section title="Asistencia del personal hoy" description="Toca un nombre para marcar asistencia.">
-            <div className="mb-3 flex items-center justify-between">
-              <input
-                type="date"
-                value={asistenciaFilterFecha}
-                onChange={(e) => setAsistenciaFilterFecha(e.target.value)}
-                className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
-              />
-
-              <span className="text-xs text-white/45">
-                {empleadosActivosNoAdmin.length} activo(s)
-              </span>
-            </div>
-
-            <div className="space-y-2">
-              {empleadosActivosNoAdmin.length === 0 ? (
-                <Card className="p-4">
-                  <p className="text-sm text-white/55">No hay personal activo.</p>
-                </Card>
-              ) : (
-                empleadosActivosNoAdminPaginados.map((empleado) => {
-                  const registro = mapaAsistenciaPersonalHoy.get(empleado.id)
-                  const actor = firstOrNull(registro?.actualizado_por)
-                  const abierto = openEmpleadoAsistenciaId === empleado.id
-
-                  return (
-                    <Card key={empleado.id} className="overflow-hidden p-0">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setOpenEmpleadoAsistenciaId((current) =>
-                            current === empleado.id ? null : empleado.id
-                          )
-                        }
-                        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-white/[0.04]"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <p className="truncate text-sm font-semibold text-white">
-                              {empleado.nombre || 'Empleado'}
-                            </p>
-                            <span
-                              className={`h-2 w-2 shrink-0 rounded-full ${asistenciaPersonalDotClass(
-                                registro?.estado
-                              )}`}
-                            />
-                          </div>
-                          <p className="mt-0.5 truncate text-[11px] text-white/45">
-                            {roleLabel(empleado.rol)} · {asistenciaPersonalLabel(registro?.estado)}
-                          </p>
-                        </div>
-
-                        <span className="shrink-0 text-xs text-white/40">
-                          {abierto ? '−' : '+'}
-                        </span>
-                      </button>
-
-                      {abierto ? (
-                        <div className="border-t border-white/10 px-3 pb-3 pt-2">
-                          {actor?.nombre ? (
-                            <p className="mb-2 text-[11px] text-white/35">
-                              Último registro: {actor.nombre}
-                              {registro?.updated_at || registro?.created_at
-                                ? ` · ${formatDateTime(registro?.updated_at || registro?.created_at)}`
-                                : ''}
-                            </p>
-                          ) : (
-                            <p className="mb-2 text-[11px] text-white/35">Sin registro todavía.</p>
-                          )}
-
-                          <div className="grid grid-cols-5 gap-1.5">
-                            <button
-                              type="button"
-                              disabled={savingEmpleadoAsistenciaId === empleado.id}
-                              onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'asistio')}
-                              className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-400/15 disabled:opacity-60"
-                            >
-                              ✓
-                            </button>
-
-                            <button
-                              type="button"
-                              disabled={savingEmpleadoAsistenciaId === empleado.id}
-                              onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'permiso')}
-                              className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-2 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-400/15 disabled:opacity-60"
-                            >
-                              P
-                            </button>
-
-                            <button
-                              type="button"
-                              disabled={savingEmpleadoAsistenciaId === empleado.id}
-                              onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'no_asistio')}
-                              className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-2 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-400/15 disabled:opacity-60"
-                            >
-                              X
-                            </button>
-
-                            <button
-                              type="button"
-                              disabled={savingEmpleadoAsistenciaId === empleado.id}
-                              onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'reposo')}
-                              className="rounded-lg border border-fuchsia-400/20 bg-fuchsia-400/10 px-2 py-1.5 text-xs font-semibold text-fuchsia-300 transition hover:bg-fuchsia-400/15 disabled:opacity-60"
-                            >
-                              R
-                            </button>
-
-                            <button
-                              type="button"
-                              disabled={savingEmpleadoAsistenciaId === empleado.id}
-                              onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'vacaciones')}
-                              className="rounded-lg border border-sky-400/20 bg-sky-400/10 px-2 py-1.5 text-[11px] font-semibold text-sky-300 transition hover:bg-sky-400/15 disabled:opacity-60"
-                            >
-                              Vac.
-                            </button>
-                          </div>
-
-                          <p className="mt-2 text-[10px] text-white/35">
-                            Al marcar un estado, este empleado baja al final de la lista.
-                          </p>
-                        </div>
-                      ) : null}
-                    </Card>
-                  )
-                })
-              )}
-            </div>
-
-            {empleadosActivosNoAdmin.length > PAGE_SIZE ? (
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <p className="text-xs text-white/45">
-                  Página {empleadosAsistenciaPage} de {empleadosAsistenciaTotalPages} · {empleadosActivosNoAdmin.length} empleado(s)
-                </p>
-
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    disabled={empleadosAsistenciaPage <= 1}
-                    onClick={() => setEmpleadosAsistenciaPage((prev) => Math.max(prev - 1, 1))}
-                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
-                  >
-                    Anterior
-                  </button>
+          <Section title="Asistencia del personal hoy" description="Personal cerrado por defecto.">
+            <Card className="p-3 sm:p-4">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <input
+                    type="date"
+                    value={asistenciaFilterFecha}
+                    onChange={(e) => setAsistenciaFilterFecha(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none"
+                  />
 
                   <button
                     type="button"
-                    disabled={empleadosAsistenciaPage >= empleadosAsistenciaTotalPages}
-                    onClick={() => setEmpleadosAsistenciaPage((prev) => Math.min(prev + 1, empleadosAsistenciaTotalPages))}
-                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
+                    onClick={() => setMostrarAsistenciaPersonalHoy((prev) => !prev)}
+                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06]"
                   >
-                    Siguiente
+                    {mostrarAsistenciaPersonalHoy ? 'Ocultar' : 'Mostrar'} · {empleadosActivosNoAdmin.length}
                   </button>
                 </div>
+
+                <input
+                  type="text"
+                  value={filtroAsistenciaPersonal}
+                  onChange={(e) => setFiltroAsistenciaPersonal(e.target.value)}
+                  placeholder="Buscar empleado, rol o estado..."
+                  className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none placeholder:text-white/35 focus:border-white/20 focus:bg-white/[0.05]"
+                />
               </div>
-            ) : null}
+
+              {!mostrarAsistenciaPersonalHoy ? (
+                <p className="mt-3 text-xs text-white/45">
+                  Lista oculta para mantener el dashboard compacto.
+                </p>
+              ) : empleadosActivosNoAdmin.length === 0 ? (
+                <p className="mt-3 text-sm text-white/55">No hay personal activo con ese filtro.</p>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {empleadosActivosNoAdminPaginados.map((empleado) => {
+                    const registro = mapaAsistenciaPersonalHoy.get(empleado.id)
+                    const abierto = openEmpleadoAsistenciaId === empleado.id
+
+                    return (
+                      <Card key={empleado.id} className="overflow-hidden p-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOpenEmpleadoAsistenciaId((current) =>
+                              current === empleado.id ? null : empleado.id
+                            )
+                          }
+                          className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-white/[0.04]"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="truncate text-sm font-semibold text-white">
+                                {empleado.nombre || 'Empleado'}
+                              </p>
+                              <span className={`h-2 w-2 shrink-0 rounded-full ${asistenciaPersonalDotClass(registro?.estado)}`} />
+                            </div>
+                            <p className="mt-0.5 truncate text-[11px] text-white/45">
+                              {roleLabel(empleado.rol)} · {asistenciaPersonalLabel(registro?.estado)}
+                            </p>
+                          </div>
+
+                          <span className="shrink-0 text-xs text-white/40">
+                            {abierto ? '−' : '+'}
+                          </span>
+                        </button>
+
+                        {abierto ? (
+                          <div className="border-t border-white/10 px-3 pb-3 pt-2">
+                            <div className="grid grid-cols-5 gap-1.5">
+                              <button
+                                type="button"
+                                disabled={savingEmpleadoAsistenciaId === empleado.id}
+                                onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'asistio')}
+                                className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-400/15 disabled:opacity-60"
+                              >
+                                ✓
+                              </button>
+                              <button
+                                type="button"
+                                disabled={savingEmpleadoAsistenciaId === empleado.id}
+                                onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'permiso')}
+                                className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-2 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-400/15 disabled:opacity-60"
+                              >
+                                P
+                              </button>
+                              <button
+                                type="button"
+                                disabled={savingEmpleadoAsistenciaId === empleado.id}
+                                onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'no_asistio')}
+                                className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-2 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-400/15 disabled:opacity-60"
+                              >
+                                X
+                              </button>
+                              <button
+                                type="button"
+                                disabled={savingEmpleadoAsistenciaId === empleado.id}
+                                onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'reposo')}
+                                className="rounded-lg border border-fuchsia-400/20 bg-fuchsia-400/10 px-2 py-1.5 text-xs font-semibold text-fuchsia-300 transition hover:bg-fuchsia-400/15 disabled:opacity-60"
+                              >
+                                R
+                              </button>
+                              <button
+                                type="button"
+                                disabled={savingEmpleadoAsistenciaId === empleado.id}
+                                onClick={() => void marcarAsistenciaEmpleado(empleado.id, 'vacaciones')}
+                                className="rounded-lg border border-sky-400/20 bg-sky-400/10 px-2 py-1.5 text-[11px] font-semibold text-sky-300 transition hover:bg-sky-400/15 disabled:opacity-60"
+                              >
+                                Vac.
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </Card>
+                    )
+                  })}
+
+                  {empleadosActivosNoAdmin.length > PAGE_SIZE ? (
+                    <div className="flex items-center justify-between gap-3 pt-2">
+                      <p className="text-xs text-white/45">
+                        Página {empleadosAsistenciaPage} de {empleadosAsistenciaTotalPages}
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={empleadosAsistenciaPage <= 1}
+                          onClick={() => setEmpleadosAsistenciaPage((prev) => Math.max(prev - 1, 1))}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
+                        >
+                          Anterior
+                        </button>
+                        <button
+                          type="button"
+                          disabled={empleadosAsistenciaPage >= empleadosAsistenciaTotalPages}
+                          onClick={() => setEmpleadosAsistenciaPage((prev) => Math.min(prev + 1, empleadosAsistenciaTotalPages))}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/[0.06] disabled:opacity-40"
+                        >
+                          Siguiente
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </Card>
           </Section>
         </div>
       </div>
 
-
       <Section
         title="Clientes con saldo pendiente"
-        description="Muestra cuánto deben y la razón o concepto del saldo pendiente."
+        description="Resumen compacto de deudas. Puedes ocultarlo para limpiar el dashboard."
       >
-        <div className="space-y-3">
-          {clientesConSaldoPendiente.length === 0 ? (
-            <Card className="p-4">
+        <Card className="p-3 sm:p-4">
+          <button
+            type="button"
+            onClick={() => setMostrarSaldosPendientes((prev) => !prev)}
+            className="flex w-full items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-left transition hover:bg-white/[0.06]"
+          >
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-white">Saldos pendientes</p>
+              <p className="mt-0.5 text-[11px] text-white/45">
+                {clientesConSaldoPendiente.length} cliente(s) con deuda registrada
+              </p>
+            </div>
+
+            <span className="shrink-0 rounded-full border border-rose-400/20 bg-rose-400/10 px-2.5 py-1 text-xs font-semibold text-rose-300">
+              {mostrarSaldosPendientes ? 'Ocultar' : 'Mostrar'}
+            </span>
+          </button>
+
+          {!mostrarSaldosPendientes ? (
+            <p className="mt-3 text-xs text-white/40">
+              La lista está cerrada para mantener el dashboard más limpio.
+            </p>
+          ) : clientesConSaldoPendiente.length === 0 ? (
+            <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
               <p className="text-sm text-white/55">No hay clientes con saldo pendiente.</p>
-            </Card>
+            </div>
           ) : (
-            clientesConSaldoPendiente.map((row) => (
-              <Card key={row.cliente_id} className="p-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="min-w-0">
-                    <p className="text-base font-semibold text-white">{row.cliente_nombre}</p>
-                    <p className="mt-1 text-sm text-rose-300">
-                      Debe {money(row.saldo_pendiente_neto_usd || row.total_pendiente_usd || 0)}
-                    </p>
-                    <p className="mt-1 text-xs text-white/45">
-                      Deuda total registrada: {money(row.total_pendiente_usd || 0)}
-                    </p>
-                  </div>
+            <div className="mt-3 max-h-[360px] overflow-y-auto pr-1">
+              <div className="divide-y divide-white/10">
+                {clientesConSaldoPendiente.map((row) => {
+                  const montoPendiente = Number(row.saldo_pendiente_neto_usd || row.total_pendiente_usd || 0)
+                  const primeraRazon = row.razones[0]
 
-                  <Link
-                    href={`/admin/cobranzas/pendientes?cliente=${row.cliente_id}`}
-                    className="inline-flex rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]"
-                  >
-                    Ver cobranzas
-                  </Link>
-                </div>
-
-                <div className="mt-4 space-y-2">
-                  {row.razones.length === 0 ? (
-                    <p className="text-sm text-white/55">No hay conceptos disponibles.</p>
-                  ) : (
-                    row.razones.map((razon) => (
-                      <div
-                        key={razon.id}
-                        className="rounded-2xl border border-rose-400/15 bg-rose-400/5 p-3"
-                      >
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-white break-words whitespace-normal">
-                              {razon.concepto}
-                            </p>
-                            {razon.notas ? (
-                              <p className="mt-1 text-xs text-white/45 break-words whitespace-normal">
-                                {razon.notas}
-                              </p>
-                            ) : null}
-                            <p className="mt-1 text-xs text-white/35">
-                              {razon.fecha ? `Fecha: ${formatDate(razon.fecha)}` : 'Fecha: —'}
-                            </p>
-                          </div>
-
-                          <span className="shrink-0 rounded-full border border-rose-400/20 bg-rose-400/10 px-2.5 py-1 text-xs font-medium text-rose-300">
-                            {money(razon.saldo_usd)}
-                          </span>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </Card>
-            ))
-          )}
-        </div>
-      </Section>
-
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <Section title="Personal con más citas" description="Top 5 del mes.">
-          <div className="space-y-3">
-            {topPersonal.length === 0 ? (
-              <Card className="p-4">
-                <p className="text-sm text-white/55">
-                  No hay datos de personal para mostrar.
-                </p>
-              </Card>
-            ) : (
-              topPersonal.map((item, index) => (
-                <Card key={item.id} className="p-4">
-                  <div className="flex items-start justify-between gap-3 sm:items-center">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <div
-                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
-                          index === 0
-                            ? 'bg-amber-400/20 text-amber-300'
-                            : index === 1
-                            ? 'bg-gray-400/20 text-gray-300'
-                            : index === 2
-                            ? 'bg-orange-400/20 text-orange-300'
-                            : 'bg-white/10 text-white/75'
-                        }`}
-                      >
-                        {index + 1}
+                  return (
+                    <div
+                      key={row.cliente_id}
+                      className="grid grid-cols-1 gap-2 py-2.5 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1.5fr)_auto] sm:items-center"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-white">
+                          {row.cliente_nombre}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-white/40">
+                          {row.razones.length} concepto(s) pendiente(s)
+                        </p>
                       </div>
 
                       <div className="min-w-0">
-                        <p className="truncate font-medium text-white">{item.nombre}</p>
-                        <p className="text-xs text-white/55">Citas completadas</p>
+                        <p className="truncate text-xs text-white/65">
+                          {primeraRazon?.concepto || 'Saldo pendiente'}
+                        </p>
+                        <p className="mt-0.5 truncate text-[11px] text-white/35">
+                          {primeraRazon?.fecha ? `Fecha: ${formatDate(primeraRazon.fecha)}` : 'Fecha: —'}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                        <span className="rounded-full border border-rose-400/20 bg-rose-400/10 px-2.5 py-1 text-xs font-semibold text-rose-300">
+                          {money(montoPendiente)}
+                        </span>
+
+                        
                       </div>
                     </div>
-
-                    <p className="shrink-0 text-lg font-semibold text-white sm:text-xl">
-                      {item.total}
-                    </p>
-                  </div>
-                </Card>
-              ))
-            )}
-          </div>
-        </Section>
-
-        <Section title="Acciones rápidas" description="Atajos principales.">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <ActionCard
-              title="Clientes"
-              description="Ver listado completo."
-              href="/admin/personas/clientes"
-            />
-            <ActionCard
-              title="Agenda"
-              description="Revisar citas."
-              href="/admin/operaciones/agenda"
-            />
-            <ActionCard
-              title="Finanzas"
-              description="Ver ingresos/egresos."
-              href="/admin/finanzas"
-            />
-            <ActionCard
-              title="Personal"
-              description="Ver empleados."
-              href="/admin/personas/personal"
-            />
-          </div>
-        </Section>
-      </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </Card>
+      </Section>
     </div>
   )
 }
