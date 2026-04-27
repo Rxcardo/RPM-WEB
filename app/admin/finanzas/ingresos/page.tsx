@@ -596,6 +596,7 @@ function IngresosPageContent() {
   const [destinoSaldo, setDestinoSaldo] = useState<DestinoSaldo>('credito')
   const [cuentaCobrarSeleccionadaId, setCuentaCobrarSeleccionadaId] = useState('')
   const [montoAbonoDeuda, setMontoAbonoDeuda] = useState('')
+  const [montoManualUSD, setMontoManualUSD] = useState('')
 
   // ─── Derived ──────────────────────────────────────────────────────────────
 
@@ -623,6 +624,17 @@ function IngresosPageContent() {
     [productoSeleccionado, cantidad]
   )
   const montoAbonoDeudaNumero = useMemo(() => r2(Number(montoAbonoDeuda || 0)), [montoAbonoDeuda])
+  const montoManualUSDNumero = useMemo(() => r2(Number(montoManualUSD || 0)), [montoManualUSD])
+
+  // Monto real que debe cobrar el bloque de pago rápido.
+  // En productos usa el total del producto. En abono a deuda usa el monto a abonar.
+  // En recarga de saldo usa un monto manual, porque no existe producto que defina totalUSD.
+  const montoObjetivoPagoRapidoUsd = useMemo(() => {
+    if (tipoIngreso === 'saldo' && destinoSaldo === 'deuda') return montoAbonoDeudaNumero
+    if (tipoIngreso === 'saldo') return montoManualUSDNumero
+    return totalUSD
+  }, [tipoIngreso, destinoSaldo, montoAbonoDeudaNumero, montoManualUSDNumero, totalUSD])
+
   const creditoDisponibleUsd = useMemo(() => r2(Number(estadoCuentaCliente?.credito_disponible_usd || 0)), [estadoCuentaCliente])
 
   // Métodos de pago como MetodoPagoBase para PagoConDeudaSelector
@@ -644,8 +656,8 @@ function IngresosPageContent() {
   }, [pagoMixto1, pagoMixto2])
 
   const totalPagoUnicoBs = useMemo(
-    () => (monedaPagoUnico !== 'BS' || !tasaPagoUnico || tasaPagoUnico <= 0) ? 0 : r2(totalUSD * tasaPagoUnico),
-    [monedaPagoUnico, tasaPagoUnico, totalUSD]
+    () => (monedaPagoUnico !== 'BS' || !tasaPagoUnico || tasaPagoUnico <= 0) ? 0 : r2(montoObjetivoPagoRapidoUsd * tasaPagoUnico),
+    [monedaPagoUnico, tasaPagoUnico, montoObjetivoPagoRapidoUsd]
   )
 
   const metodosPagoUnicoDisponibles = useMemo(
@@ -658,15 +670,20 @@ function IngresosPageContent() {
     const usd2 = pagoToUsd(pagoMixto2)
     const totalUsd = r2(usd1 + usd2)
     const totalBs = r2(pagoMontoEnBs(pagoMixto1) + pagoMontoEnBs(pagoMixto2))
-    const diff = r2(totalUSD - totalUsd)
+
+    // Para recarga de saldo a favor en pago mixto, el total objetivo es la propia suma
+    // de los fragmentos. Para producto/abono a deuda, sí debe cuadrar contra un total fijo.
+    const esRecargaSaldoLibre = tipoIngreso === 'saldo' && destinoSaldo === 'credito'
+    const totalObjetivo = esRecargaSaldoLibre ? totalUsd : montoObjetivoPagoRapidoUsd
+    const diff = r2(totalObjetivo - totalUsd)
     const faltante = r2(Math.max(diff, 0))
-    const cuadra = Math.abs(diff) < 0.01 && totalUSD > 0
-    const pct1 = totalUSD > 0 ? Math.round((usd1 / totalUSD) * 100) : 0
-    const pct2 = totalUSD > 0 ? Math.round((usd2 / totalUSD) * 100) : 0
+    const cuadra = esRecargaSaldoLibre ? totalUsd > 0 : Math.abs(diff) < 0.01 && totalObjetivo > 0
+    const pct1 = totalObjetivo > 0 ? Math.round((usd1 / totalObjetivo) * 100) : 0
+    const pct2 = totalObjetivo > 0 ? Math.round((usd2 / totalObjetivo) * 100) : 0
     const p1Valido = !!pagoMixto1.metodoId && (pagoMixto1.moneda === 'USD' ? (parseFloat(pagoMixto1.monto) || 0) > 0 : (parseFloat(pagoMixto1.monto) || 0) > 0 && (pagoMixto1.tasaBcv || 0) > 0)
     const p2Valido = !!pagoMixto2.metodoId && (pagoMixto2.moneda === 'USD' ? (parseFloat(pagoMixto2.monto) || 0) > 0 : (parseFloat(pagoMixto2.monto) || 0) > 0 && (pagoMixto2.tasaBcv || 0) > 0)
-    return { usd1, usd2, totalUsd, totalBs, faltante, cuadra, pct1, pct2, p1Valido, p2Valido }
-  }, [pagoMixto1, pagoMixto2, totalUSD])
+    return { usd1, usd2, totalUsd, totalBs, faltante, cuadra, pct1, pct2, p1Valido, p2Valido, totalObjetivo, esRecargaSaldoLibre }
+  }, [pagoMixto1, pagoMixto2, tipoIngreso, destinoSaldo, montoObjetivoPagoRapidoUsd])
 
   // ─── Effects ──────────────────────────────────────────────────────────────
 
@@ -739,6 +756,10 @@ function IngresosPageContent() {
   }, [destinoSaldo, cuentaPendienteSeleccionada])
 
   useEffect(() => { setMetodoPagoUnicoId('') }, [monedaPagoUnico])
+
+  useEffect(() => {
+    if (tipoIngreso !== 'saldo' || destinoSaldo !== 'credito') setMontoManualUSD('')
+  }, [tipoIngreso, destinoSaldo])
 
   useEffect(() => {
     if (tipoPago === 'mixto' && !editingId) {
@@ -958,32 +979,48 @@ function IngresosPageContent() {
       return [{
         metodo_pago_v2_id: metodoPagoUnicoId,
         moneda_pago: monedaPagoUnico,
-        monto: monedaPagoUnico === 'BS' ? r2(totalPagoUnicoBs) : r2(totalUSD),
+        monto: monedaPagoUnico === 'BS' ? r2(totalPagoUnicoBs) : r2(montoObjetivoPagoRapidoUsd),
         tasa_bcv: monedaPagoUnico === 'BS' ? tasaPagoUnico : null,
         referencia: referenciaPagoUnico || null,
         notas: notasPagoUnico || null,
       }]
     }
-    return [pagoMixto1, pagoMixto2].map((item) => ({
-      metodo_pago_v2_id: item.metodoId,
-      moneda_pago: item.moneda,
-      monto: parseFloat(item.monto) || 0,
-      tasa_bcv: item.moneda === 'BS' ? item.tasaBcv : null,
-      referencia: item.referencia || null,
-      notas: item.notas || null,
-    }))
+    return [pagoMixto1, pagoMixto2].map((item, index) => {
+      const monto = parseFloat(item.monto)
+      if (!Number.isFinite(monto) || monto <= 0) {
+        throw new Error(`El Pago ${index + 1} debe tener monto mayor a 0.`)
+      }
+      return {
+        metodo_pago_v2_id: item.metodoId,
+        moneda_pago: item.moneda,
+        monto: r2(monto),
+        tasa_bcv: item.moneda === 'BS' ? item.tasaBcv : null,
+        referencia: item.referencia || null,
+        notas: item.notas || null,
+      }
+    })
   }
 
   function validarPagoRapido(): string | null {
     if (tipoPago === 'unico') {
       if (!metodoPagoUnicoId) return 'Selecciona el método de pago.'
+      if (!montoObjetivoPagoRapidoUsd || montoObjetivoPagoRapidoUsd <= 0) {
+        return tipoIngreso === 'saldo' && destinoSaldo === 'credito'
+          ? 'Indica el monto a recargar. Debe ser mayor a 0.'
+          : 'El monto del pago debe ser mayor a 0.'
+      }
       if (monedaPagoUnico === 'BS' && (!tasaPagoUnico || tasaPagoUnico <= 0))
         return 'Selecciona una tasa válida para el pago en bolívares.'
+      if (monedaPagoUnico === 'BS' && totalPagoUnicoBs <= 0)
+        return 'El monto en bolívares debe ser mayor a 0.'
       return null
     }
-    if (!resumenPagosMixtoRapido.p1Valido) return 'Completa el Pago 1: método y monto requeridos.'
-    if (!resumenPagosMixtoRapido.p2Valido) return 'Completa el Pago 2: método y monto requeridos.'
-    if (!resumenPagosMixtoRapido.cuadra) return `La suma no cuadra. Faltante: ${formatearMoneda(resumenPagosMixtoRapido.faltante, 'USD')}`
+    if (!resumenPagosMixtoRapido.p1Valido) return 'Completa el Pago 1: método, monto y tasa si aplica.'
+    if (!resumenPagosMixtoRapido.p2Valido) return 'Completa el Pago 2: método, monto y tasa si aplica.'
+    if (resumenPagosMixtoRapido.totalUsd <= 0) return 'La suma de los pagos debe ser mayor a 0.'
+    if (!resumenPagosMixtoRapido.esRecargaSaldoLibre && !resumenPagosMixtoRapido.cuadra) {
+      return `La suma no cuadra. Faltante: ${formatearMoneda(resumenPagosMixtoRapido.faltante, 'USD')}`
+    }
     return null
   }
 
@@ -1107,7 +1144,7 @@ function IngresosPageContent() {
       if (tipoIngreso === 'saldo') {
         const errSaldo = validarPagoRapido()
         if (errSaldo) { alert(errSaldo); return }
-        const totalSaldoUsd = tipoPago === 'unico' ? r2(totalUSD) : totalPagoMixtoUsd
+        const totalSaldoUsd = tipoPago === 'unico' ? r2(montoObjetivoPagoRapidoUsd) : totalPagoMixtoUsd
         if (totalSaldoUsd <= 0) { alert('Debes indicar un monto válido para la recarga.'); return }
 
         setSaving(true)
@@ -1235,7 +1272,7 @@ ${notas.trim()}` : ''}`,
       if (errSaldo) { alert(errSaldo); return }
 
       const totalSaldoUsd = tipoPago === 'unico'
-        ? r2(totalUSD)
+        ? r2(montoObjetivoPagoRapidoUsd)
         : r2(pagoToUsd(pagoMixto1) + pagoToUsd(pagoMixto2))
 
       if (totalSaldoUsd <= 0) { alert('Debes indicar un monto válido para la recarga.'); return }
@@ -1382,7 +1419,7 @@ ${notas.trim()}` : ''}`,
     setReferenciaPagoUnico(''); setNotasPagoUnico(''); setTasaPagoUnico(null); setMontoPagoUnicoBs(null)
     setPagoMixto1(pagoMixtoVacio('USD')); setPagoMixto2(pagoMixtoVacio('BS'))
     setEditingId(null); setEditingOperacionId(null)
-    setCuentaCobrarSeleccionadaId(''); setMontoAbonoDeuda('')
+    setCuentaCobrarSeleccionadaId(''); setMontoAbonoDeuda(''); setMontoManualUSD('')
     setDestinoSaldo('credito'); setShowForm(false)
   }
 
@@ -1995,19 +2032,19 @@ ${notas.trim()}` : ''}`,
                             ))}
                           </select>
                         </div>
-                        {/* Monto readonly para saldo */}
                         {tipoIngreso === 'saldo' && destinoSaldo !== 'deuda' && (
                           <div>
                             <label className={labelCls}>Monto a recargar (USD)</label>
                             <input type="number" min={0} step="0.01"
-                              value={tipoPago === 'unico' && monedaPagoUnico === 'USD' ? '' : ''}
-                              onChange={(e) => {/* monto libre para saldo */}}
+                              value={montoManualUSD}
+                              onChange={(e) => setMontoManualUSD(e.target.value)}
                               className={inputCls} placeholder="Ingresa el monto..." />
+                            <p className="mt-1 text-xs text-white/40">Este monto se usará para validar el pago único y calcular Bs si aplica.</p>
                           </div>
                         )}
                         {monedaPagoUnico === 'BS' && (
                           <PagoBsSelector fecha={fecha}
-                            montoUsd={tipoIngreso === 'saldo' && destinoSaldo === 'deuda' ? montoAbonoDeudaNumero : totalUSD}
+                            montoUsd={montoObjetivoPagoRapidoUsd}
                             montoBs={montoPagoUnicoBs}
                             onChangeTasa={setTasaPagoUnico}
                             onChangeMontoBs={setMontoPagoUnicoBs} />
@@ -2029,7 +2066,7 @@ ${notas.trim()}` : ''}`,
                           <div className="mb-3 flex items-baseline justify-between">
                             <div className="flex items-baseline gap-2">
                               <span className="text-2xl font-semibold text-white">
-                                {formatearMoneda(tipoIngreso === 'saldo' && destinoSaldo === 'deuda' ? montoAbonoDeudaNumero : totalUSD, 'USD')}
+                                {formatearMoneda(resumenPagosMixtoRapido.totalObjetivo, 'USD')}
                               </span>
                               <span className="text-sm text-white/45">total a cobrar</span>
                             </div>
