@@ -203,6 +203,7 @@ export default function AgendaPage() {
   const [error, setError] = useState('')
   const [actionError, setActionError] = useState('')
   const [updatingId, setUpdatingId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [empleadoActualId, setEmpleadoActualId] = useState<string>('')
 
   useEffect(() => {
@@ -355,6 +356,37 @@ export default function AgendaPage() {
       setActionError(err?.message || 'No se pudo cambiar el estado de la cita.')
     } finally {
       setUpdatingId(null)
+    }
+  }
+
+
+  async function eliminarCitaCompleta(cita: CitaRow) {
+    setActionError('')
+
+    const nombreCliente = cita.clientes?.nombre || 'este cliente'
+    const fechaCita = formatDateTime(cita.fecha, cita.hora_inicio)
+
+    const ok = window.confirm(
+      `⚠️ Vas a eliminar completamente la cita de ${nombreCliente} (${fechaCita}).\n\nEsto también eliminará pagos, comisiones, cuentas por cobrar y registros financieros relacionados.\n\n¿Seguro que deseas continuar?`
+    )
+
+    if (!ok) return
+
+    setDeletingId(cita.id)
+
+    try {
+      const { error } = await supabase.rpc('eliminar_cita_completa', {
+        p_cita_id: cita.id,
+      })
+
+      if (error) throw new Error(error.message)
+
+      await loadAgenda()
+    } catch (err: any) {
+      console.error(err)
+      setActionError(err?.message || 'No se pudo eliminar la cita completa.')
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -535,7 +567,7 @@ export default function AgendaPage() {
                 citasFiltradas.map((cita) => {
                   const duracion = cita.servicios?.duracion_minutos || 0
                   const estado = (cita.estado || '').toLowerCase()
-                  const disabled = updatingId === cita.id
+                  const disabled = updatingId === cita.id || deletingId === cita.id
 
                   const puedeConfirmar = ['programada', 'reprogramada'].includes(estado)
                   const puedeCompletar = ['programada', 'confirmada', 'reprogramada'].includes(estado)
@@ -697,6 +729,20 @@ export default function AgendaPage() {
                           >
                             {disabled && updatingId === cita.id ? 'Procesando...' : 'Cancelar'}
                           </ActionButton>
+
+                          <button
+                            type="button"
+                            disabled={disabled}
+                            onClick={() => eliminarCitaCompleta(cita)}
+                            className="
+                              rounded-xl border border-red-500/25 bg-red-500/10
+                              px-3 py-1.5 text-xs font-medium text-red-300
+                              transition hover:bg-red-500/15
+                              disabled:cursor-not-allowed disabled:opacity-40
+                            "
+                          >
+                            {deletingId === cita.id ? 'Eliminando...' : 'Eliminar'}
+                          </button>
                         </div>
                       </td>
                     </tr>

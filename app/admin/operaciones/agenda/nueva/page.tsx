@@ -299,6 +299,13 @@ function NuevaCitaPageContent() {
 
   // ─── Effects ──────────────────────────────────────────────────────────
 
+  // BLOQUEO_RECOVERY_INTERNO: siempre Recovery y sin plan asociado.
+  useEffect(() => {
+    setForm((prev) => (prev.tipo_cita === 'recovery' && !prev.cliente_plan_id
+      ? prev
+      : { ...prev, tipo_cita: 'recovery', cliente_plan_id: '' }))
+  }, [form.tipo_cita, form.cliente_plan_id])
+
   useEffect(() => { void loadData(); void loadEmpleadoActual() }, [])
 
   useEffect(() => {
@@ -307,7 +314,7 @@ function NuevaCitaPageContent() {
 
   useEffect(() => {
     if (form.cliente_id) void loadPlanesCliente(form.cliente_id)
-    else { setPlanesCliente([]); setForm((prev) => ({ ...prev, cliente_plan_id: '', tipo_cita: prev.tipo_cita === 'plan' ? 'independiente' : prev.tipo_cita })) }
+    else { setPlanesCliente([]); setForm((prev) => ({ ...prev, cliente_plan_id: '', tipo_cita: 'recovery' })) }
   }, [form.cliente_id])
 
   const servicioSeleccionado = useMemo(() => servicios.find((s) => s.id === form.servicio_id) || null, [servicios, form.servicio_id])
@@ -410,11 +417,11 @@ function NuevaCitaPageContent() {
       setForm((prev) => ({
         ...prev,
         cliente_plan_id: planes.some((p) => p.id === prev.cliente_plan_id) ? prev.cliente_plan_id : '',
-        tipo_cita: prev.tipo_cita === 'plan' && planes.length === 0 ? 'independiente' : prev.tipo_cita,
+        tipo_cita: 'recovery',
       }))
     } catch {
       setPlanesCliente([])
-      setForm((prev) => ({ ...prev, cliente_plan_id: '', tipo_cita: prev.tipo_cita === 'plan' ? 'independiente' : prev.tipo_cita }))
+      setForm((prev) => ({ ...prev, cliente_plan_id: '', tipo_cita: 'recovery' }))
     } finally { setLoadingPlanes(false) }
   }
 
@@ -476,10 +483,7 @@ function NuevaCitaPageContent() {
       alert('Completa cliente, fisioterapeuta, servicio y agrega al menos una hora al lote.')
       return
     }
-    if (form.tipo_cita === 'plan' && !form.cliente_plan_id) { alert('Debes seleccionar el plan del cliente.'); return }
-    if (form.tipo_cita === 'plan' && planSeleccionado && getPlanDisponible(planSeleccionado) < slotsFinal.length) {
-      alert(`Ese plan no tiene suficientes sesiones. Necesitas ${slotsFinal.length}, quedan ${getPlanDisponible(planSeleccionado)}.`); return
-    }
+    // Tipo de cita fijo: Recovery. No consume plan ni permite independiente.
     if (form.estado === 'cancelada') { alert('No se puede cobrar una cita cancelada.'); return }
     if (montoBase <= 0) { alert('El monto de la cita debe ser mayor a 0.'); return }
     if (baseComisionAplicada <= 0) { alert('La base de comisión debe ser mayor a 0.'); return }
@@ -522,17 +526,14 @@ function NuevaCitaPageContent() {
           fecha: slot.fecha,   // ← fecha propia del slot
           hora_inicio: hiN, hora_fin: hfN,
           estado: form.estado, notas: form.notas || null,
-          cliente_plan_id: form.tipo_cita === 'plan' ? form.cliente_plan_id : null,
+          cliente_plan_id: null,
           created_by: auditorId || null, updated_by: auditorId || null,
         }).select('id').single()
         if (citaErr) throw new Error(`${slot.fecha} ${slot.hora_inicio}: ${citaErr.message}`)
         const citaId = citaData.id
 
         const conceptoBase = `${nombreServicio} - ${clienteNombre} - ${slot.fecha} ${slot.hora_inicio}`
-        const concepto =
-          form.tipo_cita === 'plan'        ? `${conceptoBase} [Plan]`
-          : form.tipo_cita === 'recovery'  ? `${conceptoBase} [Recovery]`
-          : `${conceptoBase} [Independiente]`
+        const concepto = `${conceptoBase} [Recovery]`
 
         // Registrar pago
         if (pagoState.tipoCobro !== 'sin_pago') {
@@ -541,7 +542,7 @@ function NuevaCitaPageContent() {
             const { error: pagoErr } = await supabase.rpc('registrar_pagos_mixtos', {
               p_fecha: fechaPago, p_tipo_origen: 'cita', p_categoria: 'cita', p_concepto: concepto,
               p_cliente_id: form.cliente_id, p_cita_id: citaId,
-              p_cliente_plan_id: form.tipo_cita === 'plan' ? form.cliente_plan_id : null,
+              p_cliente_plan_id: null,
               p_cuenta_cobrar_id: null, p_inventario_id: null,
               p_registrado_por: auditorId || null, p_notas_generales: null,
               p_pagos: pagosPayload,
@@ -699,23 +700,8 @@ function NuevaCitaPageContent() {
                 className={inputCls} />
             </Field>
 
-            <Field label="Tipo de cita">
-              <select value={form.tipo_cita} onChange={(e) => setForm({ ...form, tipo_cita: e.target.value })} className={inputCls}>
-                <option value="recovery"      className="bg-[#11131a] text-white">Recovery</option>
-                <option value="independiente" className="bg-[#11131a] text-white">Independiente</option>
-                <option value="plan"          className="bg-[#11131a] text-white">Descontar de plan</option>
-              </select>
-            </Field>
-
-            {form.tipo_cita === 'plan' && (
-              <Field label="Plan del cliente"
-                helper={loadingPlanes ? 'Cargando planes...' : planesCliente.length === 0 ? 'Sin planes activos con sesiones disponibles.' : 'Selecciona el plan que debe consumir la sesión.'}>
-                <select value={form.cliente_plan_id} onChange={(e) => setForm((prev) => ({ ...prev, cliente_plan_id: e.target.value }))} className={inputCls}>
-                  <option value="" className="bg-[#11131a] text-white">Seleccionar plan</option>
-                  {planesCliente.map((p) => <option key={p.id} value={p.id} className="bg-[#11131a] text-white">{getPlanLabel(p)}</option>)}
-                </select>
-              </Field>
-            )}
+            {/* Tipo de cita bloqueado internamente: siempre Recovery. No se muestra en UI. */}
+            <input type="hidden" name="tipo_cita" value="recovery" readOnly />
 
             <Field label="Estado" helper="Solo la cita completada debe consumir sesión si está ligada a un plan.">
               <select value={form.estado} onChange={(e) => setForm({ ...form, estado: e.target.value })} className={inputCls}>
@@ -959,7 +945,6 @@ function NuevaCitaPageContent() {
           disabled={
             loading || servicios.length === 0 ||
             (slots.length === 0 && !form.hora_inicio) ||
-            (form.tipo_cita === 'plan' && !form.cliente_plan_id) ||
             !comisionBalanceOk || baseComisionAplicada <= 0
           }
           className="rounded-2xl border border-white/10 bg-white/[0.08] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.12] disabled:opacity-60">
