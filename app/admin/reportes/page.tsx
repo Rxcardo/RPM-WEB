@@ -314,11 +314,93 @@ async function exportCierrePDF(args: { ingresos: IngresoRow[]; egresos: EgresoRo
   const totalEgrBs = egresosValidos.reduce((a, r) => a + Number(r.monto_equivalente_bs || 0), 0)
   const fmtUsd = (n: number) => `$ ${n.toFixed(2)}`
   const fmtBs = (n: number) => `Bs. ${n.toFixed(2)}`
+
+  const normalizeCurrency = (value?: string | null) => {
+    const raw = String(value || '').trim().toUpperCase()
+    if (['BS', 'VES', 'BOLIVARES', 'BOLÍVARES', 'BOLIVAR', 'BOLÍVAR'].includes(raw)) return 'BS'
+    if (['USD', '$', 'DOLAR', 'DÓLAR', 'DOLARES', 'DÓLARES'].includes(raw)) return 'USD'
+    return raw || 'SIN MONEDA'
+  }
+
+  const formatOriginalMoney = (amount: number, currency: string) => {
+    const cur = normalizeCurrency(currency)
+    if (cur === 'BS') return fmtBs(amount)
+    if (cur === 'USD') return fmtUsd(amount)
+    return `${amount.toFixed(2)} ${cur}`
+  }
+
+  const totalByCurrency = <T extends { monto: number }>(rows: T[], getCurrency: (row: T) => string | null | undefined) => {
+    const map = new Map<string, number>()
+    for (const row of rows) {
+      const currency = normalizeCurrency(getCurrency(row))
+      map.set(currency, (map.get(currency) || 0) + Number(row.monto || 0))
+    }
+    return Array.from(map.entries())
+      .map(([moneda, total]) => ({ moneda, total }))
+      .sort((a, b) => a.moneda.localeCompare(b.moneda))
+  }
+
+  const totalByMethod = <T extends { monto: number; metodos_pago_v2?: { nombre: string; moneda?: string | null } | null }>(rows: T[], getCurrency: (row: T) => string | null | undefined) => {
+    const map = new Map<string, { metodo: string; moneda: string; total: number }>()
+    for (const row of rows) {
+      const metodo = row.metodos_pago_v2?.nombre || 'Sin método'
+      const moneda = normalizeCurrency(getCurrency(row) || row.metodos_pago_v2?.moneda)
+      const key = `${metodo}__${moneda}`
+      const prev = map.get(key) || { metodo, moneda, total: 0 }
+      prev.total += Number(row.monto || 0)
+      map.set(key, prev)
+    }
+    return Array.from(map.values()).sort((a, b) => `${a.metodo} ${a.moneda}`.localeCompare(`${b.metodo} ${b.moneda}`))
+  }
+
+  const ingresosPorMoneda = totalByCurrency(ingresosValidos, (row) => row.moneda_pago || row.metodos_pago_v2?.moneda)
+  const egresosPorMoneda = totalByCurrency(egresosValidos, (row) => row.moneda || row.metodos_pago_v2?.moneda)
+  const ingresosPorMetodo = totalByMethod(ingresosValidos, (row) => row.moneda_pago || row.metodos_pago_v2?.moneda)
+  const egresosPorMetodo = totalByMethod(egresosValidos, (row) => row.moneda || row.metodos_pago_v2?.moneda)
+
   doc.setFillColor(246, 246, 246); doc.roundedRect(marginX, cursorY, 180, 24, 2, 2, 'F'); doc.setDrawColor(205); doc.roundedRect(marginX, cursorY, 180, 24, 2, 2, 'S')
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(60); doc.text('INGRESOS', 35, cursorY + 7, { align: 'center' }); doc.text('EGRESOS', 90, cursorY + 7, { align: 'center' }); doc.text('BALANCE', 145, cursorY + 7, { align: 'center' })
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(60); doc.text('INGRESOS CONVERTIDOS', 35, cursorY + 7, { align: 'center' }); doc.text('EGRESOS CONVERTIDOS', 90, cursorY + 7, { align: 'center' }); doc.text('BALANCE CONVERTIDO', 145, cursorY + 7, { align: 'center' })
   doc.setFontSize(10); doc.setTextColor(20); doc.text(fmtUsd(totalIngUsd), 35, cursorY + 14, { align: 'center' }); doc.text(fmtUsd(totalEgrUsd), 90, cursorY + 14, { align: 'center' }); doc.text(fmtUsd(totalIngUsd - totalEgrUsd), 145, cursorY + 14, { align: 'center' })
   doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(95); doc.text(fmtBs(totalIngBs), 35, cursorY + 20, { align: 'center' }); doc.text(fmtBs(totalEgrBs), 90, cursorY + 20, { align: 'center' }); doc.text(fmtBs(totalIngBs - totalEgrBs), 145, cursorY + 20, { align: 'center' })
   cursorY += 32
+
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(25); doc.text('Resumen real por moneda', marginX, cursorY)
+  autoTable(doc, {
+    startY: cursorY + 4,
+    margin: { left: marginX, right: marginX, bottom: 40 },
+    head: [['Tipo', 'Moneda', 'Total original']],
+    body: [
+      ...ingresosPorMoneda.map((r) => ['Ingreso', r.moneda, formatOriginalMoney(r.total, r.moneda)]),
+      ...egresosPorMoneda.map((r) => ['Egreso', r.moneda, formatOriginalMoney(r.total, r.moneda)]),
+    ],
+    theme: 'grid',
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.4, lineColor: [210, 210, 210], lineWidth: 0.2 },
+    headStyles: { fillColor: [65, 65, 65], textColor: [255, 255, 255], fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 248, 248] },
+    columnStyles: { 2: { halign: 'right' } },
+  })
+  cursorY = ((doc as any).lastAutoTable?.finalY || cursorY) + 8
+
+  const detalleMetodos = [
+    ...ingresosPorMetodo.map((r) => ['Ingreso', r.metodo, r.moneda, formatOriginalMoney(r.total, r.moneda)]),
+    ...egresosPorMetodo.map((r) => ['Egreso', r.metodo, r.moneda, formatOriginalMoney(r.total, r.moneda)]),
+  ]
+
+  if (detalleMetodos.length > 0) {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(25); doc.text('Resumen por método de pago', marginX, cursorY)
+    autoTable(doc, {
+      startY: cursorY + 4,
+      margin: { left: marginX, right: marginX, bottom: 40 },
+      head: [['Tipo', 'Método', 'Moneda', 'Total original']],
+      body: detalleMetodos,
+      theme: 'grid',
+      styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.4, lineColor: [210, 210, 210], lineWidth: 0.2 },
+      headStyles: { fillColor: [65, 65, 65], textColor: [255, 255, 255], fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [248, 248, 248] },
+      columnStyles: { 3: { halign: 'right' } },
+    })
+    cursorY = ((doc as any).lastAutoTable?.finalY || cursorY) + 8
+  }
   if (ingresosValidos.length > 0) { doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(25); doc.text('Detalles del cierre · Ingresos', marginX, cursorY); autoTable(doc, { startY: cursorY + 4, margin: { left: marginX, right: marginX, bottom: 40 }, head: [['Fecha', 'Hora', 'Concepto', 'Cliente', 'Método', 'USD', 'Bs']], body: ingresosValidos.map((r) => [shortDate(r.fecha), r.created_at ? new Date(r.created_at).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' }) : '—', r.concepto, r.clientes?.nombre || '—', r.metodos_pago_v2?.nombre || '—', fmtUsd(Number(r.monto_equivalente_usd || 0)), fmtBs(Number(r.monto_equivalente_bs || 0))]), theme: 'grid', styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.4, lineColor: [210, 210, 210], lineWidth: 0.2 }, headStyles: { fillColor: [65, 65, 65], textColor: [255, 255, 255], fontStyle: 'bold' }, alternateRowStyles: { fillColor: [248, 248, 248] }, columnStyles: { 5: { halign: 'right' }, 6: { halign: 'right' } } }); cursorY = ((doc as any).lastAutoTable?.finalY || cursorY) + 8 }
   if (egresosValidos.length > 0) { if (cursorY > 215) { doc.addPage(); await drawCorporateHeader({ doc, logoSrc, title: 'Cierre de caja', subtitle: getPeriodoTexto(fechaInicio, fechaFin, horaInicio, horaFin), dateText: `Fecha: ${shortDate(todayISO())}`, generatedBy: generadoPor }); cursorY = 62 } doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(25); doc.text('Detalles del cierre · Egresos', marginX, cursorY); autoTable(doc, { startY: cursorY + 4, margin: { left: marginX, right: marginX, bottom: 40 }, head: [['Fecha', 'Hora', 'Concepto', 'Categoría', 'Proveedor/Empleado', 'USD', 'Bs']], body: egresosValidos.map((r) => [shortDate(r.fecha), r.created_at ? new Date(r.created_at).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' }) : '—', r.concepto, r.categoria, r.empleados?.nombre || r.proveedor || '—', fmtUsd(Number(r.monto_equivalente_usd || 0)), fmtBs(Number(r.monto_equivalente_bs || 0))]), theme: 'grid', styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.4, lineColor: [210, 210, 210], lineWidth: 0.2 }, headStyles: { fillColor: [65, 65, 65], textColor: [255, 255, 255], fontStyle: 'bold' }, alternateRowStyles: { fillColor: [248, 248, 248] }, columnStyles: { 5: { halign: 'right' }, 6: { halign: 'right' } } }) }
   await finalizeCorporatePdf(doc, logoSrc)
