@@ -660,6 +660,18 @@ function IngresosPageContent() {
     [monedaPagoUnico, tasaPagoUnico, montoObjetivoPagoRapidoUsd]
   )
 
+  const totalPagoUnicoRealUsd = useMemo(() => {
+    if (tipoPago !== 'unico') return 0
+    if (monedaPagoUnico !== 'BS') return r2(montoObjetivoPagoRapidoUsd)
+    const bsReal = Number(montoPagoUnicoBs || 0)
+    if (!tasaPagoUnico || tasaPagoUnico <= 0 || bsReal <= 0) return 0
+    return r2(bsReal / tasaPagoUnico)
+  }, [tipoPago, monedaPagoUnico, montoObjetivoPagoRapidoUsd, montoPagoUnicoBs, tasaPagoUnico])
+
+  const totalPagoRapidoRealUsd = useMemo(() => {
+    return tipoPago === 'unico' ? totalPagoUnicoRealUsd : totalPagoMixtoUsd
+  }, [tipoPago, totalPagoUnicoRealUsd, totalPagoMixtoUsd])
+
   const metodosPagoUnicoDisponibles = useMemo(
     () => monedaPagoUnico === 'USD' ? metodosPago.filter(detectarMetodoUsd) : metodosPago.filter(detectarMetodoBs),
     [metodosPago, monedaPagoUnico]
@@ -976,10 +988,15 @@ function IngresosPageContent() {
 
   function buildPagosPayloadRapido() {
     if (tipoPago === 'unico') {
+      const montoBsReal = r2(Number(montoPagoUnicoBs || 0))
       return [{
         metodo_pago_v2_id: metodoPagoUnicoId,
         moneda_pago: monedaPagoUnico,
-        monto: monedaPagoUnico === 'BS' ? r2(totalPagoUnicoBs) : r2(montoObjetivoPagoRapidoUsd),
+        // IMPORTANTE:
+        // Si el pago es en Bs, se registra el monto REAL escrito/cargado en Bs.
+        // Antes se mandaba montoObjetivoUSD * tasa, por eso no permitía que una
+        // deuda de $110 se cobrara como $130 equivalentes cuando el cliente paga en Bs.
+        monto: monedaPagoUnico === 'BS' ? (montoBsReal > 0 ? montoBsReal : r2(totalPagoUnicoBs)) : r2(montoObjetivoPagoRapidoUsd),
         tasa_bcv: monedaPagoUnico === 'BS' ? tasaPagoUnico : null,
         referencia: referenciaPagoUnico || null,
         notas: notasPagoUnico || null,
@@ -1011,7 +1028,7 @@ function IngresosPageContent() {
       }
       if (monedaPagoUnico === 'BS' && (!tasaPagoUnico || tasaPagoUnico <= 0))
         return 'Selecciona una tasa válida para el pago en bolívares.'
-      if (monedaPagoUnico === 'BS' && totalPagoUnicoBs <= 0)
+      if (monedaPagoUnico === 'BS' && Number(montoPagoUnicoBs || 0) <= 0)
         return 'El monto en bolívares debe ser mayor a 0.'
       return null
     }
@@ -1058,6 +1075,54 @@ function IngresosPageContent() {
     })
     if (error) throw error
     return data?.operacion_pago_id || null
+  }
+
+  async function ajustarCuentaCobrarClienteSiAbonoSuperaSaldo(args: {
+    cuenta: CuentaPendienteResumen
+    montoAbonoUsd: number
+  }) {
+    const saldoActual = r2(Number(args.cuenta.saldo_usd || 0))
+    const montoAbonoUsd = r2(args.montoAbonoUsd)
+    const diferencia = r2(montoAbonoUsd - saldoActual)
+    if (diferencia <= 0.01) return
+
+    const totalActual = r2(Number(args.cuenta.monto_total_usd || 0))
+    const pagadoActual = r2(Number(args.cuenta.monto_pagado_usd || 0))
+    const nuevoTotal = r2(totalActual + diferencia)
+    const nuevoSaldo = r2(Math.max(nuevoTotal - pagadoActual, 0))
+
+    const { error } = await supabase.from('cuentas_por_cobrar').update({
+      monto_total_usd: nuevoTotal,
+      saldo_usd: nuevoSaldo,
+      estado: nuevoSaldo <= 0.01 ? 'pagado' : (pagadoActual > 0 ? 'parcial' : 'pendiente'),
+      notas: `${args.cuenta.concepto || 'Deuda'} | Ajuste por pago en Bs: total actualizado de ${formatearMoneda(totalActual, 'USD')} a ${formatearMoneda(nuevoTotal, 'USD')}.`,
+    }).eq('id', args.cuenta.id)
+
+    if (error) throw error
+  }
+
+  async function ajustarCuentaCobrarEmpleadoSiAbonoSuperaSaldo(args: {
+    cuenta: CuentaPendienteEmpleadoResumen
+    montoAbonoUsd: number
+  }) {
+    const saldoActual = r2(Number(args.cuenta.saldo_usd || 0))
+    const montoAbonoUsd = r2(args.montoAbonoUsd)
+    const diferencia = r2(montoAbonoUsd - saldoActual)
+    if (diferencia <= 0.01) return
+
+    const totalActual = r2(Number(args.cuenta.monto_total_usd || 0))
+    const pagadoActual = r2(Number(args.cuenta.monto_pagado_usd || 0))
+    const nuevoTotal = r2(totalActual + diferencia)
+    const nuevoSaldo = r2(Math.max(nuevoTotal - pagadoActual, 0))
+
+    const { error } = await supabase.from('empleados_cuentas_por_cobrar').update({
+      monto_total_usd: nuevoTotal,
+      saldo_usd: nuevoSaldo,
+      estado: nuevoSaldo <= 0.01 ? 'pagado' : (pagadoActual > 0 ? 'parcial' : 'pendiente'),
+      notas: `${args.cuenta.concepto || 'Deuda empleado'} | Ajuste por pago en Bs: total actualizado de ${formatearMoneda(totalActual, 'USD')} a ${formatearMoneda(nuevoTotal, 'USD')}.`,
+    }).eq('id', args.cuenta.id)
+
+    if (error) throw error
   }
 
   async function registrarPagoMixtoDeuda(args: {
@@ -1115,22 +1180,24 @@ function IngresosPageContent() {
       // Abono a deuda existente del empleado
       if (tipoIngreso === 'saldo' && destinoSaldo === 'deuda' && cuentaPendienteSeleccionada) {
         if (montoAbonoDeudaNumero <= 0) { alert('El monto del abono debe ser mayor a 0'); return }
-        const saldoActual = r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))
-        if (montoAbonoDeudaNumero > saldoActual) {
-          alert(`El abono no puede ser mayor al saldo pendiente (${formatearMoneda(saldoActual, 'USD')})`); return
-        }
         const errSaldo = validarPagoRapido()
         if (errSaldo) { alert(errSaldo); return }
+        const montoRealAbonoUsd = r2(totalPagoRapidoRealUsd || montoAbonoDeudaNumero)
+        if (montoRealAbonoUsd <= 0) { alert('El pago real debe ser mayor a 0.'); return }
 
         setSaving(true)
         try {
+          await ajustarCuentaCobrarEmpleadoSiAbonoSuperaSaldo({
+            cuenta: cuentaPendienteSeleccionada as CuentaPendienteEmpleadoResumen,
+            montoAbonoUsd: montoRealAbonoUsd,
+          })
           await registrarAbonoDeudaEmpleado({
             cuentaCobrarId: cuentaPendienteSeleccionada.id,
             empleadoId: empleadoSeleccionado.id,
-            montoUsd: montoAbonoDeudaNumero,
+            montoUsd: montoRealAbonoUsd,
             notas: notas.trim() || null,
           })
-          alert(`✅ Abono de empleado aplicado por ${formatearMoneda(montoAbonoDeudaNumero, 'USD')}`)
+          alert(`✅ Abono de empleado aplicado por ${formatearMoneda(montoRealAbonoUsd, 'USD')}`)
           resetForm()
           await cargarDatos()
           await cargarEstadoCuentaEmpleado(empleadoSeleccionado.id)
@@ -1144,7 +1211,7 @@ function IngresosPageContent() {
       if (tipoIngreso === 'saldo') {
         const errSaldo = validarPagoRapido()
         if (errSaldo) { alert(errSaldo); return }
-        const totalSaldoUsd = tipoPago === 'unico' ? r2(montoObjetivoPagoRapidoUsd) : totalPagoMixtoUsd
+        const totalSaldoUsd = tipoPago === 'unico' ? totalPagoUnicoRealUsd : totalPagoMixtoUsd
         if (totalSaldoUsd <= 0) { alert('Debes indicar un monto válido para la recarga.'); return }
 
         setSaving(true)
@@ -1234,28 +1301,23 @@ ${notas.trim()}` : ''}`,
     // ══ ABONO A DEUDA (tipo saldo → destino deuda) ══════════════════════════
     if (tipoIngreso === 'saldo' && destinoSaldo === 'deuda' && cuentaPendienteSeleccionada) {
       if (montoAbonoDeudaNumero <= 0) { alert('El monto del abono debe ser mayor a 0'); return }
-      const saldoActual = r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))
-      if (montoAbonoDeudaNumero > saldoActual) {
-        alert(`El abono no puede ser mayor al saldo pendiente (${formatearMoneda(saldoActual, 'USD')})`); return
-      }
-
-      const pagosConDeudaState: PagoConDeudaState = {
-        ...pagoConDeudaInitial(),
-        tipoCobro: Math.abs(montoAbonoDeudaNumero - saldoActual) < 0.01 ? 'completo' : 'abono',
-      }
-      const err = validarPagoConDeuda(pagosConDeudaState, montoAbonoDeudaNumero)
-      // Para abono a deuda usamos pago manual simple (pagoConDeudaState del form de saldo)
       const errSaldo = validarPagoRapido()
       if (errSaldo) { alert(errSaldo); return }
+      const montoRealAbonoUsd = r2(totalPagoRapidoRealUsd || montoAbonoDeudaNumero)
+      if (montoRealAbonoUsd <= 0) { alert('El pago real debe ser mayor a 0.'); return }
 
       setSaving(true)
       try {
+        await ajustarCuentaCobrarClienteSiAbonoSuperaSaldo({
+          cuenta: cuentaPendienteSeleccionada as CuentaPendienteResumen,
+          montoAbonoUsd: montoRealAbonoUsd,
+        })
         await registrarPagoMixtoDeuda({
           cuentaCobrarId: cuentaPendienteSeleccionada.id,
           fecha, notasGenerales: notas.trim() || null,
           pagos: buildPagosPayloadRapido(),
         })
-        alert(`✅ Abono aplicado por ${formatearMoneda(montoAbonoDeudaNumero, 'USD')}`)
+        alert(`✅ Abono aplicado por ${formatearMoneda(montoRealAbonoUsd, 'USD')}`)
         resetForm()
         await cargarDatos()
         await cargarEstadoCuentaCliente(clienteSeleccionado.id)
@@ -1272,7 +1334,7 @@ ${notas.trim()}` : ''}`,
       if (errSaldo) { alert(errSaldo); return }
 
       const totalSaldoUsd = tipoPago === 'unico'
-        ? r2(montoObjetivoPagoRapidoUsd)
+        ? totalPagoUnicoRealUsd
         : r2(pagoToUsd(pagoMixto1) + pagoToUsd(pagoMixto2))
 
       if (totalSaldoUsd <= 0) { alert('Debes indicar un monto válido para la recarga.'); return }
@@ -1751,7 +1813,7 @@ ${notas.trim()}` : ''}`,
                                 <div className="grid gap-3 sm:grid-cols-2">
                                   <div>
                                     <label className={labelCls}>Abono USD</label>
-                                    <input type="number" min={0} max={Number(cuentaPendienteSeleccionada.saldo_usd || 0)}
+                                    <input type="number" min={0}
                                       step="0.01" value={montoAbonoDeuda} onChange={(e) => setMontoAbonoDeuda(e.target.value)}
                                       className={inputCls} placeholder="0.00" />
                                   </div>
@@ -1762,6 +1824,11 @@ ${notas.trim()}` : ''}`,
                                     <p className="mt-1 text-sm font-semibold text-amber-300">
                                       {formatearMoneda(Math.max(0, r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0) - montoAbonoDeudaNumero)), 'USD')}
                                     </p>
+                                    {montoAbonoDeudaNumero > Number(cuentaPendienteSeleccionada.saldo_usd || 0) && (
+                                      <p className="mt-2 text-[11px] text-violet-300">
+                                        Se actualizará la deuda a {formatearMoneda(r2(Number(cuentaPendienteSeleccionada.monto_total_usd || 0) + (montoAbonoDeudaNumero - Number(cuentaPendienteSeleccionada.saldo_usd || 0))), 'USD')} antes de cobrar.
+                                      </p>
+                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -1882,7 +1949,7 @@ ${notas.trim()}` : ''}`,
                                     Usar saldo completo
                                   </button>
                                 </div>
-                                <input type="number" min={0} max={Number(cuentaPendienteSeleccionada.saldo_usd || 0)} step="0.01"
+                                <input type="number" min={0} step="0.01"
                                   value={montoAbonoDeuda} onChange={(e) => setMontoAbonoDeuda(e.target.value)} className={inputCls} placeholder="0.00" />
                               </div>
                             )}
