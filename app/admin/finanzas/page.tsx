@@ -120,6 +120,7 @@ type Movimiento = {
 }
 
 const PIE_COLORS = ['#38bdf8', '#34d399', '#f59e0b', '#f87171', '#a78bfa', '#94a3b8']
+const MOVIMIENTOS_POR_SUBCARTERA = 10
 
 const inputCls =
   'w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/35 focus:border-white/20 focus:bg-white/[0.05]'
@@ -253,6 +254,15 @@ function normalizeMoneda(moneda: string | null | undefined) {
   return m
 }
 
+function normalizeText(value: string | null | undefined) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
 function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null
   return value ?? null
@@ -343,6 +353,8 @@ export default function FinanzasResumenPage() {
   const [estadoFiltro, setEstadoFiltro] = useState('todos')
   const [categoriaFiltro, setCategoriaFiltro] = useState('todos')
   const [monedaVista, setMonedaVista] = useState<'USD' | 'BS'>('USD')
+  const [subcarteraAbiertaId, setSubcarteraAbiertaId] = useState<string | null>(null)
+  const [subcarteraPaginas, setSubcarteraPaginas] = useState<Record<string, number>>({})
 
   const [monedaFiltro, setMonedaFiltro] = useState<'todas' | 'USD' | 'VES' | 'BS'>('todas')
   const [carteraFiltro, setCarteraFiltro] = useState('todas')
@@ -355,6 +367,11 @@ export default function FinanzasResumenPage() {
   useEffect(() => {
     void loadFinanzas()
   }, [fechaInicio, fechaFin])
+
+  useEffect(() => {
+    setSubcarteraAbiertaId(null)
+    setSubcarteraPaginas({})
+  }, [monedaVista, fechaInicio, fechaFin])
 
   useEffect(() => {
     if (carteraFiltro === 'todas') return
@@ -815,6 +832,33 @@ export default function FinanzasResumenPage() {
     return subcarterasVisibles.reduce((acc, item) => acc + Number(item.saldo_actual || 0), 0)
   }, [subcarterasVisibles])
 
+  function movimientosDeSubcartera(item: MetodoSubcartera) {
+    const monedaItem = normalizeMoneda(item.moneda)
+    const codigoMetodo = normalizeText(item.metodo_codigo)
+    const nombreMetodo = normalizeText(item.metodo_nombre)
+
+    return movimientos
+      .filter((m) => {
+        if (normalizeMoneda(m.moneda_metodo) !== monedaItem) return false
+        if (item.cartera_codigo && m.cartera_codigo !== item.cartera_codigo) return false
+
+        const metodoMov = normalizeText(m.metodo)
+        const carteraMov = normalizeText(m.cartera)
+
+        return (
+          metodoMov === nombreMetodo ||
+          metodoMov === codigoMetodo ||
+          metodoMov.includes(nombreMetodo) ||
+          nombreMetodo.includes(metodoMov) ||
+          carteraMov === normalizeText(item.cartera_nombre)
+        )
+      })
+  }
+
+  function setPaginaSubcartera(id: string, page: number) {
+    setSubcarteraPaginas((prev) => ({ ...prev, [id]: Math.max(1, page) }))
+  }
+
   const styles = getCurrencyStyles(monedaVista)
 
   if (error) {
@@ -840,12 +884,12 @@ export default function FinanzasResumenPage() {
           </div>
         </div>
 
-        <div className="max-w-md rounded-[28px] border border-white/10 bg-[#080b17] p-1.5">
+        <div className="max-w-sm rounded-[24px] border border-white/10 bg-[#080b17] p-1.5">
           <div className="grid grid-cols-2 gap-1.5">
             <button
               type="button"
               onClick={() => setMonedaVista('USD')}
-              className={`flex min-h-[104px] items-center justify-center gap-3 rounded-[22px] border text-3xl font-semibold transition ${
+              className={`flex min-h-[76px] items-center justify-center gap-3 rounded-[18px] border text-2xl font-semibold transition ${
                 monedaVista === 'USD'
                   ? 'border-emerald-400/40 bg-emerald-500/20 text-emerald-300 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.15)]'
                   : 'border-transparent bg-transparent text-white/70 hover:bg-white/[0.03]'
@@ -858,7 +902,7 @@ export default function FinanzasResumenPage() {
             <button
               type="button"
               onClick={() => setMonedaVista('BS')}
-              className={`flex min-h-[104px] items-center justify-center gap-3 rounded-[22px] border text-3xl font-semibold transition ${
+              className={`flex min-h-[76px] items-center justify-center gap-3 rounded-[18px] border text-2xl font-semibold transition ${
                 monedaVista === 'BS'
                   ? 'border-amber-400/40 bg-amber-500/20 text-amber-300 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.15)]'
                   : 'border-transparent bg-transparent text-white/70 hover:bg-white/[0.03]'
@@ -893,57 +937,198 @@ export default function FinanzasResumenPage() {
             </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {subcarterasVisibles.map((item) => (
-                <div
-                  key={item.id}
-                  className="rounded-[26px] border border-white/10 bg-[#090d1b] p-4 transition hover:bg-[#0c1120]"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <div
-                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 text-lg"
-                        style={{
-                          backgroundColor: item.cartera_color
-                            ? `${item.cartera_color}22`
-                            : 'rgba(255,255,255,0.04)',
-                        }}
-                      >
-                        {getMetodoEmoji(item.metodo_codigo, item.moneda)}
-                      </div>
+              {subcarterasVisibles.map((item) => {
+                const abierta = subcarteraAbiertaId === item.id
+                const movs = movimientosDeSubcartera(item)
+                const paginaActual = subcarteraPaginas[item.id] || 1
+                const totalPaginas = Math.max(1, Math.ceil(movs.length / MOVIMIENTOS_POR_SUBCARTERA))
+                const paginaSegura = Math.min(paginaActual, totalPaginas)
+                const desdeMov = (paginaSegura - 1) * MOVIMIENTOS_POR_SUBCARTERA
+                const hastaMov = desdeMov + MOVIMIENTOS_POR_SUBCARTERA
+                const movsPagina = movs.slice(desdeMov, hastaMov)
 
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-white">
-                          {item.metodo_nombre}
-                        </p>
-                        <p className="truncate text-xs text-white/45">{item.cartera_nombre}</p>
-                      </div>
-                    </div>
-
-                    <span
-                      className={`shrink-0 rounded-full border px-2 py-1 text-[11px] font-medium ${styles.badge}`}
+                return (
+                  <div
+                    key={item.id}
+                    className={`overflow-hidden rounded-[22px] border bg-[#090d1b] transition ${
+                      abierta
+                        ? `${styles.active} shadow-[0_0_0_1px_rgba(255,255,255,0.04)]`
+                        : 'border-white/10 hover:border-white/20 hover:bg-[#0c1120]'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSubcarteraAbiertaId(abierta ? null : item.id)
+                        setPaginaSubcartera(item.id, 1)
+                      }}
+                      className="w-full p-3 text-left"
                     >
-                      {item.moneda === 'USD' ? 'USD' : 'BS'}
-                    </span>
-                  </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <div
+                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/10 text-base"
+                            style={{
+                              backgroundColor: item.cartera_color
+                                ? `${item.cartera_color}22`
+                                : 'rgba(255,255,255,0.04)',
+                            }}
+                          >
+                            {getMetodoEmoji(item.metodo_codigo, item.moneda)}
+                          </div>
 
-                  <div className="mt-4">
-                    <p className="text-[11px] uppercase tracking-wide text-white/35">
-                      Saldo actual
-                    </p>
-                    <p className={`mt-1 text-xl font-bold ${styles.amount}`}>
-                      {money(
-                        Number(item.saldo_actual || 0),
-                        monedaVista === 'USD' ? 'USD' : 'VES'
-                      )}
-                    </p>
-                  </div>
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <p className="truncate text-sm font-semibold text-white">
+                                {item.metodo_nombre}
+                              </p>
+                              {abierta ? (
+                                <span
+                                  className={`rounded-full border px-2 py-0.5 text-[10px] ${styles.badge}`}
+                                >
+                                  activo
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="truncate text-[10px] leading-tight text-white/45">{item.cartera_nombre}</p>
+                          </div>
+                        </div>
 
-                  <div className="mt-3 flex items-center justify-between text-xs text-white/40">
-                    <span>{item.tipo || 'otro'}</span>
-                    <span className="uppercase">{item.metodo_codigo}</span>
+                        <span
+                          className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-medium ${styles.badge}`}
+                        >
+                          {item.moneda === 'USD' ? 'USD' : 'BS'}
+                        </span>
+                      </div>
+
+                      <div className="mt-2.5 flex items-end justify-between gap-3">
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wide text-white/35">
+                            Saldo actual
+                          </p>
+                          <p className={`mt-0.5 text-lg font-bold ${styles.amount}`}>
+                            {money(
+                              Number(item.saldo_actual || 0),
+                              monedaVista === 'USD' ? 'USD' : 'VES'
+                            )}
+                          </p>
+                        </div>
+
+                        <div className="text-right text-[11px] text-white/40">
+                          <p>{item.tipo || 'otro'}</p>
+                          <p className="uppercase">{item.metodo_codigo}</p>
+                        </div>
+                      </div>
+                    </button>
+
+                    {abierta ? (
+                      <div className="border-t border-white/10 bg-black/10 px-3 pb-3 pt-2.5">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 text-[11px] font-medium text-white/65">
+                            <span
+                              className={`h-2 w-2 rounded-full ${
+                                monedaVista === 'USD' ? 'bg-emerald-400' : 'bg-amber-300'
+                              }`}
+                            />
+                            Movimientos del período
+                          </div>
+                          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-white/50">
+                            {movs.length === 0
+                              ? '0 mov.'
+                              : `${desdeMov + 1}-${Math.min(hastaMov, movs.length)} de ${movs.length}`}
+                          </span>
+                        </div>
+
+                        {movs.length === 0 ? (
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/45">
+                            Sin movimientos entre {fechaInicio} y {fechaFin}.
+                          </div>
+                        ) : (
+                          <div className="space-y-1">
+                            {movsPagina.map((m) => {
+                              const valor = monedaVista === 'USD' ? m.monto_usd : m.monto_bs
+
+                              return (
+                                <div
+                                  key={`${m.tipo}-${m.id}`}
+                                  className="rounded-xl border border-white/10 bg-white/[0.025] px-2.5 py-1.5"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        <span
+                                          className={`rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${tipoBadge(
+                                            m.tipo
+                                          )}`}
+                                        >
+                                          {m.tipo}
+                                        </span>
+                                        <span
+                                          className={`rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${estadoBadge(
+                                            m.estado
+                                          )}`}
+                                        >
+                                          {m.estado}
+                                        </span>
+                                        <span className="text-[10px] text-white/40">{shortDate(m.fecha)}</span>
+                                      </div>
+                                      <p className="mt-0.5 truncate text-[11px] font-semibold leading-tight text-white">
+                                        {m.concepto || m.categoria}
+                                      </p>
+                                      <p className="truncate text-[10px] leading-tight text-white/45">
+                                        {m.tercero} · {m.categoria}
+                                      </p>
+                                    </div>
+
+                                    <p
+                                      className={`shrink-0 text-right text-[11px] font-bold ${
+                                        m.tipo === 'ingreso' ? styles.amount : 'text-rose-300'
+                                      }`}
+                                    >
+                                      {m.tipo === 'egreso' ? '-' : '+'}
+                                      {money(Math.abs(valor), monedaVista === 'USD' ? 'USD' : 'VES')}
+                                    </p>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+
+                        {movs.length > MOVIMIENTOS_POR_SUBCARTERA ? (
+                          <div className="mt-2 flex items-center justify-between gap-2 border-t border-white/10 pt-2">
+                            <button
+                              type="button"
+                              disabled={paginaSegura <= 1}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setPaginaSubcartera(item.id, paginaSegura - 1)
+                              }}
+                              className="rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] font-medium text-white/65 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
+                            >
+                              ← Anterior
+                            </button>
+                            <span className="text-[10px] text-white/45">
+                              Página {paginaSegura} / {totalPaginas}
+                            </span>
+                            <button
+                              type="button"
+                              disabled={paginaSegura >= totalPaginas}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setPaginaSubcartera(item.id, paginaSegura + 1)
+                              }}
+                              className="rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] font-medium text-white/65 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-35"
+                            >
+                              Siguiente →
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
@@ -1158,18 +1343,18 @@ export default function FinanzasResumenPage() {
           title="Comisiones pendientes"
           description="Compromiso con profesionales que afecta el flujo de caja"
         >
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             {comisiones.map((c) => (
               <div
                 key={c.empleado_id}
-                className="rounded-2xl border border-amber-400/20 bg-amber-400/5 p-4"
+                className="rounded-2xl border border-amber-400/20 bg-amber-400/5 p-3"
               >
                 <div className="flex items-center justify-between">
                   <p className="font-medium text-white">{c.nombre}</p>
                   <span className="text-xs text-white/45">{c.cantidad} reg.</span>
                 </div>
 
-                <div className="mt-3 space-y-1">
+                <div className="mt-2 space-y-0.5">
                   <div className="flex justify-between text-sm">
                     <span className="text-white/55">Base USD:</span>
                     <span className="text-white">{money(c.total_base_usd)}</span>
@@ -1180,7 +1365,7 @@ export default function FinanzasResumenPage() {
                   </div>
                 </div>
 
-                <div className="mt-3 border-t border-white/10 pt-3">
+                <div className="mt-2 border-t border-white/10 pt-2">
                   <div className="flex justify-between text-sm">
                     <span className="text-emerald-400">Profesional USD:</span>
                     <span className="font-semibold text-emerald-400">
