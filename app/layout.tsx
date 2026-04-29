@@ -13,8 +13,14 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'RPM',
-  description: 'Sistema de gestión RPM',
+  title: 'Kinereach',
+  description: 'Sistema de gestión Kinereach',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    title: 'Kinereach',
+    statusBarStyle: 'default',
+  },
 }
 
 export default function RootLayout({
@@ -24,6 +30,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es">
+      <head>
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-title" content="Kinereach" />
+      </head>
       <body
         className={`
           ${geistSans.variable}
