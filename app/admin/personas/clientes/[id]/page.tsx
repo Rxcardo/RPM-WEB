@@ -270,6 +270,46 @@ function getPlanStatusLabel(estado: string | null | undefined) {
   }
 }
 
+
+function getTodayKey() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function isPlanOperativo(plan: ClientePlan | null | undefined, hoy = getTodayKey()) {
+  if (!plan) return false
+  const estado = (plan.estado || '').toLowerCase()
+  if (estado !== 'activo') return false
+  if (plan.fecha_fin && plan.fecha_fin < hoy) return false
+  return true
+}
+
+function isSesionDePlanOperativo(sesion: SesionPlan, activePlanIds: Set<string>) {
+  if (!sesion.cliente_plan_id || !activePlanIds.has(sesion.cliente_plan_id)) return false
+  const estadoPlan = (sesion.clientes_planes?.estado || '').toLowerCase()
+  if (estadoPlan && estadoPlan !== 'activo') return false
+  const fechaFin = sesion.clientes_planes?.fecha_fin || null
+  if (fechaFin && fechaFin < getTodayKey()) return false
+  return true
+}
+
+type SesionesGrupoPlan = {
+  plan: ClientePlan | null
+  planId: string
+  nombre: string
+  estado: string
+  fechaInicio: string | null
+  fechaFin: string | null
+  operativo: boolean
+  sesiones: SesionPlan[]
+  resumen: {
+    asistio: number
+    aviso: number
+    sinAviso: number
+    pendientes: number
+    reprogramables: number
+  }
+}
+
 function onlyHour(value: string | null | undefined) {
   return (value || '').slice(0, 5)
 }
@@ -369,6 +409,7 @@ export default function ClienteDetallePage() {
   const [toast, setToast] = useState('')
 
   const [sesionesAbiertas, setSesionesAbiertas] = useState(false)
+  const [sesionesPlanesAbiertos, setSesionesPlanesAbiertos] = useState<Record<string, boolean>>({})
   const [sesionReagendar, setSesionReagendar] = useState<SesionPlan | null>(null)
   const [reagendarForm, setReagendarForm] = useState<ReagendarForm>({ fecha: '', hora_inicio: '', hora_fin: '', motivo: '' })
   const [guardandoReagenda, setGuardandoReagenda] = useState(false)
@@ -393,6 +434,7 @@ export default function ClienteDetallePage() {
     setCitas([])
     setEventosPlan([])
     setSesionesPlan([])
+    setSesionesPlanesAbiertos({})
     setEstadoCuenta(null)
 
     try {
@@ -555,7 +597,15 @@ export default function ClienteDetallePage() {
     setToast('')
     setWarning('')
 
+    const hoy = getTodayKey()
+    const activePlanIds = new Set(historialPlanes.filter((plan) => isPlanOperativo(plan, hoy)).map((plan) => plan.id))
     const sesionActual = sesionesPlan.find((s) => s.id === sesionId) || null
+
+    if (!sesionActual || !isSesionDePlanOperativo(sesionActual, activePlanIds)) {
+      setWarning('Esta sesión pertenece a un plan vencido, renovado, agotado o cancelado. Queda solo como historial y no puede modificarse.')
+      setActualizandoAsistenciaId(null)
+      return
+    }
     const updateLocal = asistenciaToUpdate(nuevoEstado)
     const consumiaAntes = sesionActual?.consume_sesion === true
     const consumeAhora = updateLocal.consume_sesion === true
@@ -791,7 +841,25 @@ export default function ClienteDetallePage() {
   }
 
 
+  const hoyKey = useMemo(() => getTodayKey(), [])
+
+  const planesActivosOperativos = useMemo(
+    () => historialPlanes.filter((plan) => isPlanOperativo(plan, hoyKey)),
+    [historialPlanes, hoyKey]
+  )
+
+  const activePlanIds = useMemo(
+    () => new Set(planesActivosOperativos.map((plan) => plan.id)),
+    [planesActivosOperativos]
+  )
+
+  const planActivo = useMemo(() => {
+    if (!planesActivosOperativos.length) return null
+    return [...planesActivosOperativos].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] || null
+  }, [planesActivosOperativos])
+
   const planPrincipal = useMemo(() => {
+    if (planActivo) return planActivo
     if (!historialPlanes.length) return null
     const sorted = [...historialPlanes].sort((a, b) => {
       const priorityDiff = getPlanPriority(b.estado) - getPlanPriority(a.estado)
@@ -799,17 +867,37 @@ export default function ClienteDetallePage() {
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     })
     return sorted[0] || null
-  }, [historialPlanes])
+  }, [historialPlanes, planActivo])
 
-  const planActivo = useMemo(() => historialPlanes.find((p) => p.estado === 'activo') || null, [historialPlanes])
+  const sesionesActivasPlan = useMemo(
+    () => sesionesPlan.filter((sesion) => isSesionDePlanOperativo(sesion, activePlanIds)),
+    [sesionesPlan, activePlanIds]
+  )
 
   const resumenPlan = useMemo(() => {
-    const planBase = planPrincipal || planActivo
-    if (!planBase) return { usadas: 0, restantes: 0, total: 0, estado: null as string | null, nombre: 'Sin plan activo' }
+    const planBase = planActivo
+    if (!planBase) {
+      return {
+        usadas: 0,
+        restantes: 0,
+        total: 0,
+        estado: null as string | null,
+        nombre: 'Sin plan activo',
+        subtitle: planPrincipal ? `Último plan: ${getPlanStatusLabel(planActivo.estado)}` : 'Sin plan registrado',
+      }
+    }
+
     const total = Number(planBase.sesiones_totales || 0)
     const usadas = Number(planBase.sesiones_usadas || 0)
-    return { usadas, restantes: Math.max(0, total - usadas), total, estado: planBase.estado || null, nombre: planBase.planes?.nombre || 'Plan' }
-  }, [planPrincipal, planActivo])
+    return {
+      usadas,
+      restantes: Math.max(0, total - usadas),
+      total,
+      estado: planBase.estado || null,
+      nombre: planBase.planes?.nombre || 'Plan activo',
+      subtitle: 'Solo cuenta sesiones de planes activos no vencidos',
+    }
+  }, [planActivo, planPrincipal])
 
   const resumenPagos = useMemo(() => {
     const pagosPagados = pagos.filter((p) => (p.estado || '').toLowerCase() === 'pagado')
@@ -820,14 +908,58 @@ export default function ClienteDetallePage() {
     return { totalPagado, cantidad: pagosPagados.length, monedaResumen }
   }, [pagos])
 
-  const resumenAsistenciaPlan = useMemo(() => ({
-    asistio: sesionesPlan.filter((s) => s.asistencia_estado === 'asistio').length,
-    aviso: sesionesPlan.filter((s) => s.asistencia_estado === 'no_asistio_aviso').length,
-    sinAviso: sesionesPlan.filter((s) => s.asistencia_estado === 'no_asistio_sin_aviso').length,
-    pendientes: sesionesPlan.filter((s) => (s.asistencia_estado || 'pendiente') === 'pendiente').length,
-    reprogramables: sesionesPlan.filter((s) => s.reprogramable === true).length,
-  }), [sesionesPlan])
+  const calcularResumenSesiones = (lista: SesionPlan[]) => ({
+    asistio: lista.filter((s) => s.asistencia_estado === 'asistio').length,
+    aviso: lista.filter((s) => s.asistencia_estado === 'no_asistio_aviso').length,
+    sinAviso: lista.filter((s) => s.asistencia_estado === 'no_asistio_sin_aviso').length,
+    pendientes: lista.filter((s) => (s.asistencia_estado || 'pendiente') === 'pendiente').length,
+    reprogramables: lista.filter((s) => s.reprogramable === true).length,
+  })
 
+  const resumenAsistenciaPlan = useMemo(() => calcularResumenSesiones(sesionesActivasPlan), [sesionesActivasPlan])
+
+  const sesionesAgrupadasPorPlan = useMemo<SesionesGrupoPlan[]>(() => {
+    const planesMap = new Map(historialPlanes.map((plan) => [plan.id, plan]))
+    const grupos = new Map<string, SesionesGrupoPlan>()
+
+    sesionesPlan.forEach((sesion) => {
+      const planId = sesion.cliente_plan_id || 'sin-plan'
+      const plan = planesMap.get(planId) || null
+      const fechaFin = plan?.fecha_fin || sesion.clientes_planes?.fecha_fin || null
+      const estado = plan?.estado || sesion.clientes_planes?.estado || 'sin_estado'
+      const nombre = plan?.planes?.nombre || sesion.clientes_planes?.planes?.nombre || 'Sesiones sin plan asociado'
+      const operativo = plan ? isPlanOperativo(plan, hoyKey) : isSesionDePlanOperativo(sesion, activePlanIds)
+
+      if (!grupos.has(planId)) {
+        grupos.set(planId, {
+          plan,
+          planId,
+          nombre,
+          estado,
+          fechaInicio: plan?.fecha_inicio || null,
+          fechaFin,
+          operativo,
+          sesiones: [],
+          resumen: calcularResumenSesiones([]),
+        })
+      }
+
+      grupos.get(planId)!.sesiones.push(sesion)
+    })
+
+    return Array.from(grupos.values())
+      .map((grupo) => ({
+        ...grupo,
+        sesiones: [...grupo.sesiones].sort((a, b) => `${b.fecha || ''} ${b.hora_inicio || ''}`.localeCompare(`${a.fecha || ''} ${a.hora_inicio || ''}`)),
+        resumen: calcularResumenSesiones(grupo.operativo ? grupo.sesiones : grupo.sesiones.filter((s) => (s.asistencia_estado || 'pendiente') !== 'pendiente')),
+      }))
+      .sort((a, b) => {
+        if (a.operativo !== b.operativo) return a.operativo ? -1 : 1
+        const dateA = a.plan?.created_at || a.fechaFin || ''
+        const dateB = b.plan?.created_at || b.fechaFin || ''
+        return dateB.localeCompare(dateA)
+      })
+  }, [sesionesPlan, historialPlanes, hoyKey, activePlanIds])
 
   if (loading) {
     return (
@@ -918,8 +1050,8 @@ export default function ClienteDetallePage() {
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        <StatCard title="Plan" value={truncateText(resumenPlan.nombre, 22)} subtitle={resumenPlan.nombre || 'Resumen actual del cliente'} />
-        <StatCard title="Estado del plan" value={getPlanStatusLabel(resumenPlan.estado)} subtitle={resumenPlan.estado ? 'Estado real desde base de datos' : 'Sin plan registrado'} />
+        <StatCard title="Plan activo" value={truncateText(resumenPlan.nombre, 22)} subtitle={resumenPlan.subtitle} />
+        <StatCard title="Estado activo" value={getPlanStatusLabel(resumenPlan.estado)} subtitle={resumenPlan.estado ? 'No cuenta vencidos' : 'Sin plan vigente'} />
         <StatCard title="Sesiones usadas" value={resumenPlan.usadas} />
         <StatCard title="Sesiones restantes" value={resumenPlan.restantes} />
         <StatCard title="Pagado" value={money(resumenPagos.totalPagado, resumenPagos.monedaResumen)} color="text-emerald-400" />
@@ -1000,103 +1132,147 @@ export default function ClienteDetallePage() {
             <button
               type="button"
               onClick={() => setSesionesAbiertas((v) => !v)}
-              className="flex w-full items-center justify-between gap-4 px-6 py-4 text-left transition hover:bg-white/[0.03] rounded-3xl"
+              className="flex w-full items-center justify-between gap-4 rounded-3xl px-6 py-4 text-left transition hover:bg-white/[0.03]"
             >
               <div>
-                <p className="font-semibold text-white">Sesiones y asistencia del plan</p>
+                <p className="font-semibold text-white">Sesiones y asistencia por plan</p>
                 <p className="mt-0.5 text-sm text-white/45">
-                  {sesionesPlan.length} sesión{sesionesPlan.length !== 1 ? 'es' : ''} ·{' '}
-                  {resumenAsistenciaPlan.pendientes} pendiente{resumenAsistenciaPlan.pendientes !== 1 ? 's' : ''} ·{' '}
-                  {resumenAsistenciaPlan.asistio} asistió
+                  Activas: {sesionesActivasPlan.length} · Historial: {Math.max(0, sesionesPlan.length - sesionesActivasPlan.length)} ·{' '}
+                  Pendientes activas: {resumenAsistenciaPlan.pendientes}
                 </p>
               </div>
-              <span className="shrink-0 text-white/40 text-lg transition-transform duration-200" style={{ transform: sesionesAbiertas ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+              <span className="shrink-0 text-lg text-white/40 transition-transform duration-200" style={{ transform: sesionesAbiertas ? 'rotate(180deg)' : 'rotate(0deg)' }}>
                 ▾
               </span>
             </button>
 
             {sesionesAbiertas ? (
-              <div className="border-t border-white/10 p-4">
-                <div className="overflow-hidden rounded-3xl border border-white/10 bg-black/10">
-                  <div className="border-b border-white/10 px-4 py-3">
-                    <p className="text-sm font-semibold text-white">Asistencia y reagenda</p>
-                    <p className="text-xs text-white/45">Puedes reagendar sesiones pendientes o congeladas por aviso. Si una sesión está en Avisó y la reagendas después del vencimiento, el plan se extiende hasta esa fecha.</p>
-                  </div>
-
-                  {sesionesPlan.length === 0 ? (
-                    <p className="px-4 py-6 text-sm text-white/55">No hay sesiones del plan registradas.</p>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full text-sm">
-                        <thead className="border-b border-white/10 bg-white/[0.03] text-white/50">
-                          <tr>
-                            <th className="px-4 py-3 text-left font-medium">Sesión</th>
-                            <th className="px-4 py-3 text-left font-medium">Fecha / hora</th>
-                            <th className="px-4 py-3 text-left font-medium">Asistencia</th>
-                            <th className="px-4 py-3 text-left font-medium">Acciones</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-white/10">
-                          {sesionesPlan.map((sesion) => {
-                            const asistenciaActual = (sesion.asistencia_estado || 'pendiente') as AsistenciaEstado
-                            const puedeReagendar = canReagendarSesion(sesion)
-                            const actualizando = actualizandoAsistenciaId === sesion.id
-                            return (
-                              <tr key={sesion.id} className="transition hover:bg-white/[0.03]">
-                                <td className="px-4 py-3 align-top">
-                                  <p className="max-w-[240px] truncate font-medium text-white">{sesion.clientes_planes?.planes?.nombre || 'Sesión del plan'}</p>
-                                  <p className="mt-1 text-xs text-white/40">{sesion.empleados?.nombre || 'Sin terapeuta'}</p>
-                                  {sesion.consume_sesion ? <p className="mt-1 text-xs text-rose-300">Consume sesión</p> : null}
-                                  {sesion.reprogramable ? <p className="mt-1 text-xs text-violet-300">Reprogramable</p> : null}
-                                </td>
-                                <td className="px-4 py-3 align-top text-white/70">
-                                  <p>{sesion.fecha || 'Sin fecha'}</p>
-                                  <p className="mt-1 text-xs text-white/45">{onlyHour(sesion.hora_inicio) || '—'} - {onlyHour(sesion.hora_fin) || '—'}</p>
-                                  {sesion.clientes_planes?.fecha_fin ? <p className="mt-1 text-xs text-white/35">Vence: {sesion.clientes_planes.fecha_fin}</p> : null}
-                                </td>
-                                <td className="px-4 py-3 align-top">
-                                  <div className="flex flex-col gap-2">
-                                    <span className={`w-fit rounded-full border px-2.5 py-1 text-xs font-medium ${asistenciaBadge(asistenciaActual)}`}>
-                                      {asistenciaLabel(asistenciaActual)}
-                                    </span>
-                                    <div className="flex flex-wrap gap-1.5">
-                                      {([
-                                        ['asistio', 'Asistió'],
-                                        ['no_asistio_aviso', 'Avisó'],
-                                        ['no_asistio_sin_aviso', 'Sin aviso'],
-                                        ['pendiente', 'Pendiente'],
-                                      ] as [AsistenciaEstado, string][]).map(([estado, label]) => (
-                                        <button
-                                          key={estado}
-                                          type="button"
-                                          disabled={actualizando || asistenciaActual === estado}
-                                          onClick={() => actualizarAsistenciaSesion(sesion.id, estado)}
-                                          className="rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs font-medium text-white/70 transition hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
-                                        >
-                                          {label}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3 align-top">
-                                  <button
-                                    type="button"
-                                    disabled={!puedeReagendar}
-                                    onClick={() => abrirReagendarSesion(sesion)}
-                                    className="rounded-xl border border-violet-400/20 bg-violet-400/10 px-3 py-1.5 text-xs font-semibold text-violet-200 transition hover:bg-violet-400/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/30"
-                                  >
-                                    Reagendar
-                                  </button>
-                                </td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+              <div className="space-y-3 border-t border-white/10 p-4">
+                <div className="rounded-3xl border border-white/10 bg-black/10 px-4 py-3">
+                  <p className="text-sm font-semibold text-white">Asistencia y registro histórico</p>
+                  <p className="mt-1 text-xs text-white/45">
+                    Los planes vencidos, renovados, agotados o cancelados quedan visibles solo para consulta. No suman pendientes activas y no permiten marcar asistencia.
+                  </p>
                 </div>
+
+                {sesionesAgrupadasPorPlan.length === 0 ? (
+                  <p className="rounded-3xl border border-white/10 bg-black/10 px-4 py-6 text-sm text-white/55">No hay sesiones del plan registradas.</p>
+                ) : (
+                  sesionesAgrupadasPorPlan.map((grupo) => {
+                    const abierto = sesionesPlanesAbiertos[grupo.planId] ?? grupo.operativo
+                    return (
+                      <div key={grupo.planId} className="overflow-hidden rounded-3xl border border-white/10 bg-black/10">
+                        <button
+                          type="button"
+                          onClick={() => setSesionesPlanesAbiertos((prev) => ({ ...prev, [grupo.planId]: !(prev[grupo.planId] ?? grupo.operativo) }))}
+                          className="flex w-full items-start justify-between gap-4 px-4 py-3 text-left transition hover:bg-white/[0.03]"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-semibold text-white break-words">{grupo.nombre}</p>
+                              <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(grupo.estado)}`}>
+                                {getPlanStatusLabel(grupo.estado)}
+                              </span>
+                              {grupo.operativo ? (
+                                <span className="inline-flex rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-xs font-medium text-emerald-300">Cuenta activo</span>
+                              ) : (
+                                <span className="inline-flex rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-white/50">Solo historial</span>
+                              )}
+                            </div>
+                            <p className="mt-1 text-xs text-white/45">
+                              {grupo.sesiones.length} sesión{grupo.sesiones.length !== 1 ? 'es' : ''} · {grupo.resumen.pendientes} pendiente{grupo.resumen.pendientes !== 1 ? 's' : ''} · {grupo.resumen.asistio} asistió · Fin: {grupo.fechaFin || '—'}
+                            </p>
+                          </div>
+                          <span className="shrink-0 text-lg text-white/40 transition-transform duration-200" style={{ transform: abierto ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                            ▾
+                          </span>
+                        </button>
+
+                        {abierto ? (
+                          <div className="overflow-x-auto border-t border-white/10">
+                            <table className="min-w-full text-sm">
+                              <thead className="border-b border-white/10 bg-white/[0.03] text-white/50">
+                                <tr>
+                                  <th className="px-4 py-3 text-left font-medium">Sesión</th>
+                                  <th className="px-4 py-3 text-left font-medium">Fecha / hora</th>
+                                  <th className="px-4 py-3 text-left font-medium">Asistencia</th>
+                                  <th className="px-4 py-3 text-left font-medium">Acciones</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-white/10">
+                                {grupo.sesiones.map((sesion) => {
+                                  const asistenciaActual = (sesion.asistencia_estado || 'pendiente') as AsistenciaEstado
+                                  const sesionOperativa = grupo.operativo && isSesionDePlanOperativo(sesion, activePlanIds)
+                                  const puedeReagendar = sesionOperativa && canReagendarSesion(sesion)
+                                  const actualizando = actualizandoAsistenciaId === sesion.id
+                                  return (
+                                    <tr key={sesion.id} className="transition hover:bg-white/[0.03]">
+                                      <td className="px-4 py-3 align-top">
+                                        <p className="max-w-[240px] truncate font-medium text-white">{grupo.nombre}</p>
+                                        <p className="mt-1 text-xs text-white/40">{sesion.empleados?.nombre || 'Sin terapeuta'}</p>
+                                        {sesion.consume_sesion ? <p className="mt-1 text-xs text-rose-300">Consume sesión</p> : null}
+                                        {sesion.reprogramable ? <p className="mt-1 text-xs text-violet-300">Reprogramable</p> : null}
+                                      </td>
+                                      <td className="px-4 py-3 align-top text-white/70">
+                                        <p>{sesion.fecha || 'Sin fecha'}</p>
+                                        <p className="mt-1 text-xs text-white/45">{onlyHour(sesion.hora_inicio) || '—'} - {onlyHour(sesion.hora_fin) || '—'}</p>
+                                        {grupo.fechaFin ? <p className="mt-1 text-xs text-white/35">Vence: {grupo.fechaFin}</p> : null}
+                                      </td>
+                                      <td className="px-4 py-3 align-top">
+                                        <div className="flex flex-col gap-2">
+                                          <span className={`w-fit rounded-full border px-2.5 py-1 text-xs font-medium ${asistenciaBadge(asistenciaActual)}`}>
+                                            {asistenciaLabel(asistenciaActual)}
+                                          </span>
+
+                                          {sesionOperativa ? (
+                                            <div className="flex flex-wrap gap-1.5">
+                                              {([
+                                                ['asistio', 'Asistió'],
+                                                ['no_asistio_aviso', 'Avisó'],
+                                                ['no_asistio_sin_aviso', 'Sin aviso'],
+                                                ['pendiente', 'Pendiente'],
+                                              ] as [AsistenciaEstado, string][]).map(([estado, label]) => (
+                                                <button
+                                                  key={estado}
+                                                  type="button"
+                                                  disabled={actualizando || asistenciaActual === estado}
+                                                  onClick={() => actualizarAsistenciaSesion(sesion.id, estado)}
+                                                  className="rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs font-medium text-white/70 transition hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
+                                                >
+                                                  {label}
+                                                </button>
+                                              ))}
+                                            </div>
+                                          ) : (
+                                            <p className="text-xs text-white/40">Bloqueada: pertenece a un plan no vigente.</p>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-3 align-top">
+                                        {sesionOperativa ? (
+                                          <button
+                                            type="button"
+                                            disabled={!puedeReagendar}
+                                            onClick={() => abrirReagendarSesion(sesion)}
+                                            className="rounded-xl border border-violet-400/20 bg-violet-400/10 px-3 py-1.5 text-xs font-semibold text-violet-200 transition hover:bg-violet-400/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/30"
+                                          >
+                                            Reagendar
+                                          </button>
+                                        ) : (
+                                          <span className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/40">Ver registro</span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : null}
+                      </div>
+                    )
+                  })
+                )}
               </div>
             ) : null}
           </div>
@@ -1186,28 +1362,28 @@ export default function ClienteDetallePage() {
             </div>
           </Section>
 
-          <Section title="Resumen del plan" description="Estado actual del plan principal del cliente.">
-            {!planPrincipal ? (
-              <p className="text-sm text-white/55">No tiene planes registrados.</p>
+          <Section title="Resumen del plan activo" description="Solo muestra planes activos no vencidos. Los vencidos quedan en historial.">
+            {!planActivo ? (
+              <p className="text-sm text-white/55">No tiene plan activo vigente. Revisa el historial para ver planes vencidos, agotados o renovados.</p>
             ) : (
               <div className="space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="font-medium text-white break-words whitespace-normal">{planPrincipal.planes?.nombre || 'Plan'}</p>
-                    <p className="text-sm text-white/55">{money(planPrincipal.planes?.precio || 0, 'USD')}</p>
-                    <p className="text-xs text-white/45">Vigencia: {formatVigencia(planPrincipal.planes?.vigencia_valor, planPrincipal.planes?.vigencia_tipo)}</p>
+                    <p className="font-medium text-white break-words whitespace-normal">{planActivo.planes?.nombre || 'Plan'}</p>
+                    <p className="text-sm text-white/55">{money(planActivo.planes?.precio || 0, 'USD')}</p>
+                    <p className="text-xs text-white/45">Vigencia: {formatVigencia(planActivo.planes?.vigencia_valor, planActivo.planes?.vigencia_tipo)}</p>
                   </div>
-                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(planPrincipal.estado)}`}>
-                    {getPlanStatusLabel(planPrincipal.estado)}
+                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(planActivo.estado)}`}>
+                    {getPlanStatusLabel(planActivo.estado)}
                   </span>
                 </div>
                 <Card className="p-3">
                   <div className="space-y-1 text-sm text-white/75">
-                    <p>Inicio: {planPrincipal.fecha_inicio || '—'}</p>
-                    <p>Fin: {planPrincipal.fecha_fin || '—'}</p>
-                    <p>Total sesiones: {planPrincipal.sesiones_totales}</p>
-                    <p>Usadas: {planPrincipal.sesiones_usadas}</p>
-                    <p>Restantes: {Math.max(0, Number(planPrincipal.sesiones_totales || 0) - Number(planPrincipal.sesiones_usadas || 0))}</p>
+                    <p>Inicio: {planActivo.fecha_inicio || '—'}</p>
+                    <p>Fin: {planActivo.fecha_fin || '—'}</p>
+                    <p>Total sesiones: {planActivo.sesiones_totales}</p>
+                    <p>Usadas: {planActivo.sesiones_usadas}</p>
+                    <p>Restantes: {Math.max(0, Number(planActivo.sesiones_totales || 0) - Number(planActivo.sesiones_usadas || 0))}</p>
                   </div>
                 </Card>
                 <Link href={`/admin/personas/clientes/${cliente.id}/plan`} className="block rounded-2xl border border-white/10 bg-white/[0.08] px-4 py-2 text-center text-sm font-semibold text-white transition hover:bg-white/[0.12]">
