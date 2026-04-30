@@ -62,7 +62,13 @@ type ComisionDetalle = {
   fecha_pago: string | null
   liquidacion_id?: string | null
   pago_empleado_id?: string | null
+  pago_id?: string | null
   cliente_id?: string | null
+  cliente_plan_id?: string | null
+  pago_concepto?: string | null
+  pago_categoria?: string | null
+  pago_fecha?: string | null
+  pago_cliente_nombre?: string | null
   cita_id?: string | null
   servicio_id?: string | null
   concepto?: string | null
@@ -95,7 +101,6 @@ type Liquidacion = {
   pago_empleado_id: string | null
   egreso_id: string | null
 }
-
 
 type EstadoCuentaEmpleado = {
   empleado_id: string
@@ -370,47 +375,132 @@ function convertirMonto(
   return null
 }
 
-
-function normalizeComisionDetalle(row: any): ComisionDetalle {
-  const cita = firstOrNull(row?.citas)
-  const clienteDirecto = firstOrNull(row?.clientes)
-  const servicioDirecto = firstOrNull(row?.servicios)
-  const clienteCita = firstOrNull(cita?.clientes)
-  const servicioCita = firstOrNull(cita?.servicios)
-
-  return {
-    ...(row as ComisionDetalle),
-    cliente_nombre: row?.cliente_nombre ?? clienteDirecto?.nombre ?? clienteCita?.nombre ?? null,
-    servicio_nombre: row?.servicio_nombre ?? servicioDirecto?.nombre ?? servicioCita?.nombre ?? null,
-    cita_fecha: row?.cita_fecha ?? cita?.fecha ?? null,
-    cita_hora_inicio: row?.cita_hora_inicio ?? cita?.hora_inicio ?? null,
-    concepto: row?.concepto ?? row?.descripcion ?? null,
-  }
+function uniqueStrings(values: any[]) {
+  return [...new Set(values.map((v) => (v ? String(v) : '')).filter(Boolean))]
 }
 
-function getComisionConcepto(c: ComisionDetalle) {
+function mapById<T extends { id?: string | null }>(rows: T[] | null | undefined) {
+  const map = new Map<string, T>()
+  for (const row of rows || []) {
+    if (row?.id) map.set(String(row.id), row)
+  }
+  return map
+}
+
+// ─── MEJORADO: extrae el concepto real desde pagos cuando existe pago_id ─────
+function normalizeComisionDetalle(
+  row: any,
+  ctx?: {
+    pagosMap?: Map<string, any>
+    clientesMap?: Map<string, any>
+    citasMap?: Map<string, any>
+    serviciosMap?: Map<string, any>
+    clientesPlanesMap?: Map<string, any>
+  }
+): ComisionDetalle {
+  const get = (v: any) => {
+    if (!v) return null
+    return Array.isArray(v) ? v[0] : v
+  }
+
+  const pago = get(row?.pagos) ?? (row?.pago_id ? ctx?.pagosMap?.get(String(row.pago_id)) : null)
+  const cita = get(row?.citas) ?? (row?.cita_id ? ctx?.citasMap?.get(String(row.cita_id)) : null)
+  const plan = get(row?.clientes_planes) ?? (row?.cliente_plan_id ? ctx?.clientesPlanesMap?.get(String(row.cliente_plan_id)) : null)
+
+  const clientePago = pago?.cliente_id ? ctx?.clientesMap?.get(String(pago.cliente_id)) : get(pago?.clientes)
+  const clienteDirecto = get(row?.clientes) ?? (row?.cliente_id ? ctx?.clientesMap?.get(String(row.cliente_id)) : null)
+  const clienteCita = cita?.cliente_id ? ctx?.clientesMap?.get(String(cita.cliente_id)) : get(cita?.clientes)
+  const clientePlan = plan?.cliente_id ? ctx?.clientesMap?.get(String(plan.cliente_id)) : get(plan?.clientes)
+
+  const servicioDirecto = get(row?.servicios) ?? (row?.servicio_id ? ctx?.serviciosMap?.get(String(row.servicio_id)) : null)
+  const servicioCita = cita?.servicio_id ? ctx?.serviciosMap?.get(String(cita.servicio_id)) : get(cita?.servicios)
+
+  const conceptoPago = typeof pago?.concepto === 'string' ? pago.concepto.trim() : ''
+
+  const servicioNombre =
+    servicioDirecto?.nombre ??
+    servicioCita?.nombre ??
+    row?.servicio_nombre ??
+    null
+
+  const clienteNombre =
+    clientePago?.nombre ??
+    clienteDirecto?.nombre ??
+    clienteCita?.nombre ??
+    clientePlan?.nombre ??
+    (row?.cliente_id ? `Cliente ${String(row.cliente_id).slice(0, 6)}` : null) ??
+    'Cliente desconocido'
+
+  return {
+    ...row,
+    pago_id: row?.pago_id ?? pago?.id ?? null,
+    concepto: (row?.concepto ?? conceptoPago) || null,
+    pago_concepto: conceptoPago || null,
+    pago_categoria: pago?.categoria ?? null,
+    pago_fecha: pago?.fecha ?? null,
+    pago_cliente_nombre: clientePago?.nombre ?? null,
+    cliente_nombre: clienteNombre,
+    servicio_nombre: servicioNombre,
+    cita_fecha: cita?.fecha ?? null,
+    cita_hora_inicio: cita?.hora_inicio ?? null,
+  }
+}
+// ─── MEJORADO: concepto más descriptivo ─────────────────────────────────────
+function getComisionConcepto(c: ComisionDetalle): string {
+  // 1. Si viene concepto explícito de la DB, úsalo
   if (c.concepto?.trim()) return c.concepto.trim()
 
   const tipo = (c.tipo || '').toLowerCase()
   const servicio = c.servicio_nombre?.trim()
   const cliente = c.cliente_nombre?.trim()
+  const fecha = c.cita_fecha ? formatDate(c.cita_fecha) : formatDate(c.fecha)
 
+  // 2. Plan: "Plan · NombreServicio · NombreCliente"
+  if (tipo === 'plan') {
+    if (servicio && cliente) return `Plan · ${servicio} · ${cliente}`
+    if (servicio) return `Plan · ${servicio}`
+    if (cliente) return `Plan · ${cliente}`
+    return 'Comisión por plan'
+  }
+
+  // 3. Cita: "Cita · NombreServicio · NombreCliente · Fecha"
+  if (tipo === 'cita') {
+    if (servicio && cliente) return `Cita · ${servicio} · ${cliente}`
+    if (servicio) return `Cita · ${servicio}`
+    if (cliente) return `Cita · ${cliente}`
+    return 'Comisión por cita'
+  }
+
+  // 4. Fallback genérico
   if (servicio && cliente) return `${servicio} · ${cliente}`
   if (servicio) return servicio
-  if (cliente) return `Comisión de ${cliente}`
-  if (tipo === 'plan') return 'Comisión por plan'
-  if (tipo === 'cita') return 'Comisión por cita'
-  return 'Comisión'
+  if (cliente) return `Comisión · ${cliente}`
+  return `Comisión · ${fecha}`
 }
 
-function getComisionSubtitulo(c: ComisionDetalle) {
-  const partes = [
-    c.cliente_nombre ? `Cliente: ${c.cliente_nombre}` : null,
-    c.servicio_nombre ? `Servicio: ${c.servicio_nombre}` : null,
-    c.cita_hora_inicio ? `Hora: ${String(c.cita_hora_inicio).slice(0, 5)}` : null,
-  ].filter(Boolean)
+// ─── MEJORADO: subtítulo con fecha y hora de la cita ────────────────────────
+function getComisionSubtitulo(c: ComisionDetalle): string {
+  const partes: string[] = []
 
-  return partes.length ? partes.join(' · ') : 'Sin detalle de cliente registrado'
+  if (c.cliente_nombre && c.cliente_nombre !== 'Cliente desconocido') {
+    partes.push(c.cliente_nombre)
+  }
+
+  if (c.cita_fecha) {
+    partes.push(formatDate(c.cita_fecha))
+  } else {
+    partes.push(formatDate(c.fecha))
+  }
+
+  if (c.cita_hora_inicio) {
+    partes.push(String(c.cita_hora_inicio).slice(0, 5))
+  }
+
+  if (c.servicio_nombre) {
+    partes.push(c.servicio_nombre)
+  }
+
+  return partes.length ? partes.join(' · ') : (c.concepto || 'Comisión registrada')
 }
 
 function chunkAgendaByCliente(items: AgendaItem[]) {
@@ -499,65 +589,100 @@ export default function VerPersonalPage() {
     setTasaBCVAuto(null)
   }, [monedaPago])
 
+  // ─── ROBUSTO: carga comisiones primero y luego enriquece pagos/clientes ─────
+  // Esto evita que Supabase/PostgREST esconda las comisiones si el FK pago_id todavía
+  // no está refrescado en caché o si una relación opcional falla.
   async function fetchComisionesDetalladas(empleadoId: string) {
-    const baseSelect = `
-      id,
-      base,
-      profesional,
-      rpm,
-      fecha,
-      tipo,
-      estado,
-      moneda,
-      tasa_bcv,
-      monto_base_usd,
-      monto_base_bs,
-      monto_rpm_usd,
-      monto_rpm_bs,
-      monto_profesional_usd,
-      monto_profesional_bs,
-      pagado,
-      fecha_pago,
-      liquidacion_id,
-      pago_empleado_id
-    `
-
-    const richSelect = `
-      ${baseSelect},
-      cliente_id,
-      cita_id,
-      servicio_id,
-      concepto,
-      descripcion,
-      clientes:cliente_id ( nombre ),
-      servicios:servicio_id ( nombre ),
-      citas:cita_id (
-        fecha,
-        hora_inicio,
-        clientes:cliente_id ( nombre ),
-        servicios:servicio_id ( nombre )
-      )
-    `
-
-    const richRes = await supabase
+    const baseRes = await supabase
       .from('comisiones_detalle')
-      .select(richSelect)
+      .select('*')
       .eq('empleado_id', empleadoId)
       .order('fecha', { ascending: false })
 
-    if (!richRes.error) {
-      return { ...richRes, data: ((richRes.data || []) as any[]).map(normalizeComisionDetalle) }
+    if (baseRes.error) return baseRes
+
+    const rows = (baseRes.data || []) as any[]
+
+    const pagoIds = uniqueStrings(rows.map((r) => r.pago_id))
+    const citaIds = uniqueStrings(rows.map((r) => r.cita_id))
+    const servicioIdsDirectos = uniqueStrings(rows.map((r) => r.servicio_id))
+    const clienteIdsDirectos = uniqueStrings(rows.map((r) => r.cliente_id))
+    const clientePlanIds = uniqueStrings(rows.map((r) => r.cliente_plan_id))
+
+    let pagosMap = new Map<string, any>()
+    let citasMap = new Map<string, any>()
+    let serviciosMap = new Map<string, any>()
+    let clientesPlanesMap = new Map<string, any>()
+    let clientesMap = new Map<string, any>()
+
+    if (pagoIds.length > 0) {
+      const { data } = await supabase
+        .from('pagos')
+        .select('id, concepto, categoria, fecha, cliente_id')
+        .in('id', pagoIds)
+
+      pagosMap = mapById((data || []) as any[])
     }
 
-    const fallbackRes = await supabase
-      .from('comisiones_detalle')
-      .select(baseSelect)
-      .eq('empleado_id', empleadoId)
-      .order('fecha', { ascending: false })
+    if (citaIds.length > 0) {
+      const { data } = await supabase
+        .from('citas')
+        .select('id, fecha, hora_inicio, cliente_id, servicio_id')
+        .in('id', citaIds)
+
+      citasMap = mapById((data || []) as any[])
+    }
+
+    if (clientePlanIds.length > 0) {
+      const { data } = await supabase
+        .from('clientes_planes')
+        .select('id, cliente_id')
+        .in('id', clientePlanIds)
+
+      clientesPlanesMap = mapById((data || []) as any[])
+    }
+
+    const servicioIds = uniqueStrings([
+      ...servicioIdsDirectos,
+      ...[...citasMap.values()].map((c) => c?.servicio_id),
+    ])
+
+    if (servicioIds.length > 0) {
+      const { data } = await supabase
+        .from('servicios')
+        .select('id, nombre')
+        .in('id', servicioIds)
+
+      serviciosMap = mapById((data || []) as any[])
+    }
+
+    const clienteIds = uniqueStrings([
+      ...clienteIdsDirectos,
+      ...[...pagosMap.values()].map((p) => p?.cliente_id),
+      ...[...citasMap.values()].map((c) => c?.cliente_id),
+      ...[...clientesPlanesMap.values()].map((p) => p?.cliente_id),
+    ])
+
+    if (clienteIds.length > 0) {
+      const { data } = await supabase
+        .from('clientes')
+        .select('id, nombre')
+        .in('id', clienteIds)
+
+      clientesMap = mapById((data || []) as any[])
+    }
 
     return {
-      ...fallbackRes,
-      data: ((fallbackRes.data || []) as any[]).map(normalizeComisionDetalle),
+      ...baseRes,
+      data: rows.map((row) =>
+        normalizeComisionDetalle(row, {
+          pagosMap,
+          clientesMap,
+          citasMap,
+          serviciosMap,
+          clientesPlanesMap,
+        })
+      ),
     }
   }
 
@@ -707,7 +832,7 @@ export default function VerPersonalPage() {
       )
     )
 
-    setComisiones(((comRes.data || []) as any[]).map(normalizeComisionDetalle))
+    setComisiones((comRes.data || []) as ComisionDetalle[])
     setLiquidaciones((liqRes.data || []) as Liquidacion[])
     setMetodosPago(metodosNormalizados)
     setEstadoCuentaEmpleado((estadoCuentaRes.data as EstadoCuentaEmpleado | null) ?? null)
@@ -1870,6 +1995,7 @@ export default function VerPersonalPage() {
                         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                           <div className="min-w-0 flex-1">
                             <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                              {/* ── Tipo badge ── */}
                               <span
                                 className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                                   c.tipo === 'plan'
@@ -1879,9 +2005,19 @@ export default function VerPersonalPage() {
                               >
                                 {c.tipo || 'comisión'}
                               </span>
+
+                              {/* ── Fecha de la cita (si existe) o de la comisión ── */}
                               <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-white/55">
-                                {formatDate(c.fecha)}
+                                {c.cita_fecha ? formatDate(c.cita_fecha) : formatDate(c.fecha)}
                               </span>
+
+                              {/* ── Hora de la cita ── */}
+                              {c.cita_hora_inicio && (
+                                <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-white/55">
+                                  {String(c.cita_hora_inicio).slice(0, 5)}
+                                </span>
+                              )}
+
                               {checked && (
                                 <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
                                   Seleccionada
@@ -1889,10 +2025,15 @@ export default function VerPersonalPage() {
                               )}
                             </div>
 
+                            {/* ── Concepto principal ── */}
                             <p className="truncate text-sm font-semibold text-white">
                               {concepto}
                             </p>
-                            <p className="mt-1 text-xs text-white/45">{subtitulo}</p>
+
+                            {/* ── Subtítulo con cliente + servicio ── */}
+                            <p className="mt-0.5 truncate text-xs text-white/45">
+                              {subtitulo}
+                            </p>
 
                             <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
                               <span className="rounded-full bg-white/[0.04] px-2 py-0.5 text-white/55">
