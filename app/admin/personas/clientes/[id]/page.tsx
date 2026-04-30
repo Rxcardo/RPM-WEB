@@ -883,7 +883,9 @@ export default function ClienteDetallePage() {
         total: 0,
         estado: null as string | null,
         nombre: 'Sin plan activo',
-        subtitle: planPrincipal ? `Último plan: ${getPlanStatusLabel(planActivo.estado)}` : 'Sin plan registrado',
+        subtitle: planPrincipal
+  ? `Último plan: ${getPlanStatusLabel(planPrincipal?.estado)}`
+  : 'Sin plan registrado',
       }
     }
 

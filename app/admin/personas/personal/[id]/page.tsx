@@ -500,20 +500,8 @@ export default function VerPersonalPage() {
   }, [monedaPago])
 
   async function fetchComisionesDetalladas(empleadoId: string) {
-    // IMPORTANTE:
-    // En tu BD, comisiones_detalle SÍ tiene cliente_id, cita_id y servicio_id,
-    // pero no tiene FK directa declarada hacia clientes/servicios. Por eso Supabase
-    // no puede hacer clientes:cliente_id ni servicios:servicio_id desde esta tabla.
-    // La solución estable es cargar la comisión base y luego resolver cliente/servicio
-    // manualmente por IDs y por cita_id.
     const baseSelect = `
       id,
-      liquidacion_id,
-      cita_id,
-      empleado_id,
-      cliente_id,
-      servicio_id,
-      cliente_plan_id,
       base,
       profesional,
       rpm,
@@ -530,89 +518,47 @@ export default function VerPersonalPage() {
       monto_profesional_bs,
       pagado,
       fecha_pago,
-      pago_empleado_id,
-      porcentaje_rpm
+      liquidacion_id,
+      pago_empleado_id
     `
 
-    const comRes = await supabase
+    const richSelect = `
+      ${baseSelect},
+      cliente_id,
+      cita_id,
+      servicio_id,
+      concepto,
+      descripcion,
+      clientes:cliente_id ( nombre ),
+      servicios:servicio_id ( nombre ),
+      citas:cita_id (
+        fecha,
+        hora_inicio,
+        clientes:cliente_id ( nombre ),
+        servicios:servicio_id ( nombre )
+      )
+    `
+
+    const richRes = await supabase
+      .from('comisiones_detalle')
+      .select(richSelect)
+      .eq('empleado_id', empleadoId)
+      .order('fecha', { ascending: false })
+
+    if (!richRes.error) {
+      return { ...richRes, data: ((richRes.data || []) as any[]).map(normalizeComisionDetalle) }
+    }
+
+    const fallbackRes = await supabase
       .from('comisiones_detalle')
       .select(baseSelect)
       .eq('empleado_id', empleadoId)
       .order('fecha', { ascending: false })
 
-    if (comRes.error) return comRes
-
-    const rows = ((comRes.data || []) as any[])
-
-    const citaIds = [...new Set(rows.map((r) => r.cita_id).filter(Boolean))]
-    const clienteIdsDirectos = [...new Set(rows.map((r) => r.cliente_id).filter(Boolean))]
-    const servicioIdsDirectos = [...new Set(rows.map((r) => r.servicio_id).filter(Boolean))]
-
-    const [citasSettled, clientesSettled, serviciosSettled] = await Promise.allSettled([
-      citaIds.length
-        ? supabase
-            .from('citas')
-            .select('id, fecha, hora_inicio, cliente_id, servicio_id, clientes:cliente_id ( nombre ), servicios:servicio_id ( nombre )')
-            .in('id', citaIds)
-        : Promise.resolve({ data: [], error: null }),
-      clienteIdsDirectos.length
-        ? supabase.from('clientes').select('id, nombre').in('id', clienteIdsDirectos)
-        : Promise.resolve({ data: [], error: null }),
-      servicioIdsDirectos.length
-        ? supabase.from('servicios').select('id, nombre').in('id', servicioIdsDirectos)
-        : Promise.resolve({ data: [], error: null }),
-    ])
-
-    const citasData = citasSettled.status === 'fulfilled' && !citasSettled.value.error
-      ? ((citasSettled.value.data || []) as any[])
-      : []
-
-    const clientesData = clientesSettled.status === 'fulfilled' && !clientesSettled.value.error
-      ? ((clientesSettled.value.data || []) as any[])
-      : []
-
-    const serviciosData = serviciosSettled.status === 'fulfilled' && !serviciosSettled.value.error
-      ? ((serviciosSettled.value.data || []) as any[])
-      : []
-
-    const citasMap = new Map(citasData.map((c) => [String(c.id), c]))
-    const clientesMap = new Map(clientesData.map((c) => [String(c.id), c]))
-    const serviciosMap = new Map(serviciosData.map((s) => [String(s.id), s]))
-
-    const data = rows.map((row) => {
-      const cita = row.cita_id ? citasMap.get(String(row.cita_id)) : null
-      const clienteDirecto = row.cliente_id ? clientesMap.get(String(row.cliente_id)) : null
-      const servicioDirecto = row.servicio_id ? serviciosMap.get(String(row.servicio_id)) : null
-
-      const clienteNombre =
-        clienteDirecto?.nombre ||
-        firstOrNull(cita?.clientes)?.nombre ||
-        null
-
-      const servicioNombre =
-        servicioDirecto?.nombre ||
-        firstOrNull(cita?.servicios)?.nombre ||
-        null
-
-      return normalizeComisionDetalle({
-        ...row,
-        citas: cita,
-        cliente_nombre: clienteNombre,
-        servicio_nombre: servicioNombre,
-        cita_fecha: cita?.fecha ?? null,
-        cita_hora_inicio: cita?.hora_inicio ?? null,
-        // Este concepto es calculado para UI porque comisiones_detalle no tiene columna concepto.
-        concepto: servicioNombre && clienteNombre
-          ? `${servicioNombre} · ${clienteNombre}`
-          : servicioNombre
-            ? servicioNombre
-            : clienteNombre
-              ? `Comisión de ${clienteNombre}`
-              : null,
-      })
-    })
-
-    return { ...comRes, data }
+    return {
+      ...fallbackRes,
+      data: ((fallbackRes.data || []) as any[]).map(normalizeComisionDetalle),
+    }
   }
 
   async function loadAll() {
@@ -1518,15 +1464,15 @@ export default function VerPersonalPage() {
                     {formatMoney(estadoCuentaEmpleado?.credito_disponible_usd || 0)}
                   </p>
                 </Card>
-                <Card className="border-amber-400/20 bg-amber-400/5 p-4">
+                <Card className="border-amber-400/20 bg-amber-400/5 p-3">
                   <p className="text-xs text-white/45">Neto pendiente</p>
                   <p className="mt-1 text-lg font-bold text-amber-300">
                     {formatMoney(estadoCuentaEmpleado?.saldo_pendiente_neto_usd || 0)}
                   </p>
                 </Card>
-                <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
+                <Card className="border-emerald-400/20 bg-emerald-400/5 p-3">
                   <p className="text-xs text-white/45">Saldo a favor neto</p>
-                  <p className="mt-1 text-lg font-bold text-emerald-300">
+                  <p className="mt-1 text-base font-bold text-emerald-300">
                     {formatMoney(estadoCuentaEmpleado?.saldo_favor_neto_usd || 0)}
                   </p>
                 </Card>
@@ -1615,13 +1561,13 @@ export default function VerPersonalPage() {
           <div className="space-y-4">
             <Section title="Saldo disponible" description="Comisiones listas para liquidar.">
               <div className="grid grid-cols-1 gap-3">
-                <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
+                <Card className="border-emerald-400/20 bg-emerald-400/5 p-3">
                   <p className="text-xs text-white/45">Profesional disponible USD</p>
                   <p className="mt-1 text-xl font-bold text-emerald-400">
                     {formatMoney(resumenDisponible.profesionalUsd)}
                   </p>
                 </Card>
-                <Card className="border-amber-400/20 bg-amber-400/5 p-4">
+                <Card className="border-amber-400/20 bg-amber-400/5 p-3">
                   <p className="text-xs text-white/45">Profesional disponible Bs</p>
                   <p className="mt-1 text-xl font-bold text-amber-300">
                     {formatBs(resumenDisponible.profesionalBs)}
@@ -1783,19 +1729,19 @@ export default function VerPersonalPage() {
       )}
 
       {tab === 'comisiones' && (
-        <div className="space-y-6">
+        <div className="space-y-4">
           <Section
             title="Liquidación de comisiones"
-            description="Selecciona las comisiones, la moneda y reparte el pago entre una o varias carteras/métodos."
+            description="Liquida comisiones por método, USD/Bs o pago dividido."
           >
-            <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3">
-              <Card className="p-4">
+            <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-3">
+              <Card className="p-3">
                 <p className="text-xs text-white/45">Base USD</p>
                 <p className="mt-1 font-semibold text-white">{formatMoney(resumenDisponible.baseUsd)}</p>
                 <p className="text-xs text-white/35">{formatBs(resumenDisponible.baseBs)}</p>
               </Card>
 
-              <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
+              <Card className="border-emerald-400/20 bg-emerald-400/5 p-3">
                 <p className="text-xs text-white/45">Profesional disponible</p>
                 <p className="mt-1 font-semibold text-emerald-400">
                   {formatMoney(resumenDisponible.profesionalUsd)}
@@ -1803,7 +1749,7 @@ export default function VerPersonalPage() {
                 <p className="text-xs text-white/35">{formatBs(resumenDisponible.profesionalBs)}</p>
               </Card>
 
-              <Card className="border-violet-400/20 bg-violet-400/5 p-4">
+              <Card className="border-violet-400/20 bg-violet-400/5 p-3">
                 <p className="text-xs text-white/45">RPM</p>
                 <p className="mt-1 font-semibold text-violet-400">
                   {formatMoney(resumenDisponible.rpmUsd)}
@@ -1812,8 +1758,8 @@ export default function VerPersonalPage() {
               </Card>
             </div>
 
-            <Card className="mb-4 border-white/10 bg-white/[0.02] p-4">
-              <div className="grid gap-4 md:grid-cols-3">
+            <Card className="mb-3 border-white/10 bg-white/[0.02] p-3">
+              <div className="grid gap-3 md:grid-cols-3">
                 <div>
                   <label className="mb-2 block text-sm font-medium text-white/75">Moneda</label>
                   <select
@@ -1877,21 +1823,21 @@ export default function VerPersonalPage() {
               </div>
             </Card>
 
-            <Card className="mb-4 border-sky-400/20 bg-sky-400/5 p-4">
-              <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <Card className="mb-3 border-sky-400/20 bg-sky-400/5 p-3">
+              <div className="mb-2 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                 <div>
                   <p className="text-sm font-medium text-sky-300">
                     Comisiones pendientes para {monedaPago}
                   </p>
                   <p className="text-xs text-white/45">
-                    Aquí eliges exactamente cuáles quieres liquidar en este momento.
+                    Toca una tarjeta para incluirla en la liquidación.
                   </p>
                 </div>
 
                 <button
                   type="button"
                   onClick={selectAllCurrentCurrency}
-                  className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/70 hover:bg-white/[0.06]"
+                  className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-white/70 hover:bg-white/[0.06]"
                 >
                   {allCurrentCurrencySelected ? 'Quitar selección' : 'Seleccionar todas'}
                 </button>
@@ -1902,7 +1848,7 @@ export default function VerPersonalPage() {
                   No hay comisiones pendientes con monto para {monedaPago}.
                 </p>
               ) : (
-                <div className="grid gap-3">
+                <div className="grid gap-2">
                   {comisionesPendientesMoneda.map((c) => {
                     const checked = selectedComisionIds.includes(c.id)
                     const monto = getComisionMontoByMoneda(c, monedaPago)
@@ -1915,17 +1861,17 @@ export default function VerPersonalPage() {
                         type="button"
                         onClick={() => toggleComision(c.id)}
                         aria-pressed={checked}
-                        className={`group w-full rounded-3xl border p-4 text-left transition ${
+                        className={`group w-full rounded-2xl border p-3 text-left transition ${
                           checked
                             ? 'border-emerald-400/40 bg-emerald-400/[0.10] shadow-[0_0_0_1px_rgba(52,211,153,0.08)]'
                             : 'border-white/10 bg-white/[0.025] hover:border-white/15 hover:bg-white/[0.045]'
                         }`}
                       >
-                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                           <div className="min-w-0 flex-1">
-                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
                               <span
-                                className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                                   c.tipo === 'plan'
                                     ? 'bg-violet-500/10 text-violet-300'
                                     : 'bg-sky-500/10 text-sky-300'
@@ -1933,40 +1879,40 @@ export default function VerPersonalPage() {
                               >
                                 {c.tipo || 'comisión'}
                               </span>
-                              <span className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs text-white/55">
+                              <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-white/55">
                                 {formatDate(c.fecha)}
                               </span>
                               {checked && (
-                                <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-300">
+                                <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
                                   Seleccionada
                                 </span>
                               )}
                             </div>
 
-                            <p className="truncate text-sm font-semibold text-white md:text-base">
+                            <p className="truncate text-sm font-semibold text-white">
                               {concepto}
                             </p>
                             <p className="mt-1 text-xs text-white/45">{subtitulo}</p>
 
-                            <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                              <span className="rounded-full bg-white/[0.04] px-2.5 py-1 text-white/55">
+                            <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                              <span className="rounded-full bg-white/[0.04] px-2 py-0.5 text-white/55">
                                 USD {formatMoney(c.monto_profesional_usd ?? c.profesional)}
                               </span>
-                              <span className="rounded-full bg-white/[0.04] px-2.5 py-1 text-white/55">
+                              <span className="rounded-full bg-white/[0.04] px-2 py-0.5 text-white/55">
                                 Bs {formatBs(c.monto_profesional_bs)}
                               </span>
                             </div>
                           </div>
 
-                          <div className="flex items-center justify-between gap-3 md:block md:text-right">
+                          <div className="flex items-center justify-between gap-2 md:min-w-[150px] md:text-right">
                             <div>
                               <p className="text-xs text-white/35">Monto a liquidar</p>
-                              <p className="text-lg font-bold text-emerald-300">
+                              <p className="text-base font-bold text-emerald-300">
                                 {formatMontoByMoneda(monto, monedaPago)}
                               </p>
                             </div>
                             <span
-                              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-bold transition ${
+                              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold transition ${
                                 checked
                                   ? 'border-emerald-400/40 bg-emerald-400/20 text-emerald-200'
                                   : 'border-white/10 bg-white/[0.03] text-white/25 group-hover:text-white/50'
@@ -1983,31 +1929,31 @@ export default function VerPersonalPage() {
               )}
             </Card>
 
-            <Card className="mb-4 border-amber-400/20 bg-amber-400/5 p-4">
+            <Card className="mb-3 border-amber-400/20 bg-amber-400/5 p-3">
               <p className="text-sm font-medium text-amber-300">Métodos de pago / carteras</p>
               <p className="mt-1 text-xs text-white/45">
-                Puedes pagar con una sola cartera o dividir entre varias. Si el monto pendiente está en USD y eliges un método en Bs, aquí se calcula el equivalente con BCV para pagar la diferencia en bolívares.
+                Puedes pagar con una cartera o dividir. Si eliges Bs, calcula equivalente BCV.
               </p>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <Card className="p-4">
+              <div className="mt-3 grid gap-2 md:grid-cols-3">
+                <Card className="p-3">
                   <p className="text-xs text-white/45">Monto seleccionado</p>
-                  <p className="mt-1 text-lg font-semibold text-white">
+                  <p className="mt-1 text-base font-semibold text-white">
                     {formatMontoByMoneda(montoFacturar, monedaPago)}
                   </p>
                 </Card>
 
-                <Card className="border-violet-400/20 bg-violet-400/5 p-4">
+                <Card className="border-violet-400/20 bg-violet-400/5 p-3">
                   <p className="text-xs text-white/45">Asignado en métodos</p>
-                  <p className="mt-1 text-lg font-semibold text-violet-300">
+                  <p className="mt-1 text-base font-semibold text-violet-300">
                     {formatMontoByMoneda(totalSplits, monedaPago)}
                   </p>
                 </Card>
 
-                <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
+                <Card className="border-emerald-400/20 bg-emerald-400/5 p-3">
                   <p className="text-xs text-white/45">Restante por asignar</p>
                   <p
-                    className={`mt-1 text-lg font-semibold ${
+                    className={`mt-1 text-base font-semibold ${
                       restantePorAsignar === 0 ? 'text-emerald-400' : 'text-amber-300'
                     }`}
                   >
@@ -2016,7 +1962,7 @@ export default function VerPersonalPage() {
                 </Card>
               </div>
 
-              <div className="mt-4 space-y-3">
+              <div className="mt-3 space-y-2">
                 {splitsConMetodo.map((split, index) => {
                   const metodo = split.metodo
                   const saldo = split.saldo
@@ -2028,7 +1974,7 @@ export default function VerPersonalPage() {
                   return (
                     <div
                       key={split.id}
-                      className="grid gap-3 rounded-2xl border border-white/10 bg-white/[0.02] p-3 md:grid-cols-[1.3fr_0.8fr_auto_auto]"
+                      className="grid gap-2 rounded-2xl border border-white/10 bg-white/[0.02] p-3 md:grid-cols-[1.3fr_0.8fr_auto_auto]"
                     >
                       <div>
                         <label className="mb-2 block text-xs text-white/45">
@@ -2099,7 +2045,7 @@ export default function VerPersonalPage() {
                         <button
                           type="button"
                           onClick={() => fillRemainingOnSplit(split.id)}
-                          className="h-[50px] rounded-2xl border border-white/10 bg-white/[0.03] px-4 text-xs font-medium text-white/70 hover:bg-white/[0.06]"
+                          className="h-[44px] rounded-xl border border-white/10 bg-white/[0.03] px-3 text-xs font-medium text-white/70 hover:bg-white/[0.06]"
                         >
                           Completar
                         </button>
@@ -2109,7 +2055,7 @@ export default function VerPersonalPage() {
                         <button
                           type="button"
                           onClick={() => removeSplit(split.id)}
-                          className="h-[50px] rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 text-xs font-medium text-rose-300 hover:bg-rose-400/15"
+                          className="h-[44px] rounded-xl border border-rose-400/20 bg-rose-400/10 px-3 text-xs font-medium text-rose-300 hover:bg-rose-400/15"
                         >
                           Quitar
                         </button>
@@ -2122,12 +2068,12 @@ export default function VerPersonalPage() {
               <button
                 type="button"
                 onClick={addSplit}
-                className="mt-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/70 transition hover:bg-white/[0.06]"
+                className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-white/70 transition hover:bg-white/[0.06]"
               >
                 + Agregar otro método
               </button>
 
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <div>
                   <label className="mb-2 block text-sm font-medium text-white/75">
                     Referencia
@@ -2158,7 +2104,7 @@ export default function VerPersonalPage() {
                   type="button"
                   onClick={liquidarSaldoDisponible}
                   disabled={facturando}
-                  className="mt-4 w-full rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-400/20 disabled:opacity-60"
+                  className="mt-3 w-full rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-400/20 disabled:opacity-60"
                 >
                   {facturando
                     ? 'Liquidando saldo...'
@@ -2180,7 +2126,7 @@ export default function VerPersonalPage() {
             description="Referencia visual. Ya no bloquea la liquidación."
           >
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <Card className="p-4">
+              <Card className="p-3">
                 <p className="text-xs text-white/45">Pendiente dentro de quincena</p>
                 <p className="mt-1 font-semibold text-white">
                   {
@@ -2195,14 +2141,14 @@ export default function VerPersonalPage() {
                 </p>
               </Card>
 
-              <Card className="p-4">
+              <Card className="p-3">
                 <p className="text-xs text-white/45">Liquidado dentro de quincena</p>
                 <p className="mt-1 font-semibold text-white">
                   {comisionesLiquidadaHoyQuincena.length} registros
                 </p>
               </Card>
 
-              <Card className="p-4">
+              <Card className="p-3">
                 <p className="text-xs text-white/45">Rango</p>
                 <p className="mt-1 font-semibold text-white">
                   {formatDate(quincenaActual.inicio)} – {formatDate(quincenaActual.fin)}
