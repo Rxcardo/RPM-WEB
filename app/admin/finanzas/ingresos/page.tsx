@@ -1,2298 +1,2231 @@
 'use client'
+export const dynamic = 'force-dynamic'
 
-import { memo, Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { supabase } from '@/lib/supabase/client'
-import {
-  ArrowLeft, Plus, Search, Edit2, Trash2, X, Package2, User2,
-  Receipt, ChevronDown, AlertCircle, Zap,
-} from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
-import SelectorTasaBCV from '@/components/finanzas/SelectorTasaBCV'
-import { formatearMoneda } from '@/lib/finanzas/tasas'
-import { registrarAbonoMixto } from '@/lib/cobranzas/abonos'
-import PagoConDeudaSelector, {
-  pagoConDeudaInitial,
-  validarPagoConDeuda,
-  buildCuentaPorCobrarPayload,
-  buildPagosRpcPayload,
-  type PagoConDeudaState,
-  type MetodoPagoBase,
-} from '@/components/pagos/PagoConDeudaSelector'
+import { useParams } from 'next/navigation'
+import { supabase } from '@/lib/supabase/client'
+import Card from '@/components/ui/Card'
+import Section from '@/components/ui/Section'
+import StatCard from '@/components/ui/StatCard'
+import ActionCard from '@/components/ui/ActionCard'
 
-// ─── Interfaces ───────────────────────────────────────────────────────────────
-
-interface Cartera { nombre: string; codigo: string }
-interface MetodoPago { id: string; nombre: string; tipo?: string | null; moneda?: string | null; cartera?: Cartera | null }
-interface Producto { id: string; nombre: string; descripcion: string | null; cantidad_actual: number | null; unidad_medida: string | null; precio_venta_usd: number | null; estado: string | null }
-interface Cliente { id: string; nombre: string; telefono?: string | null; email?: string | null }
-interface EmpleadoConsumidor { id: string; nombre: string; telefono?: string | null; email?: string | null; rol?: string | null }
-
-interface CuentaPendienteResumen {
-  id: string; cliente_id: string | null; cliente_nombre: string; concepto: string
-  monto_total_usd: number | null; monto_pagado_usd: number | null; saldo_usd: number | null
-  fecha_venta: string; fecha_vencimiento?: string | null; estado: string
+type Empleado = {
+  id: string
+  nombre: string
+  email: string | null
+  telefono: string | null
+  rol: string
+  especialidad: string | null
+  estado: string
+  comision_plan_porcentaje: number
+  comision_cita_porcentaje: number
+  created_at: string
 }
 
-interface EstadoCuentaCliente {
-  cliente_id: string
-  total_pendiente_usd?: number | null; credito_disponible_usd?: number | null
-  saldo_pendiente_neto_usd?: number | null; saldo_favor_neto_usd?: number | null
-  total_pendiente_bs?: number | null; credito_disponible_bs?: number | null
-  saldo_pendiente_neto_bs?: number | null; saldo_favor_neto_bs?: number | null
+type ClienteAsignado = {
+  id: string
+  nombre: string
+  telefono: string | null
+  estado: string
 }
 
-interface EstadoCuentaEmpleado {
+type AgendaItem = {
+  id: string
+  fecha: string
+  hora_inicio: string
+  hora_fin: string
+  estado: string
+  nombre: string
+  subtitulo: string
+  tipo: 'entrenamiento' | 'cita'
+  notas: string | null
+}
+
+type ComisionDetalle = {
+  id: string
+  base: number
+  profesional: number
+  rpm: number
+  fecha: string
+  tipo: string
+  estado: string
+  moneda: 'USD' | 'BS' | string | null
+  tasa_bcv: number | null
+  monto_base_usd: number | null
+  monto_base_bs: number | null
+  monto_rpm_usd: number | null
+  monto_rpm_bs: number | null
+  monto_profesional_usd: number | null
+  monto_profesional_bs: number | null
+  pagado: boolean | null
+  fecha_pago: string | null
+  liquidacion_id?: string | null
+  pago_empleado_id?: string | null
+  cliente_id?: string | null
+  cita_id?: string | null
+  servicio_id?: string | null
+  concepto?: string | null
+  descripcion?: string | null
+  cliente_nombre?: string | null
+  servicio_nombre?: string | null
+  cita_fecha?: string | null
+  cita_hora_inicio?: string | null
+}
+
+type Liquidacion = {
+  id: string
+  fecha_inicio: string | null
+  fecha_fin: string | null
+  total_base: number
+  total_profesional: number
+  total_rpm: number
+  cantidad_citas: number
+  estado: string
+  pagado_at: string | null
+  moneda_pago: 'USD' | 'BS' | string | null
+  monto_pago: number | null
+  tasa_bcv: number | null
+  monto_equivalente_usd: number | null
+  monto_equivalente_bs: number | null
+  referencia: string | null
+  notas: string | null
+  metodo_pago_id: string | null
+  metodo_pago_v2_id?: string | null
+  pago_empleado_id: string | null
+  egreso_id: string | null
+}
+
+
+type EstadoCuentaEmpleado = {
   empleado_id: string
-  nombre?: string | null
-  rol?: string | null
-  total_pendiente_usd?: number | null; credito_disponible_usd?: number | null
-  saldo_pendiente_neto_usd?: number | null; saldo_favor_neto_usd?: number | null
+  nombre: string | null
+  rol: string | null
+  total_facturado_usd: number | null
+  total_pagado_usd: number | null
+  total_pendiente_usd: number | null
+  credito_disponible_usd: number | null
+  saldo_pendiente_neto_usd: number | null
+  saldo_favor_neto_usd: number | null
 }
 
-interface CuentaPendienteEmpleadoResumen {
-  id: string; empleado_id: string | null; empleado_nombre: string; concepto: string
-  monto_total_usd: number | null; monto_pagado_usd: number | null; saldo_usd: number | null
-  fecha_venta: string; fecha_vencimiento?: string | null; estado: string
+type CuentaPendienteEmpleado = {
+  id: string
+  empleado_id: string | null
+  empleado_nombre: string
+  concepto: string
+  monto_total_usd: number | null
+  monto_pagado_usd: number | null
+  saldo_usd: number | null
+  fecha_venta: string
+  fecha_vencimiento: string | null
+  estado: string
 }
 
-interface PagoItem {
-  id: string; operacion_pago_id: string | null; pago_item_no: number | null
-  pago_items_total: number | null; es_pago_mixto: boolean; fecha: string
-  concepto: string; categoria: string; tipo_origen: string
-  monto: number | null; monto_pago: number | null
-  monto_equivalente_usd: number | null; monto_equivalente_bs: number | null
-  moneda_pago: string; tasa_bcv: number | null; estado: string
-  cliente_id?: string | null; inventario_id?: string | null; cantidad_producto?: number | null
-  metodo_pago_id?: string | null; metodo_pago_v2_id?: string | null
-  notas?: string | null; referencia?: string | null
-  metodos_pago_v2?: { nombre: string } | null
-  clientes?: { nombre: string } | null
+type MetodoPago = {
+  id: string
+  nombre: string
+  tipo?: string | null
+  moneda?: string | null
+  color?: string | null
+  icono?: string | null
+  cartera?: {
+    id?: string
+    nombre: string
+    codigo: string
+    saldo_actual?: number | string | null
+    moneda?: string | null
+  } | null
 }
 
-interface PagoOperacion {
-  key: string; id_representativo: string; operacion_pago_id: string | null
-  fecha: string; concepto: string; categoria: string; tipo_origen: string; estado: string
-  cliente_id: string | null; cliente_nombre: string | null
-  inventario_id: string | null; cantidad_producto: number | null
-  total_usd: number; total_bs: number; es_pago_mixto: boolean; items_total: number
-  items: PagoItem[]
+type SplitPago = {
+  id: string
+  metodoPagoId: string
+  monto: string
 }
 
-type EstadoUI = 'pagado' | 'pendiente'
-type EstadoFiltro = 'todos' | 'pagado' | 'pendiente' | 'anulado'
-type TipoIngresoUI = 'producto' | 'saldo'
-type DestinoSaldo = 'credito' | 'deuda'
-type TipoConsumidor = 'cliente' | 'empleado'
-type ModoCobroEmpleadoProducto = 'pagado' | 'deuda'
-
-type RawCartera = { nombre?: unknown; codigo?: unknown } | Array<{ nombre?: unknown; codigo?: unknown }> | null | undefined
-type RawMetodoPago = { id?: unknown; nombre?: unknown; tipo?: unknown; moneda?: unknown; cartera?: RawCartera }
-type RawPago = {
-  id?: unknown; operacion_pago_id?: unknown; pago_item_no?: unknown; pago_items_total?: unknown
-  es_pago_mixto?: unknown; fecha?: unknown; concepto?: unknown; categoria?: unknown
-  tipo_origen?: unknown; estado?: unknown; moneda_pago?: unknown; tasa_bcv?: unknown
-  monto?: unknown; monto_pago?: unknown; monto_equivalente_usd?: unknown; monto_equivalente_bs?: unknown
-  cliente_id?: unknown; inventario_id?: unknown; cantidad_producto?: unknown
-  metodo_pago_id?: unknown; metodo_pago_v2_id?: unknown; notas?: unknown; referencia?: unknown
-  metodos_pago_v2?: { nombre?: unknown } | Array<{ nombre?: unknown }> | null | undefined
-  clientes?: { nombre?: unknown } | Array<{ nombre?: unknown }> | null | undefined
+type TipoCambioRow = {
+  fecha?: string | null
+  tasa?: number | string | null
+  valor?: number | string | null
+  monto?: number | string | null
+  bcv?: number | string | null
+  precio?: number | string | null
 }
 
-type PagoMixtoFormItem = {
-  moneda: 'USD' | 'BS'; metodoId: string; monto: string
-  referencia: string; notas: string; tasaBcv: number | null; montoBs: number | null
+type Moneda = 'USD' | 'BS'
+type Tab = 'info' | 'agenda' | 'comisiones'
+
+function getTodayLocal() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+    now.getDate()
+  ).padStart(2, '0')}`
 }
 
-// ─── Estilos ──────────────────────────────────────────────────────────────────
+function getCurrentQuincenaRange() {
+  const now = new Date()
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const dia = now.getDate()
+  const lastDay = new Date(y, now.getMonth() + 1, 0).getDate()
 
-const inputCls = 'w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-white/20 focus:bg-white/[0.05]'
-const labelCls = 'mb-2 block text-sm font-medium text-white/75'
-const panelCls = 'rounded-3xl border border-white/10 bg-white/[0.03] backdrop-blur-xl'
-const softButtonCls = 'rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/80 transition hover:bg-white/[0.06]'
+  if (dia <= 15) {
+    return {
+      label: `1–15 de ${now.toLocaleDateString('es', { month: 'long' })}`,
+      inicio: `${y}-${m}-01`,
+      fin: `${y}-${m}-15`,
+    }
+  }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function r2(v: number) { return Math.round(Number(v || 0) * 100) / 100 }
-
-function formatDateShort(value: string | null | undefined) {
-  if (!value) return '—'
-  try { return new Date(value).toLocaleDateString('es-VE', { day: '2-digit', month: 'short', year: 'numeric' }) }
-  catch { return value }
+  return {
+    label: `16–${lastDay} de ${now.toLocaleDateString('es', { month: 'long' })}`,
+    inicio: `${y}-${m}-16`,
+    fin: `${y}-${m}-${String(lastDay).padStart(2, '0')}`,
+  }
 }
 
-function estadoFinancieroLabel(estado: EstadoCuentaCliente | null) {
-  if (Number(estado?.saldo_pendiente_neto_usd || 0) > 0.01) return 'Debe'
-  if (Number(estado?.saldo_favor_neto_usd || 0) > 0.01) return 'Crédito'
-  return 'Al día'
+function formatMoney(v: number | null | undefined) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(Number(v || 0))
 }
 
-function estadoFinancieroBadge(estado: EstadoCuentaCliente | null) {
-  if (Number(estado?.saldo_pendiente_neto_usd || 0) > 0.01) return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
-  if (Number(estado?.saldo_favor_neto_usd || 0) > 0.01) return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
-  return 'border-white/10 bg-white/[0.04] text-white/70'
+function formatBs(v: number | null | undefined) {
+  return new Intl.NumberFormat('es-VE', {
+    style: 'currency',
+    currency: 'VES',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(v || 0))
 }
 
-function formatQty(v: number | null | undefined) {
-  return new Intl.NumberFormat('es-VE', { maximumFractionDigits: 2 }).format(Number(v || 0))
+function formatMontoByMoneda(v: number | null | undefined, moneda: Moneda) {
+  return moneda === 'USD' ? formatMoney(v) : formatBs(v)
 }
 
-function estadoUiDesdeDb(estado: string): EstadoUI {
-  return estado === 'pagado' ? 'pagado' : 'pendiente'
+function formatDate(v: string | null) {
+  if (!v) return '—'
+  try {
+    return new Date(`${v}T00:00:00`).toLocaleDateString('es')
+  } catch {
+    return v
+  }
 }
 
-function firstItem<T>(value: T | T[] | null | undefined): T | null {
+function formatDateLong(v: string | null) {
+  if (!v) return '—'
+  try {
+    return new Date(`${v}T00:00:00`).toLocaleDateString('es', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+    })
+  } catch {
+    return v
+  }
+}
+
+function estadoBadge(e: string) {
+  switch ((e || '').toLowerCase()) {
+    case 'activo':
+      return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+    case 'inactivo':
+      return 'border-white/10 bg-white/[0.05] text-white/50'
+    case 'suspendido':
+      return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+    default:
+      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+  }
+}
+
+function citaBadge(e: string) {
+  switch ((e || '').toLowerCase()) {
+    case 'confirmada':
+      return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+    case 'completada':
+      return 'border-violet-400/20 bg-violet-400/10 text-violet-300'
+    case 'cancelada':
+      return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+    case 'reprogramada':
+      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+    default:
+      return 'border-sky-400/20 bg-sky-400/10 text-sky-300'
+  }
+}
+
+function inputCls(disabled = false) {
+  return `
+    w-full rounded-2xl border border-white/10 bg-white/[0.03]
+    px-4 py-3 text-sm text-white outline-none transition
+    placeholder:text-white/35
+    focus:border-white/20 focus:bg-white/[0.05]
+    ${disabled ? 'cursor-not-allowed opacity-60' : ''}
+  `
+}
+
+function r2(v: number) {
+  return Math.round(v * 100) / 100
+}
+
+function normalizeEstado(value: string | null | undefined) {
+  return (value || '').trim().toLowerCase()
+}
+
+function isPendienteEstado(value: string | null | undefined) {
+  return normalizeEstado(value) === 'pendiente'
+}
+
+function isFacturadaEstado(value: string | null | undefined) {
+  const estado = normalizeEstado(value)
+  return ['liquidado', 'liquidada', 'pagado', 'pagada'].includes(estado)
+}
+
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null
   return value ?? null
 }
 
-function toStringSafe(value: unknown, fallback = ''): string {
-  if (value === null || value === undefined) return fallback
-  return String(value)
-}
+function normalizeMetodoPago(row: any): MetodoPago {
+  const cartera = firstOrNull(row?.cartera)
 
-function toStringOrNull(value: unknown): string | null {
-  if (value === null || value === undefined || value === '') return null
-  return String(value)
-}
-
-function toNumberOrNull(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') return null
-  const n = Number(value)
-  return Number.isFinite(n) ? n : null
-}
-
-function normalizeCartera(raw: RawCartera): Cartera | null {
-  const item = firstItem(raw)
-  if (!item) return null
-  const nombre = toStringOrNull(item.nombre)
-  const codigo = toStringOrNull(item.codigo)
-  if (!nombre || !codigo) return null
-  return { nombre, codigo }
-}
-
-function normalizeMetodoPago(raw: RawMetodoPago): MetodoPago {
   return {
-    id: toStringSafe(raw.id), nombre: toStringSafe(raw.nombre),
-    tipo: toStringOrNull(raw.tipo), moneda: toStringOrNull(raw.moneda),
-    cartera: normalizeCartera(raw.cartera),
+    id: String(row?.id ?? ''),
+    nombre: String(row?.nombre ?? ''),
+    tipo: row?.tipo ?? null,
+    moneda: row?.moneda ?? null,
+    color: row?.color ?? null,
+    icono: row?.icono ?? null,
+    cartera: cartera
+      ? {
+          id: cartera?.id ? String(cartera.id) : undefined,
+          nombre: String(cartera?.nombre ?? ''),
+          codigo: String(cartera?.codigo ?? ''),
+          saldo_actual: cartera?.saldo_actual ?? null,
+          moneda: cartera?.moneda ?? null,
+        }
+      : null,
   }
 }
 
-function normalizePago(raw: RawPago): PagoItem {
-  const metodo = firstItem(raw.metodos_pago_v2)
-  const cliente = firstItem(raw.clientes)
-  return {
-    id: toStringSafe(raw.id),
-    operacion_pago_id: toStringOrNull(raw.operacion_pago_id),
-    pago_item_no: toNumberOrNull(raw.pago_item_no),
-    pago_items_total: toNumberOrNull(raw.pago_items_total),
-    es_pago_mixto: Boolean(raw.es_pago_mixto),
-    fecha: toStringSafe(raw.fecha),
-    concepto: toStringSafe(raw.concepto),
-    categoria: toStringSafe(raw.categoria),
-    tipo_origen: toStringSafe(raw.tipo_origen),
-    monto: toNumberOrNull(raw.monto),
-    monto_pago: toNumberOrNull(raw.monto_pago),
-    monto_equivalente_usd: toNumberOrNull(raw.monto_equivalente_usd),
-    monto_equivalente_bs: toNumberOrNull(raw.monto_equivalente_bs),
-    moneda_pago: toStringSafe(raw.moneda_pago),
-    tasa_bcv: toNumberOrNull(raw.tasa_bcv),
-    estado: toStringSafe(raw.estado),
-    cliente_id: toStringOrNull(raw.cliente_id),
-    inventario_id: toStringOrNull(raw.inventario_id),
-    cantidad_producto: toNumberOrNull(raw.cantidad_producto),
-    metodo_pago_id: toStringOrNull(raw.metodo_pago_id),
-    metodo_pago_v2_id: toStringOrNull(raw.metodo_pago_v2_id),
-    notas: toStringOrNull(raw.notas),
-    referencia: toStringOrNull(raw.referencia),
-    metodos_pago_v2: metodo?.nombre ? { nombre: toStringSafe(metodo.nombre) } : null,
-    clientes: cliente?.nombre ? { nombre: toStringSafe(cliente.nombre) } : null,
-  }
-}
-
-function detectarMetodoBs(metodo: MetodoPago | null) {
+function monedaMetodoEsBs(metodo: MetodoPago | null) {
   if (!metodo) return false
+
   const moneda = (metodo.moneda || '').toUpperCase()
   const nombre = (metodo.nombre || '').toLowerCase()
   const tipo = (metodo.tipo || '').toLowerCase()
-  const cc = (metodo.cartera?.codigo || '').toLowerCase()
+  const carteraCodigo = (metodo.cartera?.codigo || '').toLowerCase()
+  const carteraMoneda = (metodo.cartera?.moneda || '').toUpperCase()
+
   return (
-    moneda === 'BS' || moneda === 'VES' ||
-    nombre.includes('bs') || nombre.includes('bolívar') || nombre.includes('bolivar') ||
-    nombre.includes('pago movil') || nombre.includes('pago móvil') ||
-    nombre.includes('movil') || nombre.includes('móvil') ||
-    tipo.includes('bs') || tipo.includes('bolívar') || tipo.includes('bolivar') ||
-    tipo.includes('pago_movil') || cc.includes('bs') || cc.includes('ves')
+    moneda === 'BS' ||
+    moneda === 'VES' ||
+    carteraMoneda === 'BS' ||
+    carteraMoneda === 'VES' ||
+    nombre.includes('bs') ||
+    nombre.includes('bolívar') ||
+    nombre.includes('bolivar') ||
+    nombre.includes('pago movil') ||
+    nombre.includes('pago móvil') ||
+    nombre.includes('movil') ||
+    nombre.includes('móvil') ||
+    tipo.includes('pago_movil') ||
+    carteraCodigo.includes('bs') ||
+    carteraCodigo.includes('ves')
   )
 }
 
-function detectarMetodoUsd(metodo: MetodoPago | null) {
-  if (!metodo) return false
-  const moneda = (metodo.moneda || '').toUpperCase()
-  const nombre = (metodo.nombre || '').toLowerCase()
-  const cc = (metodo.cartera?.codigo || '').toLowerCase()
-  return (
-    moneda === 'USD' || nombre.includes('usd') || nombre.includes('zelle') ||
-    nombre.includes('efectivo $') || nombre.includes('efectivo usd') || cc.includes('usd')
-  )
+function getMetodoMoneda(metodo: MetodoPago | null): Moneda {
+  return monedaMetodoEsBs(metodo) ? 'BS' : 'USD'
 }
 
-function pagoToUsd(pago: PagoMixtoFormItem): number {
-  const monto = parseFloat(pago.monto) || 0
-  if (pago.moneda === 'USD') return r2(monto)
-  if (!pago.tasaBcv || pago.tasaBcv <= 0) return 0
-  return r2(monto / pago.tasaBcv)
+function getMetodoSaldo(metodo: MetodoPago | null) {
+  const raw = metodo?.cartera?.saldo_actual
+  const n = Number(raw || 0)
+  return Number.isFinite(n) ? n : 0
 }
 
-function pagoMontoEnBs(pago: PagoMixtoFormItem): number {
-  if (pago.moneda !== 'BS') return 0
-  return parseFloat(pago.monto) || 0
+function getComisionMontoByMoneda(c: ComisionDetalle, moneda: Moneda) {
+  return moneda === 'USD'
+    ? Number(c.monto_profesional_usd ?? c.profesional ?? 0)
+    : Number(c.monto_profesional_bs ?? 0)
 }
 
-function agruparPagosPorOperacion(items: PagoItem[]): PagoOperacion[] {
-  const map = new Map<string, PagoOperacion>()
-  for (const item of items) {
-    const key = item.operacion_pago_id || item.id
-    if (!map.has(key)) {
-      map.set(key, {
-        key, id_representativo: item.id, operacion_pago_id: item.operacion_pago_id,
-        fecha: item.fecha, concepto: item.concepto, categoria: item.categoria,
-        tipo_origen: item.tipo_origen, estado: item.estado,
-        cliente_id: item.cliente_id || null,
-        cliente_nombre: item.clientes?.nombre || null,
-        inventario_id: item.inventario_id || null,
-        cantidad_producto: item.cantidad_producto ?? null,
-        total_usd: 0, total_bs: 0, es_pago_mixto: Boolean(item.es_pago_mixto),
-        items_total: Number(item.pago_items_total || 1), items: [],
-      })
-    }
-    const group = map.get(key)!
-    group.items.push(item)
-    group.total_usd = r2(group.total_usd + Number(item.monto_equivalente_usd || 0))
-    group.total_bs = r2(group.total_bs + Number(item.monto_equivalente_bs || 0))
-    group.es_pago_mixto = group.es_pago_mixto || Boolean(item.es_pago_mixto)
-    group.items_total = Math.max(group.items_total, Number(item.pago_items_total || 1))
+function convertirMonto(
+  monto: number,
+  from: Moneda,
+  to: Moneda,
+  tasa: number | null | undefined
+): number | null {
+  const montoNum = Number(monto || 0)
+
+  if (!Number.isFinite(montoNum)) return null
+  if (from === to) return r2(montoNum)
+  if (!tasa || tasa <= 0) return null
+
+  if (from === 'USD' && to === 'BS') return r2(montoNum * tasa)
+  if (from === 'BS' && to === 'USD') return r2(montoNum / tasa)
+
+  return null
+}
+
+
+function normalizeComisionDetalle(row: any): ComisionDetalle {
+  const cita = firstOrNull(row?.citas)
+  const clienteDirecto = firstOrNull(row?.clientes)
+  const servicioDirecto = firstOrNull(row?.servicios)
+  const clienteCita = firstOrNull(cita?.clientes)
+  const servicioCita = firstOrNull(cita?.servicios)
+
+  return {
+    ...(row as ComisionDetalle),
+    cliente_nombre: row?.cliente_nombre ?? clienteDirecto?.nombre ?? clienteCita?.nombre ?? null,
+    servicio_nombre: row?.servicio_nombre ?? servicioDirecto?.nombre ?? servicioCita?.nombre ?? null,
+    cita_fecha: row?.cita_fecha ?? cita?.fecha ?? null,
+    cita_hora_inicio: row?.cita_hora_inicio ?? cita?.hora_inicio ?? null,
+    concepto: row?.concepto ?? row?.descripcion ?? null,
   }
-  return Array.from(map.values()).sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())
 }
 
-// ─── Sub-componentes ──────────────────────────────────────────────────────────
+function getComisionConcepto(c: ComisionDetalle) {
+  if (c.concepto?.trim()) return c.concepto.trim()
 
-function ClienteSearch({
-  clientes, value, onChange, disabled = false,
-}: { clientes: Cliente[]; value: string; onChange: (id: string) => void; disabled?: boolean }) {
-  const [query, setQuery] = useState('')
-  const [open, setOpen] = useState(false)
-  const [highlighted, setHighlighted] = useState(0)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const listRef = useRef<HTMLUListElement>(null)
-  const containerRef = useRef<HTMLDivElement>(null)
+  const tipo = (c.tipo || '').toLowerCase()
+  const servicio = c.servicio_nombre?.trim()
+  const cliente = c.cliente_nombre?.trim()
 
-  const sel = useMemo(() => clientes.find((c) => c.id === value) || null, [clientes, value])
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return q ? clientes.filter((c) => c.nombre.toLowerCase().includes(q)).slice(0, 50) : clientes.slice(0, 50)
-  }, [clientes, query])
+  if (servicio && cliente) return `${servicio} · ${cliente}`
+  if (servicio) return servicio
+  if (cliente) return `Comisión de ${cliente}`
+  if (tipo === 'plan') return 'Comisión por plan'
+  if (tipo === 'cita') return 'Comisión por cita'
+  return 'Comisión'
+}
+
+function getComisionSubtitulo(c: ComisionDetalle) {
+  const partes = [
+    c.cliente_nombre ? `Cliente: ${c.cliente_nombre}` : null,
+    c.servicio_nombre ? `Servicio: ${c.servicio_nombre}` : null,
+    c.cita_hora_inicio ? `Hora: ${String(c.cita_hora_inicio).slice(0, 5)}` : null,
+  ].filter(Boolean)
+
+  return partes.length ? partes.join(' · ') : 'Sin detalle de cliente registrado'
+}
+
+function chunkAgendaByCliente(items: AgendaItem[]) {
+  const map = new Map<string, { cliente: string; items: AgendaItem[] }>()
+
+  for (const item of items) {
+    const key = item.nombre || 'Sin cliente'
+    if (!map.has(key)) {
+      map.set(key, { cliente: key, items: [] })
+    }
+    map.get(key)!.items.push(item)
+  }
+
+  return [...map.values()]
+    .map((group) => ({
+      ...group,
+      items: [...group.items].sort((a, b) =>
+        `${a.fecha} ${a.hora_inicio}`.localeCompare(`${b.fecha} ${b.hora_inicio}`)
+      ),
+    }))
+    .sort((a, b) => a.cliente.localeCompare(b.cliente))
+}
+
+export default function VerPersonalPage() {
+  const params = useParams()
+  const id =
+    typeof params?.id === 'string'
+      ? params.id
+      : Array.isArray(params?.id)
+        ? params.id[0]
+        : ''
+
+  const [mounted, setMounted] = useState(false)
+
+  const [tab, setTab] = useState<Tab>('info')
+  const [loading, setLoading] = useState(true)
+  const [empleado, setEmpleado] = useState<Empleado | null>(null)
+  const [clientes, setClientes] = useState<ClienteAsignado[]>([])
+  const [agenda, setAgenda] = useState<AgendaItem[]>([])
+  const [comisiones, setComisiones] = useState<ComisionDetalle[]>([])
+  const [liquidaciones, setLiquidaciones] = useState<Liquidacion[]>([])
+  const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([])
+  const [estadoCuentaEmpleado, setEstadoCuentaEmpleado] = useState<EstadoCuentaEmpleado | null>(null)
+  const [cuentasPendientesEmpleado, setCuentasPendientesEmpleado] = useState<CuentaPendienteEmpleado[]>([])
+  const [errorMsg, setErrorMsg] = useState('')
+  const [facturando, setFacturando] = useState(false)
+  const [agendaFiltro, setAgendaFiltro] = useState<'hoy' | 'proximos' | 'todos'>('hoy')
+  const [agendaTipo, setAgendaTipo] = useState<'todos' | 'entrenamientos' | 'citas'>('todos')
+  const [agendaClienteFiltro, setAgendaClienteFiltro] = useState('todos')
+
+  const [monedaPago, setMonedaPago] = useState<Moneda>('USD')
+  const [referencia, setReferencia] = useState('')
+  const [notasLiquidacion, setNotasLiquidacion] = useState('')
+  const [tasaBCV, setTasaBCV] = useState<number | null>(null)
+  const [tasaBCVAuto, setTasaBCVAuto] = useState<number | null>(null)
+  const [cargandoTasa, setCargandoTasa] = useState(false)
+  const [selectedComisionIds, setSelectedComisionIds] = useState<string[]>([])
+  const [splitsPago, setSplitsPago] = useState<SplitPago[]>([
+    { id: crypto.randomUUID(), metodoPagoId: '', monto: '' },
+  ])
 
   useEffect(() => {
-    function out(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', out)
-    return () => document.removeEventListener('mousedown', out)
+    setMounted(true)
   }, [])
 
-  useEffect(() => { setHighlighted(0) }, [filtered])
+  const hoy = useMemo(() => (mounted ? getTodayLocal() : ''), [mounted])
+  const quincenaActual = useMemo(
+    () =>
+      mounted
+        ? getCurrentQuincenaRange()
+        : { label: '', inicio: '', fin: '' },
+    [mounted]
+  )
 
   useEffect(() => {
-    if (!listRef.current) return
-    const item = listRef.current.children[highlighted] as HTMLElement | undefined
-    item?.scrollIntoView({ block: 'nearest' })
-  }, [highlighted])
+    if (!mounted || !id) return
+    void loadAll()
+  }, [id, mounted])
 
-  function handleSelect(id: string) { onChange(id); setQuery(''); setOpen(false) }
-  function handleClear() {
-    if (disabled) return
-    onChange(''); setQuery('')
-    setTimeout(() => inputRef.current?.focus(), 0)
+  useEffect(() => {
+    setSelectedComisionIds([])
+    setSplitsPago([{ id: crypto.randomUUID(), metodoPagoId: '', monto: '' }])
+    setReferencia('')
+    setNotasLiquidacion('')
+    setTasaBCV(null)
+    setTasaBCVAuto(null)
+  }, [monedaPago])
+
+  async function fetchComisionesDetalladas(empleadoId: string) {
+    const baseSelect = `
+      id,
+      base,
+      profesional,
+      rpm,
+      fecha,
+      tipo,
+      estado,
+      moneda,
+      tasa_bcv,
+      monto_base_usd,
+      monto_base_bs,
+      monto_rpm_usd,
+      monto_rpm_bs,
+      monto_profesional_usd,
+      monto_profesional_bs,
+      pagado,
+      fecha_pago,
+      liquidacion_id,
+      pago_empleado_id
+    `
+
+    const richSelect = `
+      ${baseSelect},
+      cliente_id,
+      cita_id,
+      servicio_id,
+      concepto,
+      descripcion,
+      clientes:cliente_id ( nombre ),
+      servicios:servicio_id ( nombre ),
+      citas:cita_id (
+        fecha,
+        hora_inicio,
+        clientes:cliente_id ( nombre ),
+        servicios:servicio_id ( nombre )
+      )
+    `
+
+    const richRes = await supabase
+      .from('comisiones_detalle')
+      .select(richSelect)
+      .eq('empleado_id', empleadoId)
+      .order('fecha', { ascending: false })
+
+    if (!richRes.error) {
+      return { ...richRes, data: ((richRes.data || []) as any[]).map(normalizeComisionDetalle) }
+    }
+
+    const fallbackRes = await supabase
+      .from('comisiones_detalle')
+      .select(baseSelect)
+      .eq('empleado_id', empleadoId)
+      .order('fecha', { ascending: false })
+
+    return {
+      ...fallbackRes,
+      data: ((fallbackRes.data || []) as any[]).map(normalizeComisionDetalle),
+    }
   }
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (!open) { if (e.key !== 'Tab') setOpen(true); return }
-    if (e.key === 'ArrowDown') { e.preventDefault(); setHighlighted((h) => Math.min(h + 1, filtered.length - 1)) }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setHighlighted((h) => Math.max(h - 1, 0)) }
-    else if (e.key === 'Enter') { e.preventDefault(); if (filtered[highlighted]) handleSelect(filtered[highlighted].id) }
-    else if (e.key === 'Escape') setOpen(false)
-  }
 
-  return (
-    <div ref={containerRef} className="relative">
-      {sel && !open ? (
-        <div className={`flex w-full items-center gap-2 rounded-2xl border px-4 py-3 ${disabled ? 'border-white/10 bg-white/[0.03]' : 'border-violet-400/30 bg-violet-500/10'}`}>
-          <span className="flex-1 truncate text-sm font-medium text-white">{sel.nombre}</span>
-          {!disabled && (
-            <button type="button" onClick={handleClear} className="shrink-0 rounded-full p-0.5 text-white/40 transition hover:text-white/80">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="relative">
-          <input ref={inputRef} type="text" value={query}
-            onChange={(e) => { setQuery(e.target.value); setOpen(true) }}
-            onFocus={() => setOpen(true)} onKeyDown={handleKeyDown}
-            placeholder="Buscar cliente por nombre..." className={inputCls}
-            autoComplete="off" disabled={disabled} />
-          <svg className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-white/30" width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M10.5 10.5L13 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-        </div>
-      )}
-      {open && !disabled && (
-        <ul ref={listRef} className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-2xl border border-white/10 bg-[#16181f] py-1 shadow-xl">
-          {filtered.length === 0 ? (
-            <li className="px-4 py-3 text-sm text-white/40">Sin resultados para "{query}"</li>
-          ) : (
-            filtered.map((c, i) => (
-              <li key={c.id} onMouseDown={() => handleSelect(c.id)} onMouseEnter={() => setHighlighted(i)}
-                className={`cursor-pointer px-4 py-2.5 text-sm transition ${i === highlighted ? 'bg-violet-500/20 text-violet-200' : 'text-white/80 hover:bg-white/[0.05]'}`}>
-                {c.nombre}
-              </li>
-            ))
-          )}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-const PagoBsSelector = memo(function PagoBsSelector({
-  fecha, montoUsd, montoBs, onChangeTasa, onChangeMontoBs,
-}: { fecha: string; montoUsd: number; montoBs: number | null; onChangeTasa: (tasa: number | null) => void; onChangeMontoBs: (monto: number) => void }) {
-  return (
-    <SelectorTasaBCV fecha={fecha} monedaPago="BS" monedaReferencia="EUR"
-      montoUSD={montoUsd} montoBs={montoBs || undefined}
-      onTasaChange={onChangeTasa} onMontoBsChange={onChangeMontoBs} />
-  )
-})
-
-function SelectorDeuda({ cuentas, seleccionadaId, onSeleccionar }: {
-  cuentas: CuentaPendienteResumen[]; seleccionadaId: string; onSeleccionar: (id: string) => void
-}) {
-  const [abierto, setAbierto] = useState(true)
-  const seleccionada = cuentas.find((c) => c.id === seleccionadaId)
-
-  return (
-    <div className="rounded-2xl border border-rose-400/20 bg-rose-400/[0.04]">
-      <button type="button" onClick={() => setAbierto(!abierto)} className="flex w-full items-center justify-between gap-3 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Receipt className="h-4 w-4 text-rose-300" />
-          <p className="text-sm font-medium text-rose-200">{seleccionada ? `Pagando: ${seleccionada.concepto}` : 'Selecciona una deuda a pagar'}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          {seleccionada && <span className="text-sm font-bold text-white">{formatearMoneda(Number(seleccionada.saldo_usd || 0), 'USD')}</span>}
-          <ChevronDown className={`h-4 w-4 text-white/40 transition-transform ${abierto ? 'rotate-180' : ''}`} />
-        </div>
-      </button>
-      {abierto && (
-        <div className="space-y-2 border-t border-rose-400/15 px-3 pb-3 pt-2">
-          {cuentas.map((cuenta) => {
-            const activa = cuenta.id === seleccionadaId
-            const progreso = Number(cuenta.monto_total_usd || 0) > 0
-              ? Math.min(100, Math.round((Number(cuenta.monto_pagado_usd || 0) / Number(cuenta.monto_total_usd || 0)) * 100)) : 0
-            return (
-              <button key={cuenta.id} type="button" onClick={() => onSeleccionar(cuenta.id)}
-                className={`w-full rounded-2xl border p-3 text-left transition ${activa ? 'border-violet-400/30 bg-violet-500/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'}`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-white">{cuenta.concepto}</p>
-                    <div className="mt-1 flex flex-wrap gap-3 text-xs text-white/40">
-                      <span>Emisión: {formatDateShort(cuenta.fecha_venta)}</span>
-                      {cuenta.fecha_vencimiento && <span>Vence: {formatDateShort(cuenta.fecha_vencimiento)}</span>}
-                      <span className="capitalize">{cuenta.estado}</span>
-                    </div>
-                    <div className="mt-2">
-                      <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
-                        <div className="h-1 rounded-full bg-gradient-to-r from-violet-500 to-emerald-400" style={{ width: `${progreso}%` }} />
-                      </div>
-                      <p className="mt-1 text-[11px] text-white/30">
-                        {formatearMoneda(Number(cuenta.monto_pagado_usd || 0), 'USD')} pagado de {formatearMoneda(Number(cuenta.monto_total_usd || 0), 'USD')}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <p className="text-base font-bold text-white">{formatearMoneda(Number(cuenta.saldo_usd || 0), 'USD')}</p>
-                    <p className="text-[11px] text-white/35">saldo</p>
-                  </div>
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function PagoMixtoCard({ numero, pago, metodosPago, fecha, onChange }: {
-  numero: 1 | 2; pago: PagoMixtoFormItem; metodosPago: MetodoPago[]
-  fecha: string; onChange: (patch: Partial<PagoMixtoFormItem>) => void
-}) {
-  const isUsd = pago.moneda === 'USD'
-  const equivalenteUsd = pagoToUsd(pago)
-  const montoBsDisplay = pagoMontoEnBs(pago)
-  const metodosDisponibles = useMemo(
-    () => isUsd ? metodosPago.filter((m) => detectarMetodoUsd(m)) : metodosPago.filter((m) => detectarMetodoBs(m)),
-    [metodosPago, isUsd]
-  )
-  const colors = numero === 1
-    ? { border: 'border-blue-400/20', badge: 'bg-blue-500/15 text-blue-300', equiv: 'text-blue-300' }
-    : { border: 'border-violet-400/20', badge: 'bg-violet-500/15 text-violet-300', equiv: 'text-violet-300' }
-
-  return (
-    <div className={`rounded-2xl border ${colors.border} bg-white/[0.02] p-5`}>
-      <div className="mb-4 flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${colors.badge}`}>{numero}</span>
-          <div>
-            <p className="text-sm font-medium text-white">Pago {numero}</p>
-            <p className="text-xs text-white/40">{numero === 1 ? 'Método principal' : 'Método secundario'}</p>
-          </div>
-        </div>
-        {(parseFloat(pago.monto) || 0) > 0 && (
-          <div className="text-right">
-            <p className={`text-lg font-semibold ${colors.equiv}`}>{isUsd ? formatearMoneda(equivalenteUsd, 'USD') : formatearMoneda(montoBsDisplay, 'BS')}</p>
-            {!isUsd && equivalenteUsd > 0 && <p className="text-xs text-white/40">≈ {formatearMoneda(equivalenteUsd, 'USD')}</p>}
-          </div>
-        )}
-      </div>
-      <div className="mb-3 grid grid-cols-2 gap-3">
-        <div>
-          <label className={labelCls}>Moneda</label>
-          <select value={pago.moneda} onChange={(e) => onChange({ moneda: e.target.value as 'USD' | 'BS', metodoId: '', monto: '', tasaBcv: null, montoBs: null })} className={inputCls}>
-            <option value="USD" className="bg-[#11131a]">USD</option>
-            <option value="BS" className="bg-[#11131a]">Bolívares</option>
-          </select>
-        </div>
-        <div>
-          <label className={labelCls}>{isUsd ? 'Método USD' : 'Método Bs'}</label>
-          <select value={pago.metodoId} onChange={(e) => onChange({ metodoId: e.target.value })} className={inputCls}>
-            <option value="" className="bg-[#11131a]">Seleccionar método</option>
-            {metodosDisponibles.map((m) => (
-              <option key={m.id} value={m.id} className="bg-[#11131a]">{m.nombre}{m.moneda ? ` · ${m.moneda}` : ''}{m.cartera?.nombre ? ` · ${m.cartera.nombre}` : ''}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-      <div className="mb-3">
-        <label className={labelCls}>{isUsd ? 'Monto USD' : 'Monto Bs'}</label>
-        <input type="number" min={0} step="0.01" value={pago.monto} onChange={(e) => onChange({ monto: e.target.value })} className={inputCls} placeholder="0.00" />
-      </div>
-      {!isUsd && (
-        <div className="mb-3">
-          <PagoBsSelector fecha={fecha} montoUsd={equivalenteUsd} montoBs={parseFloat(pago.monto) || null}
-            onChangeTasa={(tasa) => onChange({ tasaBcv: tasa })}
-            onChangeMontoBs={(monto) => onChange({ monto: String(monto), montoBs: monto })} />
-        </div>
-      )}
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className={labelCls}>Referencia</label>
-          <input type="text" value={pago.referencia} onChange={(e) => onChange({ referencia: e.target.value })} className={inputCls} placeholder="Comprobante..." />
-        </div>
-        <div>
-          <label className={labelCls}>Notas</label>
-          <input type="text" value={pago.notas} onChange={(e) => onChange({ notas: e.target.value })} className={inputCls} placeholder="Opcional..." />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function LoadingIngresos() {
-  return (
-    <div className="min-h-screen p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <div className="h-24 animate-pulse rounded-3xl border border-white/10 bg-white/[0.03]" />
-        <div className="h-[500px] animate-pulse rounded-3xl border border-white/10 bg-white/[0.03]" />
-      </div>
-    </div>
-  )
-}
-
-// ─── Page wrapper ─────────────────────────────────────────────────────────────
-
-export default function IngresosPage() {
-  return (
-    <Suspense fallback={<LoadingIngresos />}>
-      <IngresosPageContent />
-    </Suspense>
-  )
-}
-
-// ─── Page content ─────────────────────────────────────────────────────────────
-
-function IngresosPageContent() {
-  const searchParams = useSearchParams()
-  const clientePrefill = searchParams.get('cliente') || searchParams.get('clienteId') || ''
-  const empleadoPrefill = searchParams.get('empleado') || searchParams.get('empleadoId') || ''
-  const tipoIngresoPrefill = searchParams.get('tipoIngreso')
-  const destinoPrefill = searchParams.get('destino') || ''
-  const cuentaPrefill = searchParams.get('cuenta') || searchParams.get('cuentaId') || ''
-
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-
-  const [pagos, setPagos] = useState<PagoItem[]>([])
-  const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([])
-  const [productos, setProductos] = useState<Producto[]>([])
-  const [clientes, setClientes] = useState<Cliente[]>([])
-  const [empleados, setEmpleados] = useState<EmpleadoConsumidor[]>([])
-
-  const [search, setSearch] = useState('')
-  const [estadoFiltro, setEstadoFiltro] = useState<EstadoFiltro>('todos')
-  const [showForm, setShowForm] = useState(false)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editingOperacionId, setEditingOperacionId] = useState<string | null>(null)
-
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10))
-  const [tipoIngreso, setTipoIngreso] = useState<TipoIngresoUI>('producto')
-  const [tipoConsumidor, setTipoConsumidor] = useState<TipoConsumidor>('cliente')
-  const [clienteId, setClienteId] = useState('')
-  const [empleadoId, setEmpleadoId] = useState('')
-  const [modoCobroEmpleadoProducto, setModoCobroEmpleadoProducto] = useState<ModoCobroEmpleadoProducto>('pagado')
-  const [productoId, setProductoId] = useState('')
-  const [cantidad, setCantidad] = useState(1)
-  const [concepto, setConcepto] = useState('')
-  const [notas, setNotas] = useState('')
-
-  // ── Venta rápida sin cliente ──────────────────────────────────────────────
-  const [ventaSinCliente, setVentaSinCliente] = useState(false)
-
-  // ── PagoConDeudaSelector (productos con cliente) ──────────────────────────
-  const [pagoConDeudaState, setPagoConDeudaState] = useState<PagoConDeudaState>(pagoConDeudaInitial())
-
-  // ── Pago rápido (venta sin cliente o edición — pago único/mixto manual) ───
-  const [tipoPago, setTipoPago] = useState<'unico' | 'mixto'>('unico')
-  const [monedaPagoUnico, setMonedaPagoUnico] = useState<'USD' | 'BS'>('USD')
-  const [metodoPagoUnicoId, setMetodoPagoUnicoId] = useState('')
-  const [referenciaPagoUnico, setReferenciaPagoUnico] = useState('')
-  const [notasPagoUnico, setNotasPagoUnico] = useState('')
-  const [tasaPagoUnico, setTasaPagoUnico] = useState<number | null>(null)
-  const [montoPagoUnicoBs, setMontoPagoUnicoBs] = useState<number | null>(null)
-
-  const pagoMixtoVacio = (moneda: 'USD' | 'BS' = 'USD'): PagoMixtoFormItem => ({
-    moneda, metodoId: '', monto: '', referencia: '', notas: '', tasaBcv: null, montoBs: null,
-  })
-  const [pagoMixto1, setPagoMixto1] = useState<PagoMixtoFormItem>(pagoMixtoVacio('USD'))
-  const [pagoMixto2, setPagoMixto2] = useState<PagoMixtoFormItem>(pagoMixtoVacio('BS'))
-
-  // ── Saldo / abono a deuda ─────────────────────────────────────────────────
-  const [estadoCuentaCliente, setEstadoCuentaCliente] = useState<EstadoCuentaCliente | null>(null)
-  const [cuentasPendientesCliente, setCuentasPendientesCliente] = useState<CuentaPendienteResumen[]>([])
-  const [estadoCuentaEmpleado, setEstadoCuentaEmpleado] = useState<EstadoCuentaEmpleado | null>(null)
-  const [cuentasPendientesEmpleado, setCuentasPendientesEmpleado] = useState<CuentaPendienteEmpleadoResumen[]>([])
-  const [destinoSaldo, setDestinoSaldo] = useState<DestinoSaldo>('credito')
-  const [cuentaCobrarSeleccionadaId, setCuentaCobrarSeleccionadaId] = useState('')
-  const [montoAbonoDeuda, setMontoAbonoDeuda] = useState('')
-  const [montoManualUSD, setMontoManualUSD] = useState('')
-
-  // ─── Derived ──────────────────────────────────────────────────────────────
-
-  const clienteSeleccionado = useMemo(() => clientes.find((c) => c.id === clienteId) || null, [clientes, clienteId])
-  const empleadoSeleccionado = useMemo(() => empleados.find((e) => e.id === empleadoId) || null, [empleados, empleadoId])
-  const productoSeleccionado = useMemo(() => productos.find((p) => p.id === productoId) || null, [productos, productoId])
-  const cuentaPendienteSeleccionada = useMemo(
-    () => tipoConsumidor === 'empleado'
-      ? cuentasPendientesEmpleado.find((c) => c.id === cuentaCobrarSeleccionadaId) || null
-      : cuentasPendientesCliente.find((c) => c.id === cuentaCobrarSeleccionadaId) || null,
-    [tipoConsumidor, cuentasPendientesCliente, cuentasPendientesEmpleado, cuentaCobrarSeleccionadaId]
-  )
-  const clienteTieneDeuda = useMemo(
-    () => cuentasPendientesCliente.some((c) => Number(c.saldo_usd || 0) > 0.01),
-    [cuentasPendientesCliente]
-  )
-  const empleadoTieneDeuda = useMemo(
-    () => cuentasPendientesEmpleado.some((c) => Number(c.saldo_usd || 0) > 0.01),
-    [cuentasPendientesEmpleado]
-  )
-  const precioUnitarioUSD = Number(productoSeleccionado?.precio_venta_usd || 0)
-  const totalUSD = useMemo(() => r2(Number((cantidad || 0) * precioUnitarioUSD)), [cantidad, precioUnitarioUSD])
-  const stockInsuficiente = useMemo(
-    () => productoSeleccionado ? cantidad > Number(productoSeleccionado.cantidad_actual || 0) : false,
-    [productoSeleccionado, cantidad]
-  )
-  const montoAbonoDeudaNumero = useMemo(() => r2(Number(montoAbonoDeuda || 0)), [montoAbonoDeuda])
-  const montoManualUSDNumero = useMemo(() => r2(Number(montoManualUSD || 0)), [montoManualUSD])
-
-  // Monto real que debe cobrar el bloque de pago rápido.
-  // En productos usa el total del producto. En abono a deuda usa el monto a abonar.
-  // En recarga de saldo usa un monto manual, porque no existe producto que defina totalUSD.
-  const montoObjetivoPagoRapidoUsd = useMemo(() => {
-    if (tipoIngreso === 'saldo' && destinoSaldo === 'deuda') return montoAbonoDeudaNumero
-    if (tipoIngreso === 'saldo') return montoManualUSDNumero
-    return totalUSD
-  }, [tipoIngreso, destinoSaldo, montoAbonoDeudaNumero, montoManualUSDNumero, totalUSD])
-
-  const creditoDisponibleUsd = useMemo(() => r2(Number(estadoCuentaCliente?.credito_disponible_usd || 0)), [estadoCuentaCliente])
-
-  // Métodos de pago como MetodoPagoBase para PagoConDeudaSelector
-  const metodosPagoBase = useMemo((): MetodoPagoBase[] => metodosPago.map((m) => ({
-    id: m.id, nombre: m.nombre, tipo: m.tipo, moneda: m.moneda,
-    cartera: m.cartera ? { nombre: m.cartera.nombre, codigo: m.cartera.codigo } : null,
-  })), [metodosPago])
-
-  // Fuerza a PagoConDeudaSelector a recalcular su monto interno cuando cambia el total.
-  // Sin esto, el componente puede quedarse con el monto anterior hasta reiniciar el formulario.
-  const pagoConDeudaKey = useMemo(
-    () => `producto-${productoId || 'sin-producto'}-${cantidad || 0}-${totalUSD}-${clienteId || 'sin-cliente'}-${fecha}`,
-    [productoId, cantidad, totalUSD, clienteId, fecha]
-  )
-
-  // Para venta rápida / edición: calcular totales del pago manual
-  const totalPagoMixtoUsd = useMemo(() => {
-    return r2(pagoToUsd(pagoMixto1) + pagoToUsd(pagoMixto2))
-  }, [pagoMixto1, pagoMixto2])
-
-  const totalPagoUnicoBs = useMemo(
-    () => (monedaPagoUnico !== 'BS' || !tasaPagoUnico || tasaPagoUnico <= 0) ? 0 : r2(montoObjetivoPagoRapidoUsd * tasaPagoUnico),
-    [monedaPagoUnico, tasaPagoUnico, montoObjetivoPagoRapidoUsd]
-  )
-
-  const totalPagoUnicoRealUsd = useMemo(() => {
-    if (tipoPago !== 'unico') return 0
-    if (monedaPagoUnico !== 'BS') return r2(montoObjetivoPagoRapidoUsd)
-    const bsReal = Number(montoPagoUnicoBs || 0)
-    if (!tasaPagoUnico || tasaPagoUnico <= 0 || bsReal <= 0) return 0
-    return r2(bsReal / tasaPagoUnico)
-  }, [tipoPago, monedaPagoUnico, montoObjetivoPagoRapidoUsd, montoPagoUnicoBs, tasaPagoUnico])
-
-  const totalPagoRapidoRealUsd = useMemo(() => {
-    return tipoPago === 'unico' ? totalPagoUnicoRealUsd : totalPagoMixtoUsd
-  }, [tipoPago, totalPagoUnicoRealUsd, totalPagoMixtoUsd])
-
-  const metodosPagoUnicoDisponibles = useMemo(
-    () => monedaPagoUnico === 'USD' ? metodosPago.filter(detectarMetodoUsd) : metodosPago.filter(detectarMetodoBs),
-    [metodosPago, monedaPagoUnico]
-  )
-
-  const resumenPagosMixtoRapido = useMemo(() => {
-    const usd1 = pagoToUsd(pagoMixto1)
-    const usd2 = pagoToUsd(pagoMixto2)
-    const totalUsd = r2(usd1 + usd2)
-    const totalBs = r2(pagoMontoEnBs(pagoMixto1) + pagoMontoEnBs(pagoMixto2))
-
-    // Para recarga de saldo a favor en pago mixto, el total objetivo es la propia suma
-    // de los fragmentos. Para producto/abono a deuda, sí debe cuadrar contra un total fijo.
-    const esRecargaSaldoLibre = tipoIngreso === 'saldo' && destinoSaldo === 'credito'
-    const totalObjetivo = esRecargaSaldoLibre ? totalUsd : montoObjetivoPagoRapidoUsd
-    const diff = r2(totalObjetivo - totalUsd)
-    const faltante = r2(Math.max(diff, 0))
-    const cuadra = esRecargaSaldoLibre ? totalUsd > 0 : Math.abs(diff) < 0.01 && totalObjetivo > 0
-    const pct1 = totalObjetivo > 0 ? Math.round((usd1 / totalObjetivo) * 100) : 0
-    const pct2 = totalObjetivo > 0 ? Math.round((usd2 / totalObjetivo) * 100) : 0
-    const p1Valido = !!pagoMixto1.metodoId && (pagoMixto1.moneda === 'USD' ? (parseFloat(pagoMixto1.monto) || 0) > 0 : (parseFloat(pagoMixto1.monto) || 0) > 0 && (pagoMixto1.tasaBcv || 0) > 0)
-    const p2Valido = !!pagoMixto2.metodoId && (pagoMixto2.moneda === 'USD' ? (parseFloat(pagoMixto2.monto) || 0) > 0 : (parseFloat(pagoMixto2.monto) || 0) > 0 && (pagoMixto2.tasaBcv || 0) > 0)
-    return { usd1, usd2, totalUsd, totalBs, faltante, cuadra, pct1, pct2, p1Valido, p2Valido, totalObjetivo, esRecargaSaldoLibre }
-  }, [pagoMixto1, pagoMixto2, tipoIngreso, destinoSaldo, montoObjetivoPagoRapidoUsd])
-
-  // ─── Effects ──────────────────────────────────────────────────────────────
-
-  useEffect(() => { void cargarDatos() }, [])
-
-  useEffect(() => {
-    if (!ventaSinCliente && tipoConsumidor === 'cliente') void cargarEstadoCuentaCliente(clienteId)
-  }, [clienteId, ventaSinCliente, tipoConsumidor])
-
-  useEffect(() => {
-    if (!ventaSinCliente && tipoConsumidor === 'empleado') void cargarEstadoCuentaEmpleado(empleadoId)
-  }, [empleadoId, ventaSinCliente, tipoConsumidor])
-
-  useEffect(() => {
-    if (!clientePrefill || clientes.length === 0 || editingId) return
-    if (!clientes.some((c) => c.id === clientePrefill)) return
-    setClienteId(clientePrefill)
-    setShowForm(true)
-    if (tipoIngresoPrefill === 'saldo') {
-      setTipoIngreso('saldo')
-      if (destinoPrefill === 'deuda') { setDestinoSaldo('deuda'); setConcepto('Abono a deuda') }
-      else { setDestinoSaldo('credito'); setConcepto('Recarga de saldo a favor') }
-    }
-  }, [clientePrefill, tipoIngresoPrefill, destinoPrefill, clientes, editingId])
-
-  useEffect(() => {
-    if (!empleadoPrefill || empleados.length === 0 || editingId) return
-    if (!empleados.some((e) => e.id === empleadoPrefill)) return
-    setTipoConsumidor('empleado')
-    setEmpleadoId(empleadoPrefill)
-    setShowForm(true)
-    if (tipoIngresoPrefill === 'saldo') {
-      setTipoIngreso('saldo')
-      if (destinoPrefill === 'deuda') { setDestinoSaldo('deuda'); setConcepto('Abono a deuda de empleado') }
-      else { setDestinoSaldo('credito'); setConcepto('Recarga de saldo a favor de empleado') }
-    }
-  }, [empleadoPrefill, tipoIngresoPrefill, destinoPrefill, empleados, editingId])
-
-  useEffect(() => {
-    const cuentasActivas = tipoConsumidor === 'empleado' ? cuentasPendientesEmpleado : cuentasPendientesCliente
-    if (cuentasActivas.length > 0) {
-      if (cuentaPrefill && cuentasActivas.some((c) => c.id === cuentaPrefill)) {
-        setCuentaCobrarSeleccionadaId(cuentaPrefill); return
-      }
-      setCuentaCobrarSeleccionadaId((prev) => {
-        if (prev && cuentasActivas.some((c) => c.id === prev)) return prev
-        return cuentasActivas[0].id
-      })
-    } else {
-      setCuentaCobrarSeleccionadaId(''); setMontoAbonoDeuda('')
-      if (destinoSaldo === 'deuda') setDestinoSaldo('credito')
-    }
-  }, [tipoConsumidor, cuentasPendientesCliente, cuentasPendientesEmpleado, cuentaPrefill, destinoSaldo])
-
-  useEffect(() => {
-    if (destinoSaldo === 'deuda' && cuentaPendienteSeleccionada) {
-      setConcepto(`Abono: ${cuentaPendienteSeleccionada.concepto}`)
-    }
-  }, [destinoSaldo, cuentaCobrarSeleccionadaId])
-
-  useEffect(() => {
-    if (destinoSaldo !== 'deuda') { setMontoAbonoDeuda(''); return }
-    if (!cuentaPendienteSeleccionada) { setMontoAbonoDeuda(''); return }
-    const saldo = r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))
-    setMontoAbonoDeuda((prev) => {
-      const prevNum = Number(prev || 0)
-      if (!prev || prevNum <= 0 || prevNum > saldo) return saldo > 0 ? String(saldo) : ''
-      return String(r2(prevNum))
-    })
-  }, [destinoSaldo, cuentaPendienteSeleccionada])
-
-  useEffect(() => { setMetodoPagoUnicoId('') }, [monedaPagoUnico])
-
-  useEffect(() => {
-    if (tipoIngreso !== 'saldo' || destinoSaldo !== 'credito') setMontoManualUSD('')
-  }, [tipoIngreso, destinoSaldo])
-
-  useEffect(() => {
-    if (tipoPago === 'mixto' && !editingId) {
-      setPagoMixto1(pagoMixtoVacio('USD'))
-      setPagoMixto2(pagoMixtoVacio('BS'))
-    }
-  }, [tipoPago, editingId])
-
-  useEffect(() => {
-    if (ventaSinCliente) {
-      setClienteId(''); setEmpleadoId(''); setEstadoCuentaCliente(null); setCuentasPendientesCliente([]); setEstadoCuentaEmpleado(null); setCuentasPendientesEmpleado([])
-      setTipoIngreso('producto'); setDestinoSaldo('credito')
-    }
-  }, [ventaSinCliente])
-
-  // Reset pagoConDeudaState al cambiar producto/cantidad/cliente
-  useEffect(() => {
-    setPagoConDeudaState(pagoConDeudaInitial())
-  }, [productoId, cantidad, clienteId, empleadoId, tipoIngreso, tipoConsumidor, totalUSD])
-
-  // Mantiene el concepto sincronizado con la cantidad sin tener que reiniciar.
-  useEffect(() => {
-    if (editingId) return
-    if (tipoIngreso !== 'producto') return
-    if (!productoSeleccionado) return
-    setConcepto(`Venta de ${productoSeleccionado.nombre} x${cantidad || 1}`)
-  }, [editingId, tipoIngreso, productoSeleccionado?.id, productoSeleccionado?.nombre, cantidad])
-
-  // ─── Loaders ──────────────────────────────────────────────────────────────
-
-  async function cargarDatos() {
+  async function loadAll() {
     setLoading(true)
-    const [pagosRes, metodosRes, productosRes, clientesRes, empleadosRes] = await Promise.all([
-      supabase.from('pagos')
-        .select(`id, operacion_pago_id, pago_item_no, pago_items_total, es_pago_mixto, fecha, concepto, categoria, tipo_origen, estado, moneda_pago, tasa_bcv, monto, monto_pago, monto_equivalente_usd, monto_equivalente_bs, cliente_id, inventario_id, cantidad_producto, metodo_pago_id, metodo_pago_v2_id, notas, referencia, metodos_pago_v2:metodo_pago_v2_id(nombre), clientes:cliente_id(nombre)`)
-        .in('categoria', ['producto', 'saldo_cliente'])
-        .in('tipo_origen', ['producto', 'saldo_cliente'])
-        .order('fecha', { ascending: false })
-        .order('created_at', { ascending: false }),
-      supabase.from('metodos_pago_v2')
-        .select(`id, nombre, tipo, moneda, cartera:carteras(nombre, codigo)`)
-        .eq('activo', true).eq('permite_recibir', true),
-      supabase.from('inventario')
-        .select(`id, nombre, descripcion, cantidad_actual, unidad_medida, precio_venta_usd, estado`)
-        .eq('estado', 'activo').order('nombre'),
-      supabase.from('clientes').select('id, nombre, telefono, email').order('nombre'),
-      supabase.from('empleados').select('id, nombre, telefono, email, rol').eq('estado', 'activo').order('nombre'),
-    ])
-    if (pagosRes.data) setPagos((pagosRes.data as RawPago[]).map(normalizePago))
-    if (metodosRes.data) setMetodosPago((metodosRes.data as RawMetodoPago[]).map(normalizeMetodoPago))
-    if (productosRes.data) setProductos(productosRes.data as Producto[])
-    if (clientesRes.data) setClientes(clientesRes.data as Cliente[])
-    if (empleadosRes.data) setEmpleados(empleadosRes.data as EmpleadoConsumidor[])
+    setErrorMsg('')
+
+    const [empRes, clientesRes, entRes, citasRes, comRes, liqRes, metodosRes, estadoCuentaRes, cuentasEmpleadoRes] =
+      await Promise.all([
+        supabase
+          .from('empleados')
+          .select(
+            'id, nombre, email, telefono, rol, especialidad, estado, comision_plan_porcentaje, comision_cita_porcentaje, created_at'
+          )
+          .eq('id', id)
+          .single(),
+
+        supabase
+          .from('clientes')
+          .select('id, nombre, telefono, estado')
+          .eq('terapeuta_id', id)
+          .eq('estado', 'activo')
+          .order('nombre'),
+
+        supabase
+          .from('entrenamientos')
+          .select('id, fecha, hora_inicio, hora_fin, estado, clientes:cliente_id ( nombre )')
+          .eq('empleado_id', id)
+          .order('fecha')
+          .order('hora_inicio'),
+
+        supabase
+          .from('citas')
+          .select(
+            'id, fecha, hora_inicio, hora_fin, estado, notas, clientes:cliente_id ( nombre ), servicios:servicio_id ( nombre )'
+          )
+          .eq('terapeuta_id', id)
+          .order('fecha')
+          .order('hora_inicio'),
+
+        fetchComisionesDetalladas(id),
+
+        supabase
+          .from('comisiones_liquidaciones')
+          .select(`
+            id,
+            fecha_inicio,
+            fecha_fin,
+            total_base,
+            total_profesional,
+            total_rpm,
+            cantidad_citas,
+            estado,
+            pagado_at,
+            moneda_pago,
+            monto_pago,
+            tasa_bcv,
+            monto_equivalente_usd,
+            monto_equivalente_bs,
+            referencia,
+            notas,
+            metodo_pago_id,
+            metodo_pago_v2_id,
+            pago_empleado_id,
+            egreso_id
+          `)
+          .eq('empleado_id', id)
+          .order('pagado_at', { ascending: false })
+          .limit(30),
+
+        supabase
+          .from('metodos_pago_v2')
+          .select(`
+            id,
+            nombre,
+            tipo,
+            moneda,
+            color,
+            icono,
+            cartera:cartera_id (
+              id,
+              nombre,
+              codigo,
+              saldo_actual,
+              moneda
+            )
+          `)
+          .eq('activo', true)
+          .eq('permite_pagar', true)
+          .order('orden', { ascending: true })
+          .order('nombre', { ascending: true }),
+
+        supabase
+          .from('v_empleados_estado_cuenta')
+          .select('empleado_id, nombre, rol, total_facturado_usd, total_pagado_usd, total_pendiente_usd, credito_disponible_usd, saldo_pendiente_neto_usd, saldo_favor_neto_usd')
+          .eq('empleado_id', id)
+          .maybeSingle(),
+
+        supabase
+          .from('v_empleados_cuentas_por_cobrar_resumen')
+          .select('id, empleado_id, empleado_nombre, concepto, monto_total_usd, monto_pagado_usd, saldo_usd, fecha_venta, fecha_vencimiento, estado')
+          .eq('empleado_id', id)
+          .in('estado', ['pendiente', 'parcial', 'vencida'])
+          .order('fecha_venta', { ascending: true }),
+      ])
+
+    if (empRes.error || !empRes.data) {
+      setErrorMsg('No se pudo cargar.')
+      setLoading(false)
+      return
+    }
+
+    setEmpleado(empRes.data as Empleado)
+    setClientes((clientesRes.data || []) as ClienteAsignado[])
+
+    const ents = ((entRes.data || []) as any[]).map((e) => ({
+      id: e.id,
+      fecha: e.fecha,
+      hora_inicio: e.hora_inicio,
+      hora_fin: e.hora_fin,
+      estado: e.estado,
+      nombre: e.clientes?.nombre || '—',
+      subtitulo: 'Entrenamiento',
+      tipo: 'entrenamiento' as const,
+      notas: null,
+    }))
+
+    const cts = ((citasRes.data || []) as any[]).map((c) => ({
+      id: c.id,
+      fecha: c.fecha,
+      hora_inicio: c.hora_inicio,
+      hora_fin: c.hora_fin,
+      estado: c.estado,
+      nombre: c.clientes?.nombre || '—',
+      subtitulo: c.servicios?.nombre || 'Cita',
+      tipo: 'cita' as const,
+      notas: c.notas,
+    }))
+
+    const metodosNormalizados: MetodoPago[] = ((metodosRes.data || []) as any[]).map(
+      normalizeMetodoPago
+    )
+
+    setAgenda(
+      [...ents, ...cts].sort((a, b) =>
+        `${a.fecha} ${a.hora_inicio}`.localeCompare(`${b.fecha} ${b.hora_inicio}`)
+      )
+    )
+
+    setComisiones(((comRes.data || []) as any[]).map(normalizeComisionDetalle))
+    setLiquidaciones((liqRes.data || []) as Liquidacion[])
+    setMetodosPago(metodosNormalizados)
+    setEstadoCuentaEmpleado((estadoCuentaRes.data as EstadoCuentaEmpleado | null) ?? null)
+    setCuentasPendientesEmpleado((cuentasEmpleadoRes.data || []) as CuentaPendienteEmpleado[])
     setLoading(false)
   }
 
-  async function cargarEstadoCuentaCliente(id: string) {
-    if (!id) { setEstadoCuentaCliente(null); setCuentasPendientesCliente([]); return }
-    const [estadoRes, cuentasRes] = await Promise.all([
-      supabase.from('v_clientes_estado_cuenta')
-        .select(`cliente_id, total_pendiente_usd, credito_disponible_usd, saldo_pendiente_neto_usd, saldo_favor_neto_usd, total_pendiente_bs, credito_disponible_bs, saldo_pendiente_neto_bs, saldo_favor_neto_bs`)
-        .eq('cliente_id', id).maybeSingle(),
-      supabase.from('v_cuentas_por_cobrar_resumen')
-        .select(`id, cliente_id, cliente_nombre, concepto, monto_total_usd, monto_pagado_usd, saldo_usd, fecha_venta, fecha_vencimiento, estado`)
-        .eq('cliente_id', id).in('estado', ['pendiente', 'parcial', 'vencida'])
-        .order('fecha_venta', { ascending: true }),
-    ])
-    setEstadoCuentaCliente((estadoRes.data as EstadoCuentaCliente | null) ?? null)
-    setCuentasPendientesCliente((cuentasRes.data || []) as CuentaPendienteResumen[])
-  }
+  async function resolverTasaBCVActual() {
+    const hoyFecha = new Date().toISOString().slice(0, 10)
 
-
-  async function cargarEstadoCuentaEmpleado(id: string) {
-    if (!id) { setEstadoCuentaEmpleado(null); setCuentasPendientesEmpleado([]); return }
-    const [estadoRes, cuentasRes] = await Promise.all([
-      supabase.from('v_empleados_estado_cuenta')
-        .select(`empleado_id, nombre, rol, total_pendiente_usd, credito_disponible_usd, saldo_pendiente_neto_usd, saldo_favor_neto_usd`)
-        .eq('empleado_id', id).maybeSingle(),
-      supabase.from('v_empleados_cuentas_por_cobrar_resumen')
-        .select(`id, empleado_id, empleado_nombre, concepto, monto_total_usd, monto_pagado_usd, saldo_usd, fecha_venta, fecha_vencimiento, estado`)
-        .eq('empleado_id', id).in('estado', ['pendiente', 'parcial', 'vencida'])
-        .order('fecha_venta', { ascending: true }),
-    ])
-    setEstadoCuentaEmpleado((estadoRes.data as EstadoCuentaEmpleado | null) ?? null)
-    setCuentasPendientesEmpleado((cuentasRes.data || []) as CuentaPendienteEmpleadoResumen[])
-  }
-
-  // ─── Helpers de escritura ─────────────────────────────────────────────────
-
-  async function limpiarCreditosExcedenteOperacion(operacionId: string | null) {
-    if (!operacionId) return
-    const { data: creditos, error } = await supabase
-      .from('clientes_credito').select('id, monto_original, monto_disponible')
-      .eq('origen_tipo', 'pago_excedente').eq('origen_id', operacionId)
-    if (error) throw error
-    if (!creditos || creditos.length === 0) return
-    for (const credito of creditos) {
-      if (Math.abs(Number(credito.monto_disponible || 0) - Number(credito.monto_original || 0)) > 0.01)
-        throw new Error('Esta venta tiene un crédito generado que ya fue usado parcial o totalmente.')
-      const { data: ap } = await supabase.from('clientes_credito_aplicaciones')
-        .select('id').eq('credito_id', String(credito.id)).limit(1)
-      if (ap && ap.length > 0) throw new Error('Esta venta tiene un crédito aplicado a otra deuda.')
-    }
-    const { error: deleteError } = await supabase.from('clientes_credito')
-      .delete().in('id', creditos.map((c) => String(c.id)))
-    if (deleteError) throw deleteError
-  }
-
-  async function crearCreditoCliente(args: {
-    clienteId: string; operacionPagoId: string; excedenteUsd: number
-    descripcion: string; origenTipo?: string; tasaRef?: number | null
-  }) {
-    const excedenteUsd = r2(args.excedenteUsd)
-    if (excedenteUsd <= 0) return
-    const montoBs = args.tasaRef ? r2(excedenteUsd * args.tasaRef) : null
-    const { error } = await supabase.from('clientes_credito').insert({
-      cliente_id: args.clienteId, origen_tipo: args.origenTipo || 'pago_excedente',
-      origen_id: args.operacionPagoId, moneda: 'USD',
-      monto_original: excedenteUsd, monto_disponible: excedenteUsd,
-      tasa_bcv: args.tasaRef || null,
-      monto_original_bs: montoBs, monto_disponible_bs: montoBs,
-      descripcion: args.descripcion, fecha, estado: 'activo', registrado_por: null,
-    })
-    if (error) throw error
-  }
-
-  async function descontarInventarioYCrearMovimiento(args: {
-    pagoId?: string | null; productoId: string; cantidad: number
-    cantidadAnterior: number; cantidadNueva: number
-    precioUnitarioUSD: number; totalUSD: number; conceptoMovimiento: string
-  }) {
-    const { error: invError } = await supabase.from('inventario')
-      .update({ cantidad_actual: args.cantidadNueva }).eq('id', args.productoId)
-    if (invError) throw invError
-    const { error: movError } = await supabase.from('movimientos_inventario').insert({
-      inventario_id: args.productoId, tipo: 'salida', cantidad: args.cantidad,
-      cantidad_anterior: args.cantidadAnterior, cantidad_nueva: args.cantidadNueva,
-      concepto: args.conceptoMovimiento, precio_unitario_usd: args.precioUnitarioUSD,
-      monto_total_usd: args.totalUSD, pago_id: args.pagoId || null,
-    })
-    if (movError) throw movError
-  }
-
-
-  async function crearCreditoEmpleado(args: {
-    empleadoId: string; operacionPagoId?: string | null; montoUsd: number
-    descripcion: string; origenTipo?: string; tasaRef?: number | null
-  }) {
-    const montoUsd = r2(args.montoUsd)
-    if (montoUsd <= 0) return
-    const montoBs = args.tasaRef ? r2(montoUsd * args.tasaRef) : null
-    const { error } = await supabase.from('empleados_credito').insert({
-      empleado_id: args.empleadoId,
-      origen_tipo: args.origenTipo || 'saldo_empleado',
-      origen_id: args.operacionPagoId || null,
-      moneda: 'USD',
-      monto_original: montoUsd,
-      monto_disponible: montoUsd,
-      tasa_bcv: args.tasaRef || null,
-      monto_original_bs: montoBs,
-      monto_disponible_bs: montoBs,
-      descripcion: args.descripcion,
-      fecha,
-      estado: 'activo',
-      registrado_por: null,
-    })
-    if (error) throw error
-  }
-
-  async function crearDeudaEmpleado(args: {
-    empleadoId: string; empleadoNombre: string; concepto: string; montoUsd: number
-    inventarioId?: string | null; cantidadProducto?: number | null; notas?: string | null
-  }) {
-    const montoUsd = r2(args.montoUsd)
-    if (montoUsd <= 0) return
-    const { error } = await supabase.from('empleados_cuentas_por_cobrar').insert({
-      empleado_id: args.empleadoId,
-      empleado_nombre: args.empleadoNombre,
-      concepto: args.concepto,
-      tipo_origen: args.inventarioId ? 'venta_inventario_empleado' : 'saldo_empleado',
-      origen_tipo: args.inventarioId ? 'venta_inventario_empleado' : 'saldo_empleado',
-      inventario_id: args.inventarioId || null,
-      cantidad_producto: args.cantidadProducto || null,
-      monto_total_usd: montoUsd,
-      monto_pagado_usd: 0,
-      saldo_usd: montoUsd,
-      fecha_venta: fecha,
-      fecha_vencimiento: null,
-      estado: 'pendiente',
-      notas: args.notas || null,
-      registrado_por: null,
-      moneda: 'USD',
-    })
-    if (error) throw error
-  }
-
-  async function registrarAbonoDeudaEmpleado(args: {
-    cuentaCobrarId: string; empleadoId: string; montoUsd: number; notas?: string | null
-  }) {
-    const montoUsd = r2(args.montoUsd)
-    if (montoUsd <= 0) return
-    const { error } = await supabase.from('empleados_abonos_cobranza').insert({
-      cuenta_cobrar_id: args.cuentaCobrarId,
-      empleado_id: args.empleadoId,
-      fecha,
-      monto_usd: montoUsd,
-      notas: args.notas || null,
-      registrado_por: null,
-    })
-    if (error) throw error
-  }
-
-  // ─── Build payloads para pago rápido (venta sin cliente / edición) ─────────
-
-  function buildPagosPayloadRapido() {
-    if (tipoPago === 'unico') {
-      const montoBsReal = r2(Number(montoPagoUnicoBs || 0))
-      return [{
-        metodo_pago_v2_id: metodoPagoUnicoId,
-        moneda_pago: monedaPagoUnico,
-        // IMPORTANTE:
-        // Si el pago es en Bs, se registra el monto REAL escrito/cargado en Bs.
-        // Antes se mandaba montoObjetivoUSD * tasa, por eso no permitía que una
-        // deuda de $110 se cobrara como $130 equivalentes cuando el cliente paga en Bs.
-        monto: monedaPagoUnico === 'BS' ? (montoBsReal > 0 ? montoBsReal : r2(totalPagoUnicoBs)) : r2(montoObjetivoPagoRapidoUsd),
-        tasa_bcv: monedaPagoUnico === 'BS' ? tasaPagoUnico : null,
-        referencia: referenciaPagoUnico || null,
-        notas: notasPagoUnico || null,
-      }]
-    }
-    return [pagoMixto1, pagoMixto2].map((item, index) => {
-      const monto = parseFloat(item.monto)
-      if (!Number.isFinite(monto) || monto <= 0) {
-        throw new Error(`El Pago ${index + 1} debe tener monto mayor a 0.`)
-      }
-      return {
-        metodo_pago_v2_id: item.metodoId,
-        moneda_pago: item.moneda,
-        monto: r2(monto),
-        tasa_bcv: item.moneda === 'BS' ? item.tasaBcv : null,
-        referencia: item.referencia || null,
-        notas: item.notas || null,
-      }
-    })
-  }
-
-  function validarPagoRapido(): string | null {
-    if (tipoPago === 'unico') {
-      if (!metodoPagoUnicoId) return 'Selecciona el método de pago.'
-      if (!montoObjetivoPagoRapidoUsd || montoObjetivoPagoRapidoUsd <= 0) {
-        return tipoIngreso === 'saldo' && destinoSaldo === 'credito'
-          ? 'Indica el monto a recargar. Debe ser mayor a 0.'
-          : 'El monto del pago debe ser mayor a 0.'
-      }
-      if (monedaPagoUnico === 'BS' && (!tasaPagoUnico || tasaPagoUnico <= 0))
-        return 'Selecciona una tasa válida para el pago en bolívares.'
-      if (monedaPagoUnico === 'BS' && Number(montoPagoUnicoBs || 0) <= 0)
-        return 'El monto en bolívares debe ser mayor a 0.'
-      return null
-    }
-    if (!resumenPagosMixtoRapido.p1Valido) return 'Completa el Pago 1: método, monto y tasa si aplica.'
-    if (!resumenPagosMixtoRapido.p2Valido) return 'Completa el Pago 2: método, monto y tasa si aplica.'
-    if (resumenPagosMixtoRapido.totalUsd <= 0) return 'La suma de los pagos debe ser mayor a 0.'
-    if (!resumenPagosMixtoRapido.esRecargaSaldoLibre && !resumenPagosMixtoRapido.cuadra) {
-      return `La suma no cuadra. Faltante: ${formatearMoneda(resumenPagosMixtoRapido.faltante, 'USD')}`
-    }
-    return null
-  }
-
-  async function registrarPagoMixtoProducto(args: {
-    fecha: string; concepto: string; clienteId: string | null
-    inventarioId: string; cantidad: number; notasGenerales: string | null
-    pagos: any[]
-  }) {
-    const { data, error } = await supabase.rpc('registrar_pagos_mixtos', {
-      p_fecha: args.fecha, p_tipo_origen: 'producto', p_categoria: 'producto',
-      p_concepto: args.concepto, p_cliente_id: args.clienteId || null,
-      p_cita_id: null, p_cliente_plan_id: null, p_cuenta_cobrar_id: null,
-      p_inventario_id: args.inventarioId, p_registrado_por: null,
-      p_notas_generales: args.notasGenerales, p_pagos: args.pagos,
-    })
-    if (error) throw error
-    const operacionPagoId = data?.operacion_pago_id || null
-    if (operacionPagoId) {
-      await supabase.from('pagos')
-        .update({ inventario_id: args.inventarioId, cantidad_producto: args.cantidad })
-        .eq('operacion_pago_id', operacionPagoId)
-    }
-    return operacionPagoId as string | null
-  }
-
-  async function registrarPagoMixtoSaldo(args: {
-    fecha: string; concepto: string; clienteId: string; notasGenerales: string | null; pagos: any[]
-  }) {
-    const { data, error } = await supabase.rpc('registrar_pagos_mixtos', {
-      p_fecha: args.fecha, p_tipo_origen: 'saldo_cliente', p_categoria: 'saldo_cliente',
-      p_concepto: args.concepto, p_cliente_id: args.clienteId,
-      p_cita_id: null, p_cliente_plan_id: null, p_cuenta_cobrar_id: null,
-      p_inventario_id: null, p_registrado_por: null,
-      p_notas_generales: args.notasGenerales, p_pagos: args.pagos,
-    })
-    if (error) throw error
-    return data?.operacion_pago_id || null
-  }
-
-  async function ajustarCuentaCobrarClienteSiAbonoSuperaSaldo(args: {
-    cuenta: CuentaPendienteResumen
-    montoAbonoUsd: number
-  }) {
-    const saldoActual = r2(Number(args.cuenta.saldo_usd || 0))
-    const montoAbonoUsd = r2(args.montoAbonoUsd)
-    const diferencia = r2(montoAbonoUsd - saldoActual)
-    if (diferencia <= 0.01) return
-
-    const totalActual = r2(Number(args.cuenta.monto_total_usd || 0))
-    const pagadoActual = r2(Number(args.cuenta.monto_pagado_usd || 0))
-    const nuevoTotal = r2(totalActual + diferencia)
-    const nuevoSaldo = r2(Math.max(nuevoTotal - pagadoActual, 0))
-
-    const { error } = await supabase.from('cuentas_por_cobrar').update({
-      monto_total_usd: nuevoTotal,
-      saldo_usd: nuevoSaldo,
-      estado: nuevoSaldo <= 0.01 ? 'pagado' : (pagadoActual > 0 ? 'parcial' : 'pendiente'),
-      notas: `${args.cuenta.concepto || 'Deuda'} | Ajuste por pago en Bs: total actualizado de ${formatearMoneda(totalActual, 'USD')} a ${formatearMoneda(nuevoTotal, 'USD')}.`,
-    }).eq('id', args.cuenta.id)
+    const { data, error } = await supabase
+      .from('tipos_cambio')
+      .select('*')
+      .lte('fecha', hoyFecha)
+      .order('fecha', { ascending: false })
+      .limit(1)
+      .maybeSingle()
 
     if (error) throw error
+
+    const row = data as TipoCambioRow | null
+
+    const posibleTasa = Number(
+      row?.tasa ?? row?.valor ?? row?.monto ?? row?.bcv ?? row?.precio ?? 0
+    )
+
+    if (!posibleTasa || posibleTasa <= 0) {
+      throw new Error('No se pudo obtener la tasa BCV automática')
+    }
+
+    return r2(posibleTasa)
   }
 
-  async function ajustarCuentaCobrarEmpleadoSiAbonoSuperaSaldo(args: {
-    cuenta: CuentaPendienteEmpleadoResumen
-    montoAbonoUsd: number
-  }) {
-    const saldoActual = r2(Number(args.cuenta.saldo_usd || 0))
-    const montoAbonoUsd = r2(args.montoAbonoUsd)
-    const diferencia = r2(montoAbonoUsd - saldoActual)
-    if (diferencia <= 0.01) return
+  async function cargarTasaBCVAutomatica() {
+    setCargandoTasa(true)
 
-    const totalActual = r2(Number(args.cuenta.monto_total_usd || 0))
-    const pagadoActual = r2(Number(args.cuenta.monto_pagado_usd || 0))
-    const nuevoTotal = r2(totalActual + diferencia)
-    const nuevoSaldo = r2(Math.max(nuevoTotal - pagadoActual, 0))
-
-    const { error } = await supabase.from('empleados_cuentas_por_cobrar').update({
-      monto_total_usd: nuevoTotal,
-      saldo_usd: nuevoSaldo,
-      estado: nuevoSaldo <= 0.01 ? 'pagado' : (pagadoActual > 0 ? 'parcial' : 'pendiente'),
-      notas: `${args.cuenta.concepto || 'Deuda empleado'} | Ajuste por pago en Bs: total actualizado de ${formatearMoneda(totalActual, 'USD')} a ${formatearMoneda(nuevoTotal, 'USD')}.`,
-    }).eq('id', args.cuenta.id)
-
-    if (error) throw error
-  }
-
-  async function registrarPagoMixtoDeuda(args: {
-    cuentaCobrarId: string; fecha: string; notasGenerales: string | null; pagos: any[]
-  }) {
-    await registrarAbonoMixto({
-      cuenta_cobrar_id: args.cuentaCobrarId, fecha: args.fecha,
-      notas_generales: args.notasGenerales, pagos: args.pagos,
-    })
-  }
-
-  // ─── Submit ───────────────────────────────────────────────────────────────
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-
-    // ══ VENTA RÁPIDA SIN CLIENTE ═════════════════════════════════════════════
-    if (ventaSinCliente) {
-      if (!productoId) { alert('Selecciona un producto'); return }
-      if (cantidad <= 0) { alert('La cantidad debe ser mayor a 0'); return }
-      if (stockInsuficiente) { alert('No hay suficiente stock disponible'); return }
-
-      const err = validarPagoRapido()
-      if (err) { alert(err); return }
-
-      setSaving(true)
-      try {
-        const conceptoFinal = concepto.trim() || `Venta rápida de ${productoSeleccionado?.nombre || ''} x${cantidad}`
-        const operacionPagoId = await registrarPagoMixtoProducto({
-          fecha, concepto: conceptoFinal, clienteId: null,
-          inventarioId: productoId, cantidad,
-          notasGenerales: notas.trim() || null,
-          pagos: buildPagosPayloadRapido(),
-        })
-        const cantidadAnterior = Number(productoSeleccionado?.cantidad_actual || 0)
-        await descontarInventarioYCrearMovimiento({
-          pagoId: operacionPagoId, productoId, cantidad,
-          cantidadAnterior, cantidadNueva: cantidadAnterior - cantidad,
-          precioUnitarioUSD, totalUSD,
-          conceptoMovimiento: 'Venta rápida (sin cliente)',
-        })
-        alert(`✅ Venta rápida registrada: ${formatearMoneda(totalUSD, 'USD')}`)
-        resetForm()
-        await cargarDatos()
-      } catch (err: any) {
-        alert('Error: ' + (err.message || 'No se pudo guardar'))
-      } finally { setSaving(false) }
-      return
-    }
-
-    // ══ CONSUMO / SALDO DE EMPLEADO ════════════════════════════════════════
-    if (!ventaSinCliente && tipoConsumidor === 'empleado') {
-      if (!empleadoId || !empleadoSeleccionado) { alert('Selecciona un empleado'); return }
-
-      // Abono a deuda existente del empleado
-      if (tipoIngreso === 'saldo' && destinoSaldo === 'deuda' && cuentaPendienteSeleccionada) {
-        if (montoAbonoDeudaNumero <= 0) { alert('El monto del abono debe ser mayor a 0'); return }
-        const errSaldo = validarPagoRapido()
-        if (errSaldo) { alert(errSaldo); return }
-        const montoRealAbonoUsd = r2(totalPagoRapidoRealUsd || montoAbonoDeudaNumero)
-        if (montoRealAbonoUsd <= 0) { alert('El pago real debe ser mayor a 0.'); return }
-
-        setSaving(true)
-        try {
-          await ajustarCuentaCobrarEmpleadoSiAbonoSuperaSaldo({
-            cuenta: cuentaPendienteSeleccionada as CuentaPendienteEmpleadoResumen,
-            montoAbonoUsd: montoRealAbonoUsd,
-          })
-          await registrarAbonoDeudaEmpleado({
-            cuentaCobrarId: cuentaPendienteSeleccionada.id,
-            empleadoId: empleadoSeleccionado.id,
-            montoUsd: montoRealAbonoUsd,
-            notas: notas.trim() || null,
-          })
-          alert(`✅ Abono de empleado aplicado por ${formatearMoneda(montoRealAbonoUsd, 'USD')}`)
-          resetForm()
-          await cargarDatos()
-          await cargarEstadoCuentaEmpleado(empleadoSeleccionado.id)
-        } catch (err: any) {
-          alert('Error: ' + (err.message || 'No se pudo guardar'))
-        } finally { setSaving(false) }
-        return
-      }
-
-      // Crédito / saldo a favor del empleado
-      if (tipoIngreso === 'saldo') {
-        const errSaldo = validarPagoRapido()
-        if (errSaldo) { alert(errSaldo); return }
-        const totalSaldoUsd = tipoPago === 'unico' ? totalPagoUnicoRealUsd : totalPagoMixtoUsd
-        if (totalSaldoUsd <= 0) { alert('Debes indicar un monto válido para la recarga.'); return }
-
-        setSaving(true)
-        try {
-          const conceptoFinal = concepto.trim() || `Recarga de saldo a favor - ${empleadoSeleccionado.nombre}`
-          await crearCreditoEmpleado({
-            empleadoId: empleadoSeleccionado.id,
-            montoUsd: totalSaldoUsd,
-            descripcion: conceptoFinal,
-            origenTipo: 'saldo_empleado',
-          })
-          alert(`✅ Saldo agregado al empleado: ${formatearMoneda(totalSaldoUsd, 'USD')}`)
-          resetForm()
-          await cargarDatos()
-          await cargarEstadoCuentaEmpleado(empleadoSeleccionado.id)
-        } catch (err: any) {
-          alert('Error: ' + (err.message || 'No se pudo guardar'))
-        } finally { setSaving(false) }
-        return
-      }
-
-      // Venta de producto a empleado: pagar ahora o dejar deuda
-      if (tipoIngreso === 'producto') {
-        if (!productoId) { alert('Selecciona un producto'); return }
-        if (cantidad <= 0) { alert('La cantidad debe ser mayor a 0'); return }
-        if (stockInsuficiente) { alert('No hay suficiente stock disponible'); return }
-
-        setSaving(true)
-        try {
-          const conceptoFinal = concepto.trim() || `Consumo empleado: ${productoSeleccionado?.nombre || ''} x${cantidad} - ${empleadoSeleccionado.nombre}`
-          let operacionPagoId: string | null = null
-
-          if (modoCobroEmpleadoProducto === 'pagado') {
-            const err = validarPagoRapido()
-            if (err) { alert(err); setSaving(false); return }
-            operacionPagoId = await registrarPagoMixtoProducto({
-              fecha,
-              concepto: conceptoFinal,
-              clienteId: null,
-              inventarioId: productoId,
-              cantidad,
-              notasGenerales: `Empleado: ${empleadoSeleccionado.nombre}${notas.trim() ? `
-${notas.trim()}` : ''}`,
-              pagos: buildPagosPayloadRapido(),
-            })
-          } else {
-            await crearDeudaEmpleado({
-              empleadoId: empleadoSeleccionado.id,
-              empleadoNombre: empleadoSeleccionado.nombre,
-              concepto: conceptoFinal,
-              montoUsd: totalUSD,
-              inventarioId: productoId,
-              cantidadProducto: cantidad,
-              notas: notas.trim() || null,
-            })
-          }
-
-          const cantidadAnterior = Number(productoSeleccionado?.cantidad_actual || 0)
-          await descontarInventarioYCrearMovimiento({
-            pagoId: operacionPagoId,
-            productoId,
-            cantidad,
-            cantidadAnterior,
-            cantidadNueva: cantidadAnterior - cantidad,
-            precioUnitarioUSD,
-            totalUSD,
-            conceptoMovimiento: `Consumo empleado - ${empleadoSeleccionado.nombre}`,
-          })
-
-          alert(modoCobroEmpleadoProducto === 'pagado'
-            ? `✅ Consumo de empleado registrado y pagado: ${formatearMoneda(totalUSD, 'USD')}`
-            : `✅ Consumo de empleado registrado como deuda: ${formatearMoneda(totalUSD, 'USD')}`)
-          resetForm()
-          await cargarDatos()
-          await cargarEstadoCuentaEmpleado(empleadoSeleccionado.id)
-        } catch (err: any) {
-          alert('Error: ' + (err.message || 'No se pudo guardar'))
-        } finally { setSaving(false) }
-        return
-      }
-    }
-
-    // ══ VALIDACIONES COMUNES ════════════════════════════════════════════════
-    if (!clienteId) { alert('Selecciona un cliente'); return }
-    if (!clienteSeleccionado) { alert('Cliente inválido'); return }
-
-    // ══ ABONO A DEUDA (tipo saldo → destino deuda) ══════════════════════════
-    if (tipoIngreso === 'saldo' && destinoSaldo === 'deuda' && cuentaPendienteSeleccionada) {
-      if (montoAbonoDeudaNumero <= 0) { alert('El monto del abono debe ser mayor a 0'); return }
-      const errSaldo = validarPagoRapido()
-      if (errSaldo) { alert(errSaldo); return }
-      const montoRealAbonoUsd = r2(totalPagoRapidoRealUsd || montoAbonoDeudaNumero)
-      if (montoRealAbonoUsd <= 0) { alert('El pago real debe ser mayor a 0.'); return }
-
-      setSaving(true)
-      try {
-        await ajustarCuentaCobrarClienteSiAbonoSuperaSaldo({
-          cuenta: cuentaPendienteSeleccionada as CuentaPendienteResumen,
-          montoAbonoUsd: montoRealAbonoUsd,
-        })
-        await registrarPagoMixtoDeuda({
-          cuentaCobrarId: cuentaPendienteSeleccionada.id,
-          fecha, notasGenerales: notas.trim() || null,
-          pagos: buildPagosPayloadRapido(),
-        })
-        alert(`✅ Abono aplicado por ${formatearMoneda(montoRealAbonoUsd, 'USD')}`)
-        resetForm()
-        await cargarDatos()
-        await cargarEstadoCuentaCliente(clienteSeleccionado.id)
-      } catch (err: any) {
-        alert('Error: ' + (err.message || 'No se pudo guardar'))
-      } finally { setSaving(false) }
-      return
-    }
-
-    // ══ RECARGA DE SALDO (tipo saldo → destino crédito) ═════════════════════
-    if (tipoIngreso === 'saldo') {
-      if (editingId) { alert('Las recargas de saldo no se editan. Registra una nueva.'); return }
-      const errSaldo = validarPagoRapido()
-      if (errSaldo) { alert(errSaldo); return }
-
-      const totalSaldoUsd = tipoPago === 'unico'
-        ? totalPagoUnicoRealUsd
-        : r2(pagoToUsd(pagoMixto1) + pagoToUsd(pagoMixto2))
-
-      if (totalSaldoUsd <= 0) { alert('Debes indicar un monto válido para la recarga.'); return }
-
-      setSaving(true)
-      try {
-        const conceptoFinal = concepto.trim() || 'Recarga de saldo a favor'
-        const operacionPagoId = await registrarPagoMixtoSaldo({
-          fecha, concepto: conceptoFinal, clienteId: clienteSeleccionado.id,
-          notasGenerales: notas.trim() || null,
-          pagos: buildPagosPayloadRapido(),
-        })
-        if (!operacionPagoId) throw new Error('No se pudo generar la operación de recarga de saldo')
-        await crearCreditoCliente({
-          clienteId: clienteSeleccionado.id, operacionPagoId,
-          excedenteUsd: totalSaldoUsd, descripcion: conceptoFinal,
-          origenTipo: 'saldo_cliente',
-        })
-        alert(`✅ Saldo agregado: ${formatearMoneda(totalSaldoUsd, 'USD')}`)
-        resetForm()
-        await cargarDatos()
-        await cargarEstadoCuentaCliente(clienteSeleccionado.id)
-      } catch (err: any) {
-        alert('Error: ' + (err.message || 'No se pudo guardar'))
-      } finally { setSaving(false) }
-      return
-    }
-
-    // ══ VENTA DE PRODUCTO CON CLIENTE (nuevo con PagoConDeudaSelector) ═══════
-    if (tipoIngreso === 'producto') {
-      if (!productoId) { alert('Selecciona un producto'); return }
-      if (cantidad <= 0) { alert('La cantidad debe ser mayor a 0'); return }
-      if (!editingId && stockInsuficiente) { alert('No hay suficiente stock disponible'); return }
-
-      const conceptoFinal = concepto.trim() || `Venta de ${productoSeleccionado?.nombre || ''} x${cantidad}`
-
-      // ── Edición ────────────────────────────────────────────────────────────
-      if (editingId) {
-        const errEdicion = validarPagoRapido()
-        if (errEdicion) { alert(errEdicion); return }
-
-        setSaving(true)
-        try {
-          await limpiarCreditosExcedenteOperacion(editingOperacionId)
-          if (editingOperacionId) {
-            const { error } = await supabase.from('pagos').delete().eq('operacion_pago_id', editingOperacionId)
-            if (error) throw error
-          } else {
-            const { error } = await supabase.from('pagos').delete().eq('id', editingId)
-            if (error) throw error
-          }
-          const nuevaOpId = await registrarPagoMixtoProducto({
-            fecha, concepto: conceptoFinal, clienteId: clienteSeleccionado.id,
-            inventarioId: productoId, cantidad,
-            notasGenerales: notas.trim() || null,
-            pagos: buildPagosPayloadRapido(),
-          })
-          alert('✅ Ingreso actualizado')
-          resetForm()
-          await cargarDatos()
-          await cargarEstadoCuentaCliente(clienteSeleccionado.id)
-        } catch (err: any) {
-          alert('Error: ' + (err.message || 'No se pudo guardar'))
-        } finally { setSaving(false) }
-        return
-      }
-
-      // ── Nuevo con PagoConDeudaSelector ────────────────────────────────────
-      if (pagoConDeudaState.tipoCobro !== 'sin_pago') {
-        const errPago = validarPagoConDeuda(pagoConDeudaState, totalUSD)
-        if (errPago) { alert(errPago); return }
-      }
-
-      setSaving(true)
-      try {
-        let operacionPagoId: string | null = null
-
-        // Registrar pago si corresponde
-        if (pagoConDeudaState.tipoCobro !== 'sin_pago') {
-          const pagosRpc = buildPagosRpcPayload(pagoConDeudaState, totalUSD)
-          if (pagosRpc) {
-            operacionPagoId = await registrarPagoMixtoProducto({
-              fecha, concepto: conceptoFinal, clienteId: clienteSeleccionado.id,
-              inventarioId: productoId, cantidad,
-              notasGenerales: notas.trim() || null,
-              pagos: pagosRpc,
-            })
-          }
-        }
-
-        // Crear cuenta por cobrar si hay deuda
-        const cxcPayload = buildCuentaPorCobrarPayload({
-          state: pagoConDeudaState, montoTotal: totalUSD,
-          clienteId: clienteSeleccionado.id, clienteNombre: clienteSeleccionado.nombre,
-          concepto: conceptoFinal, fecha,
-          registradoPor: null,
-        })
-        if (cxcPayload) {
-          // Añadir datos de inventario a la cuenta por cobrar
-          const { error: cxcErr } = await supabase.from('cuentas_por_cobrar').insert({
-            ...cxcPayload,
-            tipo_origen: 'venta_inventario',
-            inventario_id: productoId,
-            cantidad_producto: cantidad,
-          })
-          if (cxcErr) console.warn('No se pudo crear cuenta por cobrar:', cxcErr.message)
-        }
-
-        // Descontar inventario
-        const cantidadAnterior = Number(productoSeleccionado?.cantidad_actual || 0)
-        await descontarInventarioYCrearMovimiento({
-          pagoId: operacionPagoId, productoId, cantidad,
-          cantidadAnterior, cantidadNueva: cantidadAnterior - cantidad,
-          precioUnitarioUSD, totalUSD,
-          conceptoMovimiento: `Venta a ${clienteSeleccionado.nombre}`,
-        })
-
-        const deuda = r2(Math.max(totalUSD - (pagoConDeudaState.tipoCobro === 'sin_pago' ? 0 : r2(totalUSD)), 0))
-        const msg = pagoConDeudaState.tipoCobro === 'sin_pago'
-          ? `✅ Venta registrada. Deuda total: ${formatearMoneda(totalUSD, 'USD')}`
-          : pagoConDeudaState.tipoCobro === 'abono'
-          ? `✅ Venta registrada. Abono registrado, queda pendiente ${formatearMoneda(deuda, 'USD')}`
-          : '✅ Venta registrada y pagada'
-
-        alert(msg)
-        resetForm()
-        await cargarDatos()
-        await cargarEstadoCuentaCliente(clienteSeleccionado.id)
-      } catch (err: any) {
-        alert('Error: ' + (err.message || 'No se pudo guardar'))
-      } finally { setSaving(false) }
-    }
-  }
-
-  // ─── Reset ────────────────────────────────────────────────────────────────
-
-  function resetForm() {
-    setTipoIngreso('producto'); setTipoConsumidor('cliente'); setModoCobroEmpleadoProducto('pagado'); setProductoId(''); setClienteId(''); setEmpleadoId('')
-    setCantidad(1); setConcepto(''); setNotas('')
-    setFecha(new Date().toISOString().slice(0, 10))
-    setVentaSinCliente(false)
-    setPagoConDeudaState(pagoConDeudaInitial())
-    setTipoPago('unico'); setMonedaPagoUnico('USD'); setMetodoPagoUnicoId('')
-    setReferenciaPagoUnico(''); setNotasPagoUnico(''); setTasaPagoUnico(null); setMontoPagoUnicoBs(null)
-    setPagoMixto1(pagoMixtoVacio('USD')); setPagoMixto2(pagoMixtoVacio('BS'))
-    setEditingId(null); setEditingOperacionId(null)
-    setCuentaCobrarSeleccionadaId(''); setMontoAbonoDeuda(''); setMontoManualUSD('')
-    setDestinoSaldo('credito'); setShowForm(false)
-  }
-
-  // ─── Edit ─────────────────────────────────────────────────────────────────
-
-  function startEdit(operacion: PagoOperacion) {
-    setVentaSinCliente(false)
-    setTipoIngreso('producto')
-    setEditingId(operacion.id_representativo)
-    setEditingOperacionId(operacion.operacion_pago_id)
-    setFecha(operacion.fecha)
-    setConcepto(operacion.concepto)
-    setProductoId(operacion.inventario_id || '')
-    setCantidad(Number(operacion.cantidad_producto || 1))
-    setClienteId(operacion.cliente_id || '')
-    setNotas(operacion.items[0]?.notas || '')
-    setPagoConDeudaState(pagoConDeudaInitial())
-
-    const itemsOrdenados = [...operacion.items].sort((a, b) => Number(a.pago_item_no || 0) - Number(b.pago_item_no || 0))
-
-    const mapItemToForm = (item?: PagoItem | null): PagoMixtoFormItem => {
-      if (!item) return pagoMixtoVacio('USD')
-      const moneda = ((item.moneda_pago || 'USD').toUpperCase() === 'BS' || (item.moneda_pago || '').toUpperCase() === 'VES') ? 'BS' : 'USD'
-      const montoBase = moneda === 'BS'
-        ? Number(item.monto ?? item.monto_pago ?? item.monto_equivalente_bs ?? 0)
-        : Number(item.monto_equivalente_usd ?? item.monto ?? item.monto_pago ?? 0)
-      return {
-        moneda, metodoId: item.metodo_pago_v2_id || '',
-        monto: montoBase > 0 ? String(r2(montoBase)) : '',
-        referencia: item.referencia || '', notas: item.notas || '',
-        tasaBcv: item.tasa_bcv ?? null,
-        montoBs: moneda === 'BS' ? Number(item.monto_equivalente_bs ?? item.monto ?? item.monto_pago ?? 0) || null : null,
-      }
-    }
-
-    if (operacion.es_pago_mixto || itemsOrdenados.length > 1) {
-      setTipoPago('mixto')
-      setPagoMixto1(mapItemToForm(itemsOrdenados[0]))
-      setPagoMixto2(mapItemToForm(itemsOrdenados[1] || null))
-      setMonedaPagoUnico('USD'); setMetodoPagoUnicoId(''); setReferenciaPagoUnico(''); setNotasPagoUnico(''); setTasaPagoUnico(null); setMontoPagoUnicoBs(null)
-    } else {
-      const first = itemsOrdenados[0]
-      setTipoPago('unico')
-      if (first) {
-        const moneda = ((first.moneda_pago || 'USD').toUpperCase() === 'BS' || (first.moneda_pago || '').toUpperCase() === 'VES') ? 'BS' : 'USD'
-        setMonedaPagoUnico(moneda)
-        setMetodoPagoUnicoId(first.metodo_pago_v2_id || '')
-        setReferenciaPagoUnico(first.referencia || '')
-        setNotasPagoUnico(first.notas || '')
-        setTasaPagoUnico(first.tasa_bcv ?? null)
-        setMontoPagoUnicoBs(moneda === 'BS' ? Number(first.monto_equivalente_bs ?? first.monto ?? first.monto_pago ?? 0) || null : null)
-      }
-      setPagoMixto1(pagoMixtoVacio('USD')); setPagoMixto2(pagoMixtoVacio('BS'))
-    }
-
-    setShowForm(true)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-
-  async function eliminarPago(operacion: PagoOperacion) {
-    if (!confirm('¿Eliminar este ingreso?')) return
     try {
-      await limpiarCreditosExcedenteOperacion(operacion.operacion_pago_id)
-      let query = supabase.from('pagos').delete()
-      query = operacion.operacion_pago_id
-        ? query.eq('operacion_pago_id', operacion.operacion_pago_id)
-        : query.eq('id', operacion.id_representativo)
-      const { error } = await query
-      if (error) throw error
-      alert('✅ Ingreso eliminado')
-      await cargarDatos()
-      if (operacion.cliente_id) await cargarEstadoCuentaCliente(operacion.cliente_id)
-    } catch (err: any) { alert('Error: ' + (err.message || 'No se pudo eliminar')) }
+      const tasa = await resolverTasaBCVActual()
+      setTasaBCVAuto(tasa)
+      setTasaBCV((prev) => (prev && prev > 0 ? prev : tasa))
+    } catch {
+      setTasaBCVAuto(null)
+    } finally {
+      setCargandoTasa(false)
+    }
   }
 
-  // ─── Derived list ─────────────────────────────────────────────────────────
+  const agendaFiltrada = useMemo(() => {
+    let items = agenda
 
-  const operaciones = useMemo(() => agruparPagosPorOperacion(pagos), [pagos])
+    if (agendaTipo === 'entrenamientos') items = items.filter((x) => x.tipo === 'entrenamiento')
+    if (agendaTipo === 'citas') items = items.filter((x) => x.tipo === 'cita')
+    if (agendaFiltro === 'hoy') items = items.filter((x) => x.fecha === hoy)
+    if (agendaFiltro === 'proximos') items = items.filter((x) => x.fecha >= hoy).slice(0, 100)
 
-  const pagosFiltrados = useMemo(
-    () => operaciones.filter((pago) => {
-      if (estadoFiltro !== 'todos' && pago.estado !== estadoFiltro) return false
-      if (search) {
-        const s = search.toLowerCase()
-        return pago.concepto.toLowerCase().includes(s) ||
-          pago.categoria.toLowerCase().includes(s) ||
-          (pago.cliente_nombre || '').toLowerCase().includes(s)
-      }
-      return true
-    }),
-    [operaciones, estadoFiltro, search]
+    if (agendaClienteFiltro !== 'todos') {
+      items = items.filter((x) => x.nombre === agendaClienteFiltro)
+    }
+
+    return items
+  }, [agenda, agendaFiltro, agendaTipo, agendaClienteFiltro, hoy])
+
+  const agendaAgrupadaPorCliente = useMemo(
+    () => chunkAgendaByCliente(agendaFiltrada),
+    [agendaFiltrada]
   )
 
-  const totales = useMemo(() => {
-    const pagados = operaciones.filter((p) => p.estado === 'pagado')
+  const comisionesPendientes = useMemo(
+    () => comisiones.filter((c) => isPendienteEstado(c.estado)),
+    [comisiones]
+  )
+
+  const comisionesLiquidadaHoyQuincena = useMemo(
+    () =>
+      comisiones.filter((c) => {
+        if (!isFacturadaEstado(c.estado)) return false
+        return c.fecha >= quincenaActual.inicio && c.fecha <= quincenaActual.fin
+      }),
+    [comisiones, quincenaActual]
+  )
+
+  const comisionesDisponibles = useMemo(
+    () => comisiones.filter((c) => isPendienteEstado(c.estado)),
+    [comisiones]
+  )
+
+  const resumenDisponible = useMemo(() => {
+    const baseUsd = comisionesDisponibles.reduce(
+      (a, c) => a + Number(c.monto_base_usd ?? c.base ?? 0),
+      0
+    )
+    const baseBs = comisionesDisponibles.reduce(
+      (a, c) => a + Number(c.monto_base_bs ?? 0),
+      0
+    )
+    const profesionalUsd = comisionesDisponibles.reduce(
+      (a, c) => a + Number(c.monto_profesional_usd ?? c.profesional ?? 0),
+      0
+    )
+    const profesionalBs = comisionesDisponibles.reduce(
+      (a, c) => a + Number(c.monto_profesional_bs ?? 0),
+      0
+    )
+    const rpmUsd = comisionesDisponibles.reduce(
+      (a, c) => a + Number(c.monto_rpm_usd ?? c.rpm ?? 0),
+      0
+    )
+    const rpmBs = comisionesDisponibles.reduce(
+      (a, c) => a + Number(c.monto_rpm_bs ?? 0),
+      0
+    )
+
     return {
-      totalUSD: pagados.reduce((sum, p) => sum + Number(p.total_usd || 0), 0),
-      totalBS: pagados.reduce((sum, p) => sum + Number(p.total_bs || 0), 0),
-      cantidad: pagados.length,
+      baseUsd: r2(baseUsd),
+      baseBs: r2(baseBs),
+      profesionalUsd: r2(profesionalUsd),
+      profesionalBs: r2(profesionalBs),
+      rpmUsd: r2(rpmUsd),
+      rpmBs: r2(rpmBs),
+      pendientes: comisionesDisponibles.length,
     }
-  }, [operaciones])
+  }, [comisionesDisponibles])
 
-  // Determina si mostrar bloque de pago rápido (venta sin cliente, recarga saldo, edición, abono a deuda)
-  const mostrarPagoRapido = ventaSinCliente ||
-    (tipoIngreso === 'saldo') ||
-    (!!editingId) ||
-    (tipoConsumidor === 'empleado' && tipoIngreso === 'producto' && modoCobroEmpleadoProducto === 'pagado')
+  const stats = useMemo(
+    () => ({
+      hoyTotal: agenda.filter((x) => x.fecha === hoy).length,
+      comisionPendienteUsd: resumenDisponible.profesionalUsd,
+      comisionPendienteBs: resumenDisponible.profesionalBs,
+      registrosPendientes: resumenDisponible.pendientes,
+    }),
+    [agenda, hoy, resumenDisponible]
+  )
 
-  if (loading) return <LoadingIngresos />
+  const comisionesPendientesMoneda = useMemo(() => {
+    return comisionesPendientes.filter((c) => getComisionMontoByMoneda(c, monedaPago) > 0)
+  }, [comisionesPendientes, monedaPago])
 
-  // ─── Render ───────────────────────────────────────────────────────────────
+  const allCurrentCurrencySelected = useMemo(() => {
+    if (comisionesPendientesMoneda.length === 0) return false
+    return comisionesPendientesMoneda.every((c) => selectedComisionIds.includes(c.id))
+  }, [comisionesPendientesMoneda, selectedComisionIds])
+
+  const comisionesSeleccionadas = useMemo(() => {
+    const ids = new Set(selectedComisionIds)
+    return comisionesPendientesMoneda.filter((c) => ids.has(c.id))
+  }, [comisionesPendientesMoneda, selectedComisionIds])
+
+  const resumenSeleccionado = useMemo(() => {
+    const baseUsd = comisionesSeleccionadas.reduce(
+      (a, c) => a + Number(c.monto_base_usd ?? c.base ?? 0),
+      0
+    )
+    const baseBs = comisionesSeleccionadas.reduce(
+      (a, c) => a + Number(c.monto_base_bs ?? 0),
+      0
+    )
+    const profesionalUsd = comisionesSeleccionadas.reduce(
+      (a, c) => a + Number(c.monto_profesional_usd ?? c.profesional ?? 0),
+      0
+    )
+    const profesionalBs = comisionesSeleccionadas.reduce(
+      (a, c) => a + Number(c.monto_profesional_bs ?? 0),
+      0
+    )
+    const rpmUsd = comisionesSeleccionadas.reduce(
+      (a, c) => a + Number(c.monto_rpm_usd ?? c.rpm ?? 0),
+      0
+    )
+    const rpmBs = comisionesSeleccionadas.reduce(
+      (a, c) => a + Number(c.monto_rpm_bs ?? 0),
+      0
+    )
+
+    return {
+      baseUsd: r2(baseUsd),
+      baseBs: r2(baseBs),
+      profesionalUsd: r2(profesionalUsd),
+      profesionalBs: r2(profesionalBs),
+      rpmUsd: r2(rpmUsd),
+      rpmBs: r2(rpmBs),
+      pendientes: comisionesSeleccionadas.length,
+    }
+  }, [comisionesSeleccionadas])
+
+  const totalSplits = useMemo(() => {
+    return r2(
+      splitsPago.reduce((acc, split) => {
+        const monto = Number(split.monto || 0)
+        return acc + (Number.isFinite(monto) ? monto : 0)
+      }, 0)
+    )
+  }, [splitsPago])
+
+  const montoFacturar = useMemo(() => {
+    return monedaPago === 'USD'
+      ? r2(resumenSeleccionado.profesionalUsd)
+      : r2(resumenSeleccionado.profesionalBs)
+  }, [monedaPago, resumenSeleccionado])
+
+  const restantePorAsignar = useMemo(
+    () => r2(montoFacturar - totalSplits),
+    [montoFacturar, totalSplits]
+  )
+
+  const splitsConMetodo = useMemo(() => {
+    return splitsPago.map((split) => {
+      const metodo = metodosPago.find((m) => m.id === split.metodoPagoId) || null
+      const metodoMoneda = getMetodoMoneda(metodo)
+      const montoLiquidacion = r2(Number(split.monto || 0))
+      const montoDescontar = convertirMonto(montoLiquidacion, monedaPago, metodoMoneda, tasaBCV)
+      const requiereConversion = !!metodo && metodoMoneda !== monedaPago
+      const saldo = getMetodoSaldo(metodo)
+
+      return {
+        ...split,
+        metodo,
+        metodoMoneda,
+        montoLiquidacion,
+        montoDescontar,
+        requiereConversion,
+        saldo,
+      }
+    })
+  }, [splitsPago, metodosPago, monedaPago, tasaBCV])
+
+  const requiereTasa = useMemo(() => {
+    return splitsConMetodo.some((split) => split.metodo && split.requiereConversion)
+  }, [splitsConMetodo])
+
+  useEffect(() => {
+    if (!requiereTasa) return
+    if (tasaBCV && tasaBCV > 0) return
+    void cargarTasaBCVAutomatica()
+  }, [requiereTasa, tasaBCV])
+
+  function toggleComision(idComision: string) {
+    setSelectedComisionIds((prev) =>
+      prev.includes(idComision) ? prev.filter((id) => id !== idComision) : [...prev, idComision]
+    )
+  }
+
+  function selectAllCurrentCurrency() {
+    if (allCurrentCurrencySelected) {
+      setSelectedComisionIds([])
+      return
+    }
+    setSelectedComisionIds(comisionesPendientesMoneda.map((c) => c.id))
+  }
+
+  function addSplit() {
+    setSplitsPago((prev) => [...prev, { id: crypto.randomUUID(), metodoPagoId: '', monto: '' }])
+  }
+
+  function removeSplit(idSplit: string) {
+    setSplitsPago((prev) => {
+      if (prev.length <= 1) return prev
+      return prev.filter((x) => x.id !== idSplit)
+    })
+  }
+
+  function updateSplit(idSplit: string, patch: Partial<SplitPago>) {
+    setSplitsPago((prev) => prev.map((x) => (x.id === idSplit ? { ...x, ...patch } : x)))
+  }
+
+  function fillRemainingOnSplit(idSplit: string) {
+    const otros = splitsPago
+      .filter((x) => x.id !== idSplit)
+      .reduce((acc, x) => acc + Number(x.monto || 0), 0)
+
+    const restante = r2(Math.max(montoFacturar - otros, 0))
+    updateSplit(idSplit, { monto: String(restante) })
+  }
+
+  async function liquidarSaldoDisponible() {
+    const pendientes = comisionesSeleccionadas
+
+    if (pendientes.length === 0) {
+      alert('Selecciona al menos una comisión pendiente.')
+      return
+    }
+
+    const splitsValidos = splitsPago
+      .map((s) => {
+        const metodo = metodosPago.find((m) => m.id === s.metodoPagoId) || null
+        const metodoMoneda = getMetodoMoneda(metodo)
+        const montoNum = r2(Number(s.monto || 0))
+        const montoDescontarMetodo = convertirMonto(montoNum, monedaPago, metodoMoneda, tasaBCV)
+
+        return {
+          ...s,
+          montoNum,
+          metodo,
+          metodoMoneda,
+          montoDescontarMetodo,
+          requiereConversion: !!metodo && metodoMoneda !== monedaPago,
+        }
+      })
+      .filter((s) => s.metodoPagoId && s.montoNum > 0)
+
+    if (splitsValidos.length === 0) {
+      alert('Debes indicar al menos un método de pago con monto.')
+      return
+    }
+
+    const requiereConversion = splitsValidos.some((s) => s.requiereConversion)
+
+    if (requiereConversion && (!tasaBCV || tasaBCV <= 0)) {
+      alert('No se pudo obtener la tasa automática. Indícala manualmente para hacer la conversión.')
+      return
+    }
+
+    const metodoIds = new Set<string>()
+    for (const split of splitsValidos) {
+      if (metodoIds.has(split.metodoPagoId)) {
+        alert('No repitas el mismo método en dos líneas. Usa una sola línea por método.')
+        return
+      }
+      metodoIds.add(split.metodoPagoId)
+    }
+
+    const sumaSplits = r2(splitsValidos.reduce((acc, x) => acc + x.montoNum, 0))
+    if (sumaSplits !== montoFacturar) {
+      alert(
+        `La suma de métodos (${formatMontoByMoneda(sumaSplits, monedaPago)}) debe ser igual al monto a liquidar (${formatMontoByMoneda(montoFacturar, monedaPago)}).`
+      )
+      return
+    }
+
+    for (const split of splitsValidos) {
+      if (!split.metodo) {
+        alert('Uno de los métodos seleccionados no es válido.')
+        return
+      }
+
+      if (split.requiereConversion && (split.montoDescontarMetodo === null || split.montoDescontarMetodo <= 0)) {
+        alert(`No se pudo calcular la conversión para el método "${split.metodo.nombre}".`)
+        return
+      }
+
+      const saldo = getMetodoSaldo(split.metodo)
+      const montoContraMetodo = split.requiereConversion
+        ? Number(split.montoDescontarMetodo || 0)
+        : split.montoNum
+
+      if (saldo > 0 && montoContraMetodo > saldo) {
+        alert(
+          `El método "${split.metodo.nombre}" no tiene saldo suficiente.\nSaldo: ${formatMontoByMoneda(
+            saldo,
+            split.metodoMoneda
+          )}\nIntentas usar: ${formatMontoByMoneda(montoContraMetodo, split.metodoMoneda)}`
+        )
+        return
+      }
+    }
+
+    const montoPagoNum = montoFacturar
+
+    const montoEquivalenteUsd =
+      monedaPago === 'USD'
+        ? r2(montoPagoNum)
+        : tasaBCV && tasaBCV > 0
+          ? r2(montoPagoNum / tasaBCV)
+          : r2(resumenSeleccionado.profesionalUsd)
+
+    const montoEquivalenteBs =
+      monedaPago === 'BS'
+        ? r2(montoPagoNum)
+        : tasaBCV && tasaBCV > 0
+          ? r2(montoPagoNum * tasaBCV)
+          : r2(resumenSeleccionado.profesionalBs)
+
+    const fechaFacturacion = getTodayLocal()
+    const fechaInicioRango = [...pendientes].map((c) => c.fecha).sort()[0]
+    const fechaFinRango = [...pendientes]
+      .map((c) => c.fecha)
+      .sort()
+      .slice(-1)[0]
+
+    const resumenMetodos = splitsValidos
+      .map((s) => {
+        const nombre = s.metodo?.nombre || 'Método'
+        const cartera = s.metodo?.cartera?.nombre ? ` / ${s.metodo.cartera.nombre}` : ''
+        const baseTxt = formatMontoByMoneda(s.montoNum, monedaPago)
+
+        if (!s.requiereConversion) {
+          return `• ${nombre}${cartera}: ${baseTxt}`
+        }
+
+        const convertidoTxt = formatMontoByMoneda(s.montoDescontarMetodo, s.metodoMoneda)
+        return `• ${nombre}${cartera}: ${baseTxt} → se descuenta ${convertidoTxt}`
+      })
+      .join('\n')
+
+    const ok = window.confirm(
+      `¿Liquidar comisiones seleccionadas?\n\n` +
+        `Registros: ${pendientes.length}\n` +
+        `Moneda liquidación: ${monedaPago}\n` +
+        `Monto total: ${formatMontoByMoneda(montoPagoNum, monedaPago)}\n` +
+        `${requiereConversion && tasaBCV ? `Tasa BCV: ${tasaBCV}\n` : ''}\n` +
+        `Métodos:\n${resumenMetodos}`
+    )
+
+    if (!ok) return
+
+    setFacturando(true)
+
+    try {
+      const notasFinales = [
+        notasLiquidacion.trim() ||
+          `Liquidación manual de saldo disponible - ${empleado?.nombre || 'Profesional'}`,
+        '',
+        `Moneda liquidación: ${monedaPago}`,
+        ...(requiereConversion && tasaBCV ? [`Tasa BCV aplicada: ${tasaBCV}`] : []),
+        '',
+        'Desglose de pago:',
+        ...splitsValidos.map((s) => {
+          const nombre = s.metodo?.nombre || 'Método'
+          const cartera = s.metodo?.cartera?.nombre ? ` (${s.metodo.cartera.nombre})` : ''
+          const montoTxt = formatMontoByMoneda(s.montoNum, monedaPago)
+
+          if (!s.requiereConversion) {
+            return `- ${nombre}${cartera}: ${montoTxt}`
+          }
+
+          const convertidoTxt = formatMontoByMoneda(s.montoDescontarMetodo, s.metodoMoneda)
+          return `- ${nombre}${cartera}: ${montoTxt} -> descontado ${convertidoTxt}`
+        }),
+      ].join('\n')
+
+      const { data: liquidacion, error: liqError } = await supabase
+        .from('comisiones_liquidaciones')
+        .insert({
+          empleado_id: id,
+          fecha_inicio: fechaInicioRango,
+          fecha_fin: fechaFinRango,
+          total_base: resumenSeleccionado.baseUsd,
+          total_rpm: resumenSeleccionado.rpmUsd,
+          total_profesional: resumenSeleccionado.profesionalUsd,
+          cantidad_citas: pendientes.length,
+          porcentaje_rpm: 100 - (empleado?.comision_plan_porcentaje ?? 40),
+          porcentaje_profesional: empleado?.comision_plan_porcentaje ?? 40,
+          estado: 'liquidado',
+          pagado_at: new Date().toISOString(),
+          notas: notasFinales,
+          moneda_pago: monedaPago,
+          monto_pago: montoPagoNum,
+          tasa_bcv: requiereConversion ? tasaBCV : null,
+          monto_equivalente_usd: montoEquivalenteUsd,
+          monto_equivalente_bs: montoEquivalenteBs,
+          metodo_pago_id: null,
+          metodo_pago_v2_id: splitsValidos[0]?.metodoPagoId || null,
+          referencia: referencia.trim() || null,
+        })
+        .select('id')
+        .single()
+
+      if (liqError || !liquidacion) {
+        throw new Error(liqError?.message || 'No se pudo crear la liquidación.')
+      }
+
+      const { data: pagoEmpleado, error: pagoEmpleadoError } = await supabase
+        .from('pagos_empleados')
+        .insert({
+          empleado_id: id,
+          fecha: fechaFacturacion,
+          tipo: 'liquidacion_manual',
+          moneda_pago: monedaPago,
+          monto_pago: montoPagoNum,
+          tasa_bcv: requiereConversion ? tasaBCV : null,
+          monto_equivalente_usd: montoEquivalenteUsd,
+          monto_equivalente_bs: montoEquivalenteBs,
+          metodo_pago_id: null,
+          metodo_pago_v2_id: splitsValidos[0]?.metodoPagoId || null,
+          referencia: referencia.trim() || null,
+          liquidacion_id: liquidacion.id,
+          notas: notasFinales,
+        })
+        .select('id')
+        .single()
+
+      if (pagoEmpleadoError || !pagoEmpleado) {
+        throw new Error(pagoEmpleadoError?.message || 'No se pudo crear el pago al empleado.')
+      }
+
+      const detalleRows = pendientes.map((c) => ({
+        pago_empleado_id: pagoEmpleado.id,
+        comision_id: c.id,
+        monto_usd: Number(c.monto_profesional_usd ?? c.profesional ?? 0),
+        monto_bs: Number(c.monto_profesional_bs ?? 0),
+      }))
+
+      const { error: detalleError } = await supabase
+        .from('pagos_empleados_detalle')
+        .insert(detalleRows)
+
+      if (detalleError) {
+        throw new Error(detalleError.message || 'No se pudo crear el detalle de la liquidación.')
+      }
+
+      const egresoIds: string[] = []
+
+      for (let i = 0; i < splitsValidos.length; i++) {
+        const split = splitsValidos[i]
+        const concepto = `Liquidación comisión - ${empleado?.nombre || 'Profesional'} - ${fechaFacturacion} - Parte ${i + 1}/${splitsValidos.length}`
+
+        const monedaMetodo = split.metodoMoneda
+        const montoContraMetodo = split.requiereConversion
+          ? Number(split.montoDescontarMetodo || 0)
+          : split.montoNum
+
+        const montoSplitUsd =
+          monedaMetodo === 'USD'
+            ? r2(montoContraMetodo)
+            : tasaBCV && tasaBCV > 0
+              ? r2(montoContraMetodo / tasaBCV)
+              : 0
+
+        const montoSplitBs =
+          monedaMetodo === 'BS'
+            ? r2(montoContraMetodo)
+            : tasaBCV && tasaBCV > 0
+              ? r2(montoContraMetodo * tasaBCV)
+              : 0
+
+        const { data: egreso, error: egresoError } = await supabase
+          .from('egresos')
+          .insert({
+            fecha: fechaFacturacion,
+            categoria: 'nomina',
+            concepto,
+            proveedor: empleado?.nombre || null,
+            monto: montoContraMetodo,
+            metodo_pago_id: null,
+            metodo_pago_v2_id: split.metodoPagoId,
+            estado: 'pagado',
+            notas:
+              `Liquidación parcial ${i + 1} de ${splitsValidos.length}\n` +
+              `Liquidación total: ${formatMontoByMoneda(montoPagoNum, monedaPago)}\n` +
+              `Parte aplicada a liquidación: ${formatMontoByMoneda(split.montoNum, monedaPago)}\n` +
+              `Monto descontado del método: ${formatMontoByMoneda(montoContraMetodo, monedaMetodo)}\n` +
+              notasFinales,
+            moneda: monedaMetodo,
+            tasa_bcv: split.requiereConversion ? tasaBCV : null,
+            monto_equivalente_usd: montoSplitUsd,
+            monto_equivalente_bs: montoSplitBs,
+            empleado_id: id,
+            referencia: referencia.trim() || null,
+          })
+          .select('id')
+          .single()
+
+        if (egresoError || !egreso) {
+          throw new Error(egresoError?.message || 'No se pudo crear uno de los egresos en finanzas.')
+        }
+
+        egresoIds.push(egreso.id)
+      }
+
+      const { error: liqUpdateError } = await supabase
+        .from('comisiones_liquidaciones')
+        .update({
+          pago_empleado_id: pagoEmpleado.id,
+          egreso_id: egresoIds[0] || null,
+        })
+        .eq('id', liquidacion.id)
+
+      if (liqUpdateError) {
+        throw new Error(liqUpdateError.message || 'No se pudo enlazar la liquidación.')
+      }
+
+      const { error: updError } = await supabase
+        .from('comisiones_detalle')
+        .update({
+          estado: 'liquidado',
+          liquidacion_id: liquidacion.id,
+          pagado: true,
+          fecha_pago: fechaFacturacion,
+          pago_empleado_id: pagoEmpleado.id,
+        })
+        .in(
+          'id',
+          pendientes.map((c) => c.id)
+        )
+
+      if (updError) {
+        throw new Error(updError.message || 'No se pudieron actualizar las comisiones.')
+      }
+
+      alert(
+        `✅ Liquidación realizada.\n\n` +
+          `Moneda: ${monedaPago}\n` +
+          `Monto: ${formatMontoByMoneda(montoPagoNum, monedaPago)}\n` +
+          `Registros liquidados: ${pendientes.length}\n` +
+          `Métodos usados: ${splitsValidos.length}`
+      )
+
+      setSelectedComisionIds([])
+      setSplitsPago([{ id: crypto.randomUUID(), metodoPagoId: '', monto: '' }])
+      setReferencia('')
+      setNotasLiquidacion('')
+      setTasaBCV(null)
+      setTasaBCVAuto(null)
+      await loadAll()
+    } catch (err: any) {
+      console.error(err)
+      alert(err?.message || 'Error al liquidar el saldo disponible.')
+    } finally {
+      setFacturando(false)
+    }
+  }
+
+  if (!mounted || loading) {
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-white/55">Personal</p>
+        <h1 className="text-2xl font-semibold text-white">Perfil</h1>
+        <Card className="p-6">
+          <p className="text-sm text-white/55">Cargando...</p>
+        </Card>
+      </div>
+    )
+  }
+
+  if (!empleado) {
+    return (
+      <div className="space-y-4">
+        <p className="text-sm text-white/55">Personal</p>
+        <h1 className="text-2xl font-semibold text-white">Perfil</h1>
+        <Card className="p-6">
+          <p className="text-sm text-rose-400">{errorMsg || 'No encontrado.'}</p>
+        </Card>
+      </div>
+    )
+  }
 
   return (
-    <div className="space-y-6 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-
-        {/* Header */}
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div>
-            <Link href="/admin/finanzas" className="inline-flex items-center gap-2 text-sm text-white/55 transition hover:text-white/90">
-              <ArrowLeft className="h-4 w-4" />Volver a Finanzas
-            </Link>
-            <p className="mt-4 text-sm text-white/55">Finanzas</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white sm:text-3xl">Ingresos, saldos y consumos</h1>
-            <p className="mt-2 text-sm text-white/55">Registra ventas del inventario, recargas, deudas y créditos de clientes o empleados.</p>
-          </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 xl:w-auto">
-            {[
-              { label: 'Total USD', value: formatearMoneda(totales.totalUSD, 'USD') },
-              { label: 'Total Bs', value: formatearMoneda(totales.totalBS, 'BS') },
-              { label: 'Operaciones', value: String(totales.cantidad) },
-            ].map((kpi) => (
-              <div key={kpi.label} className="rounded-3xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl">
-                <p className="text-xs text-white/55">{kpi.label}</p>
-                <p className="mt-1 text-lg font-semibold text-white">{kpi.value}</p>
-              </div>
-            ))}
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <p className="text-sm text-white/55">Personal</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">
+            {empleado.nombre}
+          </h1>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-sm text-white/55 capitalize">{empleado.rol}</span>
+            {empleado.especialidad && (
+              <span className="text-sm text-white/35">· {empleado.especialidad}</span>
+            )}
+            <span
+              className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${estadoBadge(
+                empleado.estado
+              )}`}
+            >
+              {empleado.estado}
+            </span>
           </div>
         </div>
 
-        {/* Botones nuevo */}
-        {!showForm && (
-          <div className="flex flex-wrap gap-3">
-            <button onClick={() => { setVentaSinCliente(false); setShowForm(true) }}
-              className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-medium text-white/85 transition hover:bg-white/[0.06]">
-              <Plus className="h-4 w-4" />Nuevo ingreso
-            </button>
-            <button onClick={() => { setVentaSinCliente(true); setShowForm(true) }}
-              className="inline-flex items-center gap-2 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-5 py-3 text-sm font-medium text-amber-300 transition hover:bg-amber-400/15">
-              <Zap className="h-4 w-4" />Venta rápida
-            </button>
-          </div>
-        )}
+        <div className="grid grid-cols-2 gap-3">
+          <ActionCard
+            title="Editar"
+            description="Modificar información."
+            href={`/admin/personas/personal/${id}/editar`}
+          />
+          <ActionCard
+            title="Estadísticas"
+            description="Ver métricas."
+            href={`/admin/personas/personal/${id}/estadisticas`}
+          />
+        </div>
+      </div>
 
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-6">
+        <StatCard title="Clientes" value={clientes.length} color="text-sky-400" />
+        <StatCard title="Actividad hoy" value={stats.hoyTotal} color="text-violet-400" />
+        <StatCard
+          title="Disponible USD"
+          value={formatMoney(stats.comisionPendienteUsd)}
+          color="text-emerald-400"
+        />
+        <StatCard
+          title="Disponible Bs"
+          value={formatBs(stats.comisionPendienteBs)}
+          color="text-amber-300"
+        />
+        <StatCard
+          title="Debe"
+          value={formatMoney(estadoCuentaEmpleado?.saldo_pendiente_neto_usd || 0)}
+          color="text-rose-300"
+        />
+        <StatCard
+          title="Crédito"
+          value={formatMoney(estadoCuentaEmpleado?.saldo_favor_neto_usd || 0)}
+          color="text-cyan-300"
+        />
+      </div>
+
+      <div className="flex gap-1 rounded-2xl border border-white/10 bg-white/[0.02] p-1">
+        {([
+          { key: 'info', label: 'Información' },
+          { key: 'agenda', label: `Agenda (${agendaFiltrada.length})` },
+          { key: 'comisiones', label: 'Comisiones' },
+        ] as { key: Tab; label: string }[]).map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTab(t.key)}
+            className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
+              tab === t.key ? 'bg-white/[0.08] text-white' : 'text-white/45 hover:text-white/70'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'info' && (
         <div className="grid gap-6 xl:grid-cols-3">
-
-          {/* ── FORMULARIO ── */}
-          {showForm && (
-            <div className="xl:col-span-1">
-              <form onSubmit={handleSubmit} className={`${panelCls} space-y-5 p-6`}>
-
-                {/* Título */}
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-lg font-semibold text-white">
-                        {editingId ? 'Editar ingreso' : ventaSinCliente ? 'Venta rápida' : 'Nuevo ingreso'}
-                      </h2>
-                      {ventaSinCliente && !editingId && (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/20 bg-amber-400/10 px-2.5 py-1 text-xs font-medium text-amber-300">
-                          <Zap className="h-3 w-3" />Sin cliente
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-1 text-xs text-white/45">
-                      {ventaSinCliente && !editingId ? 'Pago inmediato. No genera historial de cliente.' : 'Completa los datos del ingreso.'}
-                    </p>
-                  </div>
-                  <button type="button" onClick={resetForm}
-                    className="rounded-full border border-white/10 bg-white/[0.03] p-2 text-white/50 transition hover:bg-white/[0.06] hover:text-white">
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
-
-                {/* Toggle con/sin cliente */}
-                {!editingId && (
-                  <div className="grid grid-cols-2 gap-2">
-                    <button type="button" onClick={() => setVentaSinCliente(false)}
-                      className={`rounded-2xl border px-3 py-2.5 text-sm font-medium transition ${!ventaSinCliente ? 'border-violet-400/30 bg-violet-500/15 text-violet-300' : 'border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.06]'}`}>
-                      Con cliente
-                    </button>
-                    <button type="button" onClick={() => setVentaSinCliente(true)}
-                      className={`inline-flex items-center justify-center gap-1.5 rounded-2xl border px-3 py-2.5 text-sm font-medium transition ${ventaSinCliente ? 'border-amber-400/30 bg-amber-400/15 text-amber-300' : 'border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.06]'}`}>
-                      <Zap className="h-3.5 w-3.5" />Venta rápida
-                    </button>
-                  </div>
-                )}
-
-                {/* Fecha */}
+          <div className="space-y-6 xl:col-span-2">
+            <Section title="Información" description="Datos de contacto.">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <label className={labelCls}>Fecha *</label>
-                  <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className={inputCls} required />
+                  <p className="text-xs text-white/45">Email</p>
+                  <p className="mt-1 text-sm text-white">{empleado.email || '—'}</p>
                 </div>
-
-                {/* Consumidor */}
-                {!ventaSinCliente && !editingId && (
-                  <div>
-                    <label className={labelCls}>Consumidor *</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button type="button" onClick={() => { setTipoConsumidor('cliente'); setEmpleadoId(''); setEstadoCuentaEmpleado(null); setCuentasPendientesEmpleado([]) }}
-                        className={`rounded-2xl border px-3 py-2.5 text-sm font-medium transition ${tipoConsumidor === 'cliente' ? 'border-violet-400/30 bg-violet-500/15 text-violet-300' : 'border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.06]'}`}>
-                        Cliente
-                      </button>
-                      <button type="button" onClick={() => { setTipoConsumidor('empleado'); setClienteId(''); setEstadoCuentaCliente(null); setCuentasPendientesCliente([]) }}
-                        className={`rounded-2xl border px-3 py-2.5 text-sm font-medium transition ${tipoConsumidor === 'empleado' ? 'border-emerald-400/30 bg-emerald-500/15 text-emerald-300' : 'border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.06]'}`}>
-                        Empleado
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Tipo de ingreso — solo con consumidor */}
-                {!ventaSinCliente && (
-                  <div>
-                    <label className={labelCls}>Tipo de ingreso *</label>
-                    <select value={tipoIngreso}
-                      onChange={(e) => {
-                        const next = e.target.value as TipoIngresoUI
-                        setTipoIngreso(next); setProductoId(''); setCantidad(1)
-                        if (next === 'saldo') { setDestinoSaldo('credito'); setConcepto('Recarga de saldo a favor') }
-                        else setConcepto('')
-                      }}
-                      className={inputCls} disabled={!!editingId}>
-                      <option value="producto" className="bg-[#11131a]">Venta de producto</option>
-                      <option value="saldo" className="bg-[#11131a]">Recarga de saldo</option>
-                    </select>
-                    {editingId && <p className="mt-2 text-xs text-amber-300">Al editar, el tipo se mantiene como venta de producto.</p>}
-                  </div>
-                )}
-
-                {/* Bloque cliente */}
-                {!ventaSinCliente && tipoConsumidor === 'cliente' && (
-                  <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                    <div>
-                      <label className={labelCls}>Cliente *</label>
-                      <ClienteSearch clientes={clientes} value={clienteId} onChange={(id) => setClienteId(id)} />
-                      {clientePrefill && clienteSeleccionado && <p className="mt-2 text-xs text-cyan-300">Cliente cargado automáticamente desde su ficha.</p>}
-                    </div>
-
-                    {clienteSeleccionado && (
-                      <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                        <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2">
-                          <User2 className="h-4 w-4 text-white/70" />
-                        </div>
-                        <div className="min-w-0 text-xs text-white/60">
-                          <p className="truncate font-medium text-white">{clienteSeleccionado.nombre}</p>
-                          {clienteSeleccionado.telefono && <p>{clienteSeleccionado.telefono}</p>}
-                          {clienteSeleccionado.email && <p className="truncate">{clienteSeleccionado.email}</p>}
-                        </div>
-                      </div>
-                    )}
-
-                    {clienteSeleccionado && estadoCuentaCliente && (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
-                          <p className="text-sm font-medium text-white">Estado financiero</p>
-                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoFinancieroBadge(estadoCuentaCliente)}`}>
-                            {estadoFinancieroLabel(estadoCuentaCliente)}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2">
-                          {[
-                            { label: 'Deuda total', val: formatearMoneda(Number(estadoCuentaCliente.total_pendiente_usd || 0), 'USD'), sub: formatearMoneda(Number(estadoCuentaCliente.total_pendiente_bs || 0), 'BS') },
-                            { label: 'Crédito disp.', val: formatearMoneda(Number(estadoCuentaCliente.credito_disponible_usd || 0), 'USD'), sub: formatearMoneda(Number(estadoCuentaCliente.credito_disponible_bs || 0), 'BS') },
-                            { label: 'Neto', val: formatearMoneda(Number(estadoCuentaCliente.saldo_pendiente_neto_usd || 0), 'USD'), sub: formatearMoneda(Number(estadoCuentaCliente.saldo_pendiente_neto_bs || 0), 'BS') },
-                          ].map((kpi) => (
-                            <div key={kpi.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-2.5">
-                              <p className="text-[10px] uppercase tracking-wide text-white/40">{kpi.label}</p>
-                              <p className="mt-1 text-xs font-semibold text-white">{kpi.val}</p>
-                              <p className="text-[10px] text-white/35">{kpi.sub}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Destino saldo cuando es recarga y hay deuda */}
-                    {clienteSeleccionado && clienteTieneDeuda && tipoIngreso === 'saldo' && (
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium uppercase tracking-wide text-white/55">¿A dónde va este pago?</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button type="button" onClick={() => setDestinoSaldo('deuda')}
-                            className={`rounded-2xl border p-3 text-left text-sm transition ${destinoSaldo === 'deuda' ? 'border-rose-400/30 bg-rose-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'}`}>
-                            <p className="font-medium text-white">Pagar deuda</p>
-                            <p className="mt-0.5 text-xs text-white/40">Aplica a una cuenta pendiente.</p>
-                          </button>
-                          <button type="button" onClick={() => setDestinoSaldo('credito')}
-                            className={`rounded-2xl border p-3 text-left text-sm transition ${destinoSaldo === 'credito' ? 'border-emerald-400/30 bg-emerald-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'}`}>
-                            <p className="font-medium text-white">Agregar crédito</p>
-                            <p className="mt-0.5 text-xs text-white/40">Guarda como saldo a favor.</p>
-                          </button>
-                        </div>
-
-                        {destinoSaldo === 'deuda' && cuentasPendientesCliente.length > 0 && (
-                          <>
-                            <SelectorDeuda cuentas={cuentasPendientesCliente}
-                              seleccionadaId={cuentaCobrarSeleccionadaId}
-                              onSeleccionar={(id) => {
-                                setCuentaCobrarSeleccionadaId(id)
-                                const cuenta = cuentasPendientesCliente.find((c) => c.id === id)
-                                if (cuenta) {
-                                  setConcepto(`Abono: ${cuenta.concepto}`)
-                                  setMontoAbonoDeuda(String(r2(Number(cuenta.saldo_usd || 0))))
-                                }
-                              }} />
-                            {cuentaPendienteSeleccionada && (
-                              <div className="rounded-2xl border border-violet-400/20 bg-violet-500/[0.05] p-3">
-                                <div className="mb-3 flex items-center justify-between gap-3">
-                                  <div>
-                                    <p className="text-sm font-medium text-white">Monto a abonar</p>
-                                    <p className="text-xs text-white/45">Puedes registrar un pago parcial o el saldo completo.</p>
-                                  </div>
-                                  <button type="button"
-                                    onClick={() => setMontoAbonoDeuda(String(r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))))}
-                                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]">
-                                    Usar saldo completo
-                                  </button>
-                                </div>
-                                <div className="grid gap-3 sm:grid-cols-2">
-                                  <div>
-                                    <label className={labelCls}>Abono USD</label>
-                                    <input type="number" min={0}
-                                      step="0.01" value={montoAbonoDeuda} onChange={(e) => setMontoAbonoDeuda(e.target.value)}
-                                      className={inputCls} placeholder="0.00" />
-                                  </div>
-                                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                                    <p className="text-xs text-white/45">Saldo pendiente</p>
-                                    <p className="mt-1 text-sm font-semibold text-white">{formatearMoneda(Number(cuentaPendienteSeleccionada.saldo_usd || 0), 'USD')}</p>
-                                    <p className="mt-2 text-xs text-white/45">Saldo restante</p>
-                                    <p className="mt-1 text-sm font-semibold text-amber-300">
-                                      {formatearMoneda(Math.max(0, r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0) - montoAbonoDeudaNumero)), 'USD')}
-                                    </p>
-                                    {montoAbonoDeudaNumero > Number(cuentaPendienteSeleccionada.saldo_usd || 0) && (
-                                      <p className="mt-2 text-[11px] text-violet-300">
-                                        Se actualizará la deuda a {formatearMoneda(r2(Number(cuentaPendienteSeleccionada.monto_total_usd || 0) + (montoAbonoDeudaNumero - Number(cuentaPendienteSeleccionada.saldo_usd || 0))), 'USD')} antes de cobrar.
-                                      </p>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                          </>
-                        )}
-                        {destinoSaldo === 'deuda' && cuentasPendientesCliente.length === 0 && (
-                          <div className="flex items-center gap-2 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-3">
-                            <AlertCircle className="h-4 w-4 text-amber-300" />
-                            <p className="text-xs text-amber-300">No se encontraron deudas activas para este cliente.</p>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Bloque empleado */}
-                {!ventaSinCliente && tipoConsumidor === 'empleado' && (
-                  <div className="space-y-3 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4">
-                    <div>
-                      <label className={labelCls}>Empleado *</label>
-                      <ClienteSearch clientes={empleados} value={empleadoId} onChange={(id) => setEmpleadoId(id)} />
-                      {empleadoPrefill && empleadoSeleccionado && <p className="mt-2 text-xs text-cyan-300">Empleado cargado automáticamente desde su ficha.</p>}
-                    </div>
-
-                    {empleadoSeleccionado && (
-                      <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                        <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2">
-                          <User2 className="h-4 w-4 text-white/70" />
-                        </div>
-                        <div className="min-w-0 text-xs text-white/60">
-                          <p className="truncate font-medium text-white">{empleadoSeleccionado.nombre}</p>
-                          {empleadoSeleccionado.rol && <p className="capitalize">{empleadoSeleccionado.rol}</p>}
-                          {empleadoSeleccionado.telefono && <p>{empleadoSeleccionado.telefono}</p>}
-                          {empleadoSeleccionado.email && <p className="truncate">{empleadoSeleccionado.email}</p>}
-                        </div>
-                      </div>
-                    )}
-
-                    {empleadoSeleccionado && estadoCuentaEmpleado && (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
-                          <p className="text-sm font-medium text-white">Estado financiero empleado</p>
-                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${Number(estadoCuentaEmpleado.saldo_pendiente_neto_usd || 0) > 0.01 ? 'border-rose-400/20 bg-rose-400/10 text-rose-300' : Number(estadoCuentaEmpleado.saldo_favor_neto_usd || 0) > 0.01 ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300' : 'border-white/10 bg-white/[0.04] text-white/70'}`}>
-                            {Number(estadoCuentaEmpleado.saldo_pendiente_neto_usd || 0) > 0.01 ? 'Debe' : Number(estadoCuentaEmpleado.saldo_favor_neto_usd || 0) > 0.01 ? 'Crédito' : 'Al día'}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-3 gap-2">
-                          {[
-                            { label: 'Deuda total', val: formatearMoneda(Number(estadoCuentaEmpleado.total_pendiente_usd || 0), 'USD') },
-                            { label: 'Crédito disp.', val: formatearMoneda(Number(estadoCuentaEmpleado.credito_disponible_usd || 0), 'USD') },
-                            { label: 'Neto', val: formatearMoneda(Number(estadoCuentaEmpleado.saldo_pendiente_neto_usd || 0), 'USD') },
-                          ].map((kpi) => (
-                            <div key={kpi.label} className="rounded-2xl border border-white/10 bg-white/[0.03] p-2.5">
-                              <p className="text-[10px] uppercase tracking-wide text-white/40">{kpi.label}</p>
-                              <p className="mt-1 text-xs font-semibold text-white">{kpi.val}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {empleadoSeleccionado && tipoIngreso === 'producto' && (
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium uppercase tracking-wide text-white/55">Cobro del consumo</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button type="button" onClick={() => setModoCobroEmpleadoProducto('pagado')}
-                            className={`rounded-2xl border p-3 text-left text-sm transition ${modoCobroEmpleadoProducto === 'pagado' ? 'border-emerald-400/30 bg-emerald-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'}`}>
-                            <p className="font-medium text-white">Paga ahora</p>
-                            <p className="mt-0.5 text-xs text-white/40">Registra el pago.</p>
-                          </button>
-                          <button type="button" onClick={() => setModoCobroEmpleadoProducto('deuda')}
-                            className={`rounded-2xl border p-3 text-left text-sm transition ${modoCobroEmpleadoProducto === 'deuda' ? 'border-rose-400/30 bg-rose-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'}`}>
-                            <p className="font-medium text-white">Dejar deuda</p>
-                            <p className="mt-0.5 text-xs text-white/40">Crea cuenta por cobrar.</p>
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {empleadoSeleccionado && empleadoTieneDeuda && tipoIngreso === 'saldo' && (
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium uppercase tracking-wide text-white/55">¿A dónde va este pago?</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button type="button" onClick={() => setDestinoSaldo('deuda')}
-                            className={`rounded-2xl border p-3 text-left text-sm transition ${destinoSaldo === 'deuda' ? 'border-rose-400/30 bg-rose-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'}`}>
-                            <p className="font-medium text-white">Pagar deuda</p>
-                            <p className="mt-0.5 text-xs text-white/40">Aplica a cuenta pendiente.</p>
-                          </button>
-                          <button type="button" onClick={() => setDestinoSaldo('credito')}
-                            className={`rounded-2xl border p-3 text-left text-sm transition ${destinoSaldo === 'credito' ? 'border-emerald-400/30 bg-emerald-400/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05]'}`}>
-                            <p className="font-medium text-white">Agregar crédito</p>
-                            <p className="mt-0.5 text-xs text-white/40">Saldo a favor.</p>
-                          </button>
-                        </div>
-
-                        {destinoSaldo === 'deuda' && cuentasPendientesEmpleado.length > 0 && (
-                          <>
-                            <SelectorDeuda cuentas={cuentasPendientesEmpleado as any} seleccionadaId={cuentaCobrarSeleccionadaId}
-                              onSeleccionar={(id) => {
-                                setCuentaCobrarSeleccionadaId(id)
-                                const cuenta = cuentasPendientesEmpleado.find((c) => c.id === id)
-                                if (cuenta) {
-                                  setConcepto(`Abono empleado: ${cuenta.concepto}`)
-                                  setMontoAbonoDeuda(String(r2(Number(cuenta.saldo_usd || 0))))
-                                }
-                              }} />
-                            {cuentaPendienteSeleccionada && (
-                              <div className="rounded-2xl border border-violet-400/20 bg-violet-500/[0.05] p-3">
-                                <div className="mb-3 flex items-center justify-between gap-3">
-                                  <div>
-                                    <p className="text-sm font-medium text-white">Monto a abonar</p>
-                                    <p className="text-xs text-white/45">Puedes registrar un pago parcial o completo.</p>
-                                  </div>
-                                  <button type="button" onClick={() => setMontoAbonoDeuda(String(r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))))}
-                                    className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-white/75 transition hover:bg-white/[0.06]">
-                                    Usar saldo completo
-                                  </button>
-                                </div>
-                                <input type="number" min={0} step="0.01"
-                                  value={montoAbonoDeuda} onChange={(e) => setMontoAbonoDeuda(e.target.value)} className={inputCls} placeholder="0.00" />
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Aviso venta rápida */}
-                {ventaSinCliente && !editingId && (
-                  <div className="flex items-start gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] p-3">
-                    <Zap className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
-                    <p className="text-xs text-amber-200/90">
-                      Modo venta rápida: no se asocia ningún cliente. El pago es obligatorio e inmediato. No genera crédito ni deuda.
-                    </p>
-                  </div>
-                )}
-
-                {/* Producto */}
-                {tipoIngreso === 'producto' && (
-                  <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                    <div>
-                      <label className={labelCls}>Producto *</label>
-                      <select value={productoId}
-                        onChange={(e) => {
-                          const id = e.target.value; setProductoId(id)
-                          const prod = productos.find((p) => p.id === id)
-                          if (prod) setConcepto(`Venta de ${prod.nombre} x${cantidad}`)
-                        }}
-                        className={inputCls} required disabled={!!editingId}>
-                        <option value="" className="bg-[#11131a]">Seleccionar producto...</option>
-                        {productos.map((prod) => (
-                          <option key={prod.id} value={prod.id} className="bg-[#11131a]">
-                            {prod.nombre} - Stock: {prod.cantidad_actual} {prod.unidad_medida}
-                          </option>
-                        ))}
-                      </select>
-                      {editingId && <p className="mt-2 text-xs text-amber-300">Al editar, producto y cantidad quedan bloqueados.</p>}
-                    </div>
-                    {productoSeleccionado && (
-                      <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                        <div className="rounded-xl border border-white/10 bg-white/[0.04] p-2">
-                          <Package2 className="h-4 w-4 text-white/70" />
-                        </div>
-                        <div className="min-w-0 text-xs text-white/60">
-                          <p className="truncate font-medium text-white">{productoSeleccionado.nombre}</p>
-                          <p>Stock: {productoSeleccionado.cantidad_actual} {productoSeleccionado.unidad_medida}</p>
-                          <p>Precio: {formatearMoneda(Number(productoSeleccionado.precio_venta_usd || 0), 'USD')}</p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Cantidad */}
-                {tipoIngreso === 'producto' && (
-                  <div>
-                    <label className={labelCls}>Cantidad *</label>
-                    <input type="number" min="1" step="1" value={cantidad}
-                      onChange={(e) => {
-                        const v = Number(e.target.value) || 1; setCantidad(v)
-                        if (productoSeleccionado) setConcepto(`Venta de ${productoSeleccionado.nombre} x${v}`)
-                      }}
-                      className={inputCls} required disabled={!!editingId} />
-                    {productoSeleccionado && (
-                      <p className="mt-1 text-xs text-white/45">Disponible: {formatQty(productoSeleccionado.cantidad_actual)} {productoSeleccionado.unidad_medida}</p>
-                    )}
-                  </div>
-                )}
-
-                {/* Concepto */}
                 <div>
-                  <label className={labelCls}>Concepto</label>
-                  <input type="text" value={concepto} onChange={(e) => setConcepto(e.target.value)} className={inputCls} required />
+                  <p className="text-xs text-white/45">Teléfono</p>
+                  <p className="mt-1 text-sm text-white">{empleado.telefono || '—'}</p>
                 </div>
+                <div>
+                  <p className="text-xs text-white/45">Rol</p>
+                  <p className="mt-1 text-sm capitalize text-white">{empleado.rol}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-white/45">Miembro desde</p>
+                  <p className="mt-1 text-sm text-white">
+                    {formatDate(empleado.created_at.slice(0, 10))}
+                  </p>
+                </div>
+              </div>
+            </Section>
 
-                {/* Resumen precio */}
-                {tipoIngreso === 'producto' && productoSeleccionado && (
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-white/55">Precio unitario</span>
-                      <span className="font-semibold text-white">{formatearMoneda(precioUnitarioUSD, 'USD')}</span>
-                    </div>
-                    <div className="mt-2 flex justify-between text-sm">
-                      <span className="text-white/55">Total</span>
-                      <span className="text-lg font-bold text-white">{formatearMoneda(totalUSD, 'USD')}</span>
-                    </div>
-                  </div>
-                )}
+            <Section title="Estado de cuenta" description="Deuda, crédito y consumos registrados al empleado.">
+              <div className="grid gap-3 sm:grid-cols-4">
+                <Card className="border-rose-400/20 bg-rose-400/5 p-4">
+                  <p className="text-xs text-white/45">Deuda total</p>
+                  <p className="mt-1 text-lg font-bold text-rose-300">
+                    {formatMoney(estadoCuentaEmpleado?.total_pendiente_usd || 0)}
+                  </p>
+                </Card>
+                <Card className="border-cyan-400/20 bg-cyan-400/5 p-4">
+                  <p className="text-xs text-white/45">Crédito disponible</p>
+                  <p className="mt-1 text-lg font-bold text-cyan-300">
+                    {formatMoney(estadoCuentaEmpleado?.credito_disponible_usd || 0)}
+                  </p>
+                </Card>
+                <Card className="border-amber-400/20 bg-amber-400/5 p-4">
+                  <p className="text-xs text-white/45">Neto pendiente</p>
+                  <p className="mt-1 text-lg font-bold text-amber-300">
+                    {formatMoney(estadoCuentaEmpleado?.saldo_pendiente_neto_usd || 0)}
+                  </p>
+                </Card>
+                <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
+                  <p className="text-xs text-white/45">Saldo a favor neto</p>
+                  <p className="mt-1 text-lg font-bold text-emerald-300">
+                    {formatMoney(estadoCuentaEmpleado?.saldo_favor_neto_usd || 0)}
+                  </p>
+                </Card>
+              </div>
 
-                {/* ══ BLOQUE DE PAGO ══ */}
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <Link
+                  href={`/admin/finanzas/ingresos?empleado=${id}&tipoIngreso=producto`}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+                >
+                  Registrar consumo
+                </Link>
+                <Link
+                  href={`/admin/finanzas/ingresos?empleado=${id}&tipoIngreso=saldo&destino=deuda`}
+                  className="rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm font-semibold text-rose-300 transition hover:bg-rose-400/15"
+                >
+                  Abonar deuda
+                </Link>
+                <Link
+                  href={`/admin/finanzas/ingresos?empleado=${id}&tipoIngreso=saldo&destino=credito`}
+                  className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-400/15"
+                >
+                  Agregar crédito
+                </Link>
+              </div>
 
-                {/* Caso A: venta con cliente, nuevo registro → PagoConDeudaSelector */}
-                {tipoIngreso === 'producto' && !ventaSinCliente && tipoConsumidor === 'cliente' && !editingId && clienteId && productoId && totalUSD > 0 && (
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium text-white/75">Cobro</p>
-                    <PagoConDeudaSelector
-                      key={pagoConDeudaKey}
-                      montoTotal={totalUSD}
-                      fecha={fecha}
-                      metodosPago={metodosPagoBase}
-                      value={pagoConDeudaState}
-                      onChange={setPagoConDeudaState}
-                      concepto={concepto || `Venta de ${productoSeleccionado?.nombre || ''}`}
-                      clienteNombre={clienteSeleccionado?.nombre || ''}
-                      mostrarMontoTotal={true}
-                    />
-                  </div>
-                )}
-
-                {/* Caso B: pago rápido (venta sin cliente, saldo, edición) */}
-                {mostrarPagoRapido && (
-                  <div className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                    <p className="text-sm font-medium text-white">
-                      {tipoIngreso === 'saldo' && destinoSaldo === 'deuda' ? 'Método de pago del abono' : 'Pago'}
-                    </p>
-
-                    {/* Selector único/mixto */}
-                    <div className="grid grid-cols-2 gap-2">
-                      {(['unico', 'mixto'] as const).map((t) => (
-                        <button key={t} type="button" onClick={() => setTipoPago(t)}
-                          className={`rounded-2xl border px-3 py-2.5 text-sm font-semibold transition ${tipoPago === t ? 'border-violet-400/40 bg-violet-500/20 text-violet-300' : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.06]'}`}>
-                          {t === 'unico' ? 'Pago único' : 'Pago mixto'}
-                        </button>
-                      ))}
-                    </div>
-
-                    {tipoPago === 'unico' && (
-                      <div className="space-y-3">
+              {cuentasPendientesEmpleado.length === 0 ? (
+                <p className="mt-4 text-sm text-white/45">Sin deudas pendientes.</p>
+              ) : (
+                <div className="mt-4 space-y-2">
+                  {cuentasPendientesEmpleado.map((cuenta) => (
+                    <div key={cuenta.id} className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
+                      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                         <div>
-                          <label className={labelCls}>Moneda</label>
-                          <select value={monedaPagoUnico} onChange={(e) => setMonedaPagoUnico(e.target.value as 'USD' | 'BS')} className={inputCls}>
-                            <option value="USD" className="bg-[#11131a]">USD</option>
-                            <option value="BS" className="bg-[#11131a]">Bs</option>
-                          </select>
+                          <p className="font-medium text-white">{cuenta.concepto}</p>
+                          <p className="text-xs text-white/45">
+                            {formatDate(cuenta.fecha_venta)} · {cuenta.estado}
+                          </p>
                         </div>
-                        <div>
-                          <label className={labelCls}>{monedaPagoUnico === 'USD' ? 'Método USD' : 'Método Bs'}</label>
-                          <select value={metodoPagoUnicoId} onChange={(e) => setMetodoPagoUnicoId(e.target.value)} className={inputCls}>
-                            <option value="" className="bg-[#11131a]">Seleccionar método</option>
-                            {metodosPagoUnicoDisponibles.map((m) => (
-                              <option key={m.id} value={m.id} className="bg-[#11131a]">
-                                {m.nombre}{m.moneda ? ` · ${m.moneda}` : ''}{m.cartera?.nombre ? ` · ${m.cartera.nombre}` : ''}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        {tipoIngreso === 'saldo' && destinoSaldo !== 'deuda' && (
-                          <div>
-                            <label className={labelCls}>Monto a recargar (USD)</label>
-                            <input type="number" min={0} step="0.01"
-                              value={montoManualUSD}
-                              onChange={(e) => setMontoManualUSD(e.target.value)}
-                              className={inputCls} placeholder="Ingresa el monto..." />
-                            <p className="mt-1 text-xs text-white/40">Este monto se usará para validar el pago único y calcular Bs si aplica.</p>
-                          </div>
-                        )}
-                        {monedaPagoUnico === 'BS' && (
-                          <PagoBsSelector fecha={fecha}
-                            montoUsd={montoObjetivoPagoRapidoUsd}
-                            montoBs={montoPagoUnicoBs}
-                            onChangeTasa={setTasaPagoUnico}
-                            onChangeMontoBs={setMontoPagoUnicoBs} />
-                        )}
-                        <div>
-                          <label className={labelCls}>Referencia</label>
-                          <input type="text" value={referenciaPagoUnico} onChange={(e) => setReferenciaPagoUnico(e.target.value)} placeholder="Número de referencia..." className={inputCls} />
-                        </div>
-                        <div>
-                          <label className={labelCls}>Notas del pago</label>
-                          <input type="text" value={notasPagoUnico} onChange={(e) => setNotasPagoUnico(e.target.value)} placeholder="Notas opcionales" className={inputCls} />
-                        </div>
-                      </div>
-                    )}
-
-                    {tipoPago === 'mixto' && (
-                      <div className="space-y-4">
-                        <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-                          <div className="mb-3 flex items-baseline justify-between">
-                            <div className="flex items-baseline gap-2">
-                              <span className="text-2xl font-semibold text-white">
-                                {formatearMoneda(resumenPagosMixtoRapido.totalObjetivo, 'USD')}
-                              </span>
-                              <span className="text-sm text-white/45">total a cobrar</span>
-                            </div>
-                            {resumenPagosMixtoRapido.totalUsd > 0 && (
-                              <span className={`text-sm font-medium ${resumenPagosMixtoRapido.cuadra ? 'text-emerald-400' : 'text-amber-400'}`}>
-                                {resumenPagosMixtoRapido.cuadra ? '✓ Cuadra' : `Faltan ${formatearMoneda(resumenPagosMixtoRapido.faltante, 'USD')}`}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex h-2 overflow-hidden rounded-full bg-white/[0.06]">
-                            <div className="bg-blue-500 transition-all duration-300" style={{ width: `${Math.min(resumenPagosMixtoRapido.pct1, 100)}%` }} />
-                            <div className="bg-violet-500 transition-all duration-300" style={{ width: `${Math.min(resumenPagosMixtoRapido.pct2, 100 - resumenPagosMixtoRapido.pct1)}%` }} />
-                          </div>
-                          {resumenPagosMixtoRapido.totalUsd > 0 && (
-                            <div className="mt-2 flex gap-4">
-                              <span className="text-xs text-blue-400">■ Pago 1: {formatearMoneda(resumenPagosMixtoRapido.usd1, 'USD')} ({resumenPagosMixtoRapido.pct1}%)</span>
-                              <span className="text-xs text-violet-400">■ Pago 2: {formatearMoneda(resumenPagosMixtoRapido.usd2, 'USD')} ({resumenPagosMixtoRapido.pct2}%)</span>
-                            </div>
-                          )}
-                        </div>
-                        <PagoMixtoCard numero={1} pago={pagoMixto1} metodosPago={metodosPago} fecha={fecha}
-                          onChange={(patch) => setPagoMixto1((prev) => ({ ...prev, ...patch }))} />
-                        <div className="flex items-center justify-center gap-2 py-1 text-white/30">
-                          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M7 2v10M3 8l4 4 4-4" /></svg>
-                          <span className="text-xs">+</span>
-                          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M7 2v10M3 8l4 4 4-4" /></svg>
-                        </div>
-                        <PagoMixtoCard numero={2} pago={pagoMixto2} metodosPago={metodosPago} fecha={fecha}
-                          onChange={(patch) => setPagoMixto2((prev) => ({ ...prev, ...patch }))} />
-                        <div className={`rounded-xl border p-3 ${resumenPagosMixtoRapido.cuadra ? 'border-emerald-400/20 bg-emerald-400/5' : 'border-amber-400/20 bg-amber-400/5'}`}>
-                          <p className={`text-sm font-medium ${resumenPagosMixtoRapido.cuadra ? 'text-emerald-300' : 'text-amber-300'}`}>
-                            {resumenPagosMixtoRapido.cuadra ? 'La suma de pagos cuadra correctamente.' : `Faltante: ${formatearMoneda(resumenPagosMixtoRapido.faltante, 'USD')}`}
+                        <div className="text-right">
+                          <p className="text-xs text-white/35">Saldo</p>
+                          <p className="font-semibold text-rose-300">{formatMoney(cuenta.saldo_usd)}</p>
+                          <p className="text-xs text-white/35">
+                            Pagado {formatMoney(cuenta.monto_pagado_usd)} de {formatMoney(cuenta.monto_total_usd)}
                           </p>
                         </div>
                       </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Notas generales */}
-                <div>
-                  <label className={labelCls}>Notas generales (opcional)</label>
-                  <textarea value={notas} onChange={(e) => setNotas(e.target.value)}
-                    placeholder="Detalles adicionales..." rows={3} className={`${inputCls} resize-none`} />
+                    </div>
+                  ))}
                 </div>
+              )}
+            </Section>
 
-                {/* Stock insuficiente */}
-                {tipoIngreso === 'producto' && stockInsuficiente && !editingId && (
-                  <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-3">
-                    <p className="text-sm text-rose-300">No hay suficiente stock para esta venta.</p>
-                  </div>
-                )}
-
-                {/* Botones */}
-                <div className="flex flex-col gap-3 sm:flex-row">
-                  <button type="submit"
-                    disabled={saving || (tipoIngreso === 'producto' && !!stockInsuficiente && !editingId)}
-                    className="flex-1 rounded-2xl border border-white/10 bg-white/[0.03] px-6 py-3.5 text-sm font-medium text-white transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50">
-                    {saving ? 'Guardando...' : editingId ? 'Actualizar' : ventaSinCliente ? 'Registrar venta rápida' : 'Registrar'}
-                  </button>
-                  <button type="button" onClick={resetForm} className={softButtonCls}>Cancelar</button>
+            <Section
+              title={`Clientes (${clientes.length})`}
+              description="Clientes activos asignados."
+            >
+              {clientes.length === 0 ? (
+                <p className="text-sm text-white/45">Sin clientes asignados.</p>
+              ) : (
+                <div className="space-y-2">
+                  {clientes.map((c) => (
+                    <Link
+                      key={c.id}
+                      href={`/admin/personas/clientes/${c.id}`}
+                      className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3 transition hover:bg-white/[0.05]"
+                    >
+                      <div>
+                        <p className="font-medium text-white">{c.nombre}</p>
+                        {c.telefono && <p className="text-xs text-white/45">{c.telefono}</p>}
+                      </div>
+                      <span
+                        className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${estadoBadge(
+                          c.estado
+                        )}`}
+                      >
+                        {c.estado}
+                      </span>
+                    </Link>
+                  ))}
                 </div>
-              </form>
+              )}
+            </Section>
+          </div>
+
+          <div className="space-y-4">
+            <Section title="Saldo disponible" description="Comisiones listas para liquidar.">
+              <div className="grid grid-cols-1 gap-3">
+                <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
+                  <p className="text-xs text-white/45">Profesional disponible USD</p>
+                  <p className="mt-1 text-xl font-bold text-emerald-400">
+                    {formatMoney(resumenDisponible.profesionalUsd)}
+                  </p>
+                </Card>
+                <Card className="border-amber-400/20 bg-amber-400/5 p-4">
+                  <p className="text-xs text-white/45">Profesional disponible Bs</p>
+                  <p className="mt-1 text-xl font-bold text-amber-300">
+                    {formatBs(resumenDisponible.profesionalBs)}
+                  </p>
+                </Card>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setTab('comisiones')}
+                className="mt-3 w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/70 transition hover:bg-white/[0.06]"
+              >
+                Ver liquidación →
+              </button>
+            </Section>
+          </div>
+        </div>
+      )}
+
+      {tab === 'agenda' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-3">
+            <div className="flex gap-1 rounded-2xl border border-white/10 bg-white/[0.02] p-1">
+              {([
+                { key: 'hoy', label: 'Hoy' },
+                { key: 'proximos', label: 'Próximos' },
+                { key: 'todos', label: 'Todos' },
+              ] as { key: typeof agendaFiltro; label: string }[]).map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() => setAgendaFiltro(f.key)}
+                  className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                    agendaFiltro === f.key
+                      ? 'bg-white/[0.08] text-white'
+                      : 'text-white/45 hover:text-white/70'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-1 rounded-2xl border border-white/10 bg-white/[0.02] p-1">
+              {([
+                { key: 'todos', label: 'Todos' },
+                { key: 'entrenamientos', label: 'Entrenamientos' },
+                { key: 'citas', label: 'Citas' },
+              ] as { key: typeof agendaTipo; label: string }[]).map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() => setAgendaTipo(f.key)}
+                  className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                    agendaTipo === f.key
+                      ? 'bg-white/[0.08] text-white'
+                      : 'text-white/45 hover:text-white/70'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="min-w-[240px]">
+              <select
+                value={agendaClienteFiltro}
+                onChange={(e) => setAgendaClienteFiltro(e.target.value)}
+                className={inputCls()}
+              >
+                <option value="todos" className="bg-[#11131a] text-white">
+                  Todos los clientes
+                </option>
+                {[...new Set(agenda.map((a) => a.nombre))]
+                  .sort()
+                  .map((nombre) => (
+                    <option key={nombre} value={nombre} className="bg-[#11131a] text-white">
+                      {nombre}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          </div>
+
+          {agendaAgrupadaPorCliente.length === 0 ? (
+            <Card className="p-8 text-center">
+              <p className="text-sm text-white/45">
+                {agendaFiltro === 'hoy' ? 'Sin actividad para hoy.' : 'Sin registros.'}
+              </p>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {agendaAgrupadaPorCliente.map((group) => (
+                <Card key={group.cliente} className="overflow-hidden p-0">
+                  <div className="border-b border-white/10 bg-white/[0.03] px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-white">{group.cliente}</p>
+                        <p className="text-xs text-white/45">
+                          {group.items.length} bloque(s) en agenda
+                        </p>
+                      </div>
+                      <span className="rounded-xl border border-violet-400/20 bg-violet-400/10 px-3 py-1 text-xs font-medium text-violet-300">
+                        Cliente
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 p-4">
+                    {group.items.map((item) => (
+                      <div
+                        key={item.id}
+                        className={`rounded-2xl border px-4 py-3 ${
+                          item.tipo === 'entrenamiento'
+                            ? 'border-violet-400/15 bg-violet-400/5'
+                            : 'border-sky-400/15 bg-sky-400/5'
+                        }`}
+                      >
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="flex items-start gap-3">
+                            <div
+                              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-bold ${
+                                item.tipo === 'entrenamiento'
+                                  ? 'bg-violet-500/20 text-violet-300'
+                                  : 'bg-sky-500/20 text-sky-300'
+                              }`}
+                            >
+                              {item.tipo === 'entrenamiento' ? 'E' : 'C'}
+                            </div>
+
+                            <div>
+                              <p className="font-medium text-white">{item.subtitulo}</p>
+                              <p className="text-xs text-white/45">
+                                {formatDateLong(item.fecha)} · {item.hora_inicio.slice(0, 5)} –{' '}
+                                {item.hora_fin.slice(0, 5)}
+                              </p>
+                              {item.notas && (
+                                <p className="mt-1 text-xs text-white/35">{item.notas}</p>
+                              )}
+                            </div>
+                          </div>
+
+                          <span
+                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${citaBadge(
+                              item.estado
+                            )}`}
+                          >
+                            {item.estado}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              ))}
             </div>
           )}
+        </div>
+      )}
 
-          {/* ── LISTA ── */}
-          <div className={`space-y-4 ${showForm ? 'xl:col-span-2' : 'xl:col-span-3'}`}>
-            <div className={`${panelCls} p-4`}>
-              <div className="flex flex-col gap-3 md:flex-row">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
-                  <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Buscar por concepto o cliente..."
-                    className="w-full rounded-2xl border border-white/10 bg-white/[0.03] py-3 pl-10 pr-4 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/20 focus:bg-white/[0.05]" />
-                </div>
-                <select value={estadoFiltro} onChange={(e) => setEstadoFiltro(e.target.value as EstadoFiltro)}
-                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-white/20 focus:bg-white/[0.05]">
-                  <option value="todos" className="bg-[#11131a]">Todos</option>
-                  <option value="pagado" className="bg-[#11131a]">Pagado</option>
-                  <option value="pendiente" className="bg-[#11131a]">Pendiente</option>
-                  <option value="anulado" className="bg-[#11131a]">Anulado</option>
-                </select>
-              </div>
+      {tab === 'comisiones' && (
+        <div className="space-y-6">
+          <Section
+            title="Liquidación de comisiones"
+            description="Selecciona las comisiones, la moneda y reparte el pago entre una o varias carteras/métodos."
+          >
+            <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3">
+              <Card className="p-4">
+                <p className="text-xs text-white/45">Base USD</p>
+                <p className="mt-1 font-semibold text-white">{formatMoney(resumenDisponible.baseUsd)}</p>
+                <p className="text-xs text-white/35">{formatBs(resumenDisponible.baseBs)}</p>
+              </Card>
+
+              <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
+                <p className="text-xs text-white/45">Profesional disponible</p>
+                <p className="mt-1 font-semibold text-emerald-400">
+                  {formatMoney(resumenDisponible.profesionalUsd)}
+                </p>
+                <p className="text-xs text-white/35">{formatBs(resumenDisponible.profesionalBs)}</p>
+              </Card>
+
+              <Card className="border-violet-400/20 bg-violet-400/5 p-4">
+                <p className="text-xs text-white/45">RPM</p>
+                <p className="mt-1 font-semibold text-violet-400">
+                  {formatMoney(resumenDisponible.rpmUsd)}
+                </p>
+                <p className="text-xs text-white/35">{formatBs(resumenDisponible.rpmBs)}</p>
+              </Card>
             </div>
 
-            <div className="space-y-3">
-              {pagosFiltrados.length === 0 ? (
-                <div className={`${panelCls} p-12 text-center`}>
-                  <p className="text-white/45">No hay ingresos registrados</p>
+            <Card className="mb-4 border-white/10 bg-white/[0.02] p-4">
+              <div className="grid gap-4 md:grid-cols-3">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Moneda</label>
+                  <select
+                    value={monedaPago}
+                    onChange={(e) => setMonedaPago(e.target.value as Moneda)}
+                    className={inputCls()}
+                  >
+                    <option value="USD" className="bg-[#11131a] text-white">
+                      USD
+                    </option>
+                    <option value="BS" className="bg-[#11131a] text-white">
+                      BS
+                    </option>
+                  </select>
                 </div>
+
+                {requiereTasa && (
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-white/75">Tasa BCV</label>
+                    <div className="space-y-2">
+                      <input
+                        type="number"
+                        step="0.0001"
+                        min="0"
+                        value={tasaBCV ?? ''}
+                        onChange={(e) => setTasaBCV(e.target.value ? Number(e.target.value) : null)}
+                        className={inputCls()}
+                        placeholder="Ej: 36.52"
+                      />
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void cargarTasaBCVAutomatica()}
+                          disabled={cargandoTasa}
+                          className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-white/75 hover:bg-white/[0.06] disabled:opacity-60"
+                        >
+                          {cargandoTasa ? 'Cargando tasa...' : 'Recargar tasa automática'}
+                        </button>
+
+                        {tasaBCVAuto && (
+                          <span className="text-xs text-emerald-300">
+                            Automática: {tasaBCVAuto}
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-amber-300">
+                        Solo se usa cuando el método está en una moneda distinta a la liquidación.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Seleccionadas</label>
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white">
+                    {resumenSeleccionado.pendientes} comisión(es)
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <Card className="mb-4 border-sky-400/20 bg-sky-400/5 p-4">
+              <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-sm font-medium text-sky-300">
+                    Comisiones pendientes para {monedaPago}
+                  </p>
+                  <p className="text-xs text-white/45">
+                    Aquí eliges exactamente cuáles quieres liquidar en este momento.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={selectAllCurrentCurrency}
+                  className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/70 hover:bg-white/[0.06]"
+                >
+                  {allCurrentCurrencySelected ? 'Quitar selección' : 'Seleccionar todas'}
+                </button>
+              </div>
+
+              {comisionesPendientesMoneda.length === 0 ? (
+                <p className="text-sm text-white/45">
+                  No hay comisiones pendientes con monto para {monedaPago}.
+                </p>
               ) : (
-                pagosFiltrados.map((operacion) => {
-                  const estadoUi = estadoUiDesdeDb(operacion.estado)
-                  return (
-                    <div key={operacion.key} className={`${panelCls} p-5 transition hover:bg-white/[0.04]`}>
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <h3 className="truncate font-medium text-white">{operacion.concepto}</h3>
-                            {!operacion.cliente_id && (
-                              <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-400/20 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-                                <Zap className="h-2.5 w-2.5" />Rápida
+                <div className="grid gap-3">
+                  {comisionesPendientesMoneda.map((c) => {
+                    const checked = selectedComisionIds.includes(c.id)
+                    const monto = getComisionMontoByMoneda(c, monedaPago)
+                    const concepto = getComisionConcepto(c)
+                    const subtitulo = getComisionSubtitulo(c)
+
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => toggleComision(c.id)}
+                        aria-pressed={checked}
+                        className={`group w-full rounded-3xl border p-4 text-left transition ${
+                          checked
+                            ? 'border-emerald-400/40 bg-emerald-400/[0.10] shadow-[0_0_0_1px_rgba(52,211,153,0.08)]'
+                            : 'border-white/10 bg-white/[0.025] hover:border-white/15 hover:bg-white/[0.045]'
+                        }`}
+                      >
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div className="min-w-0 flex-1">
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                              <span
+                                className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                  c.tipo === 'plan'
+                                    ? 'bg-violet-500/10 text-violet-300'
+                                    : 'bg-sky-500/10 text-sky-300'
+                                }`}
+                              >
+                                {c.tipo || 'comisión'}
                               </span>
-                            )}
+                              <span className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs text-white/55">
+                                {formatDate(c.fecha)}
+                              </span>
+                              {checked && (
+                                <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-300">
+                                  Seleccionada
+                                </span>
+                              )}
+                            </div>
+
+                            <p className="truncate text-sm font-semibold text-white md:text-base">
+                              {concepto}
+                            </p>
+                            <p className="mt-1 text-xs text-white/45">{subtitulo}</p>
+
+                            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                              <span className="rounded-full bg-white/[0.04] px-2.5 py-1 text-white/55">
+                                USD {formatMoney(c.monto_profesional_usd ?? c.profesional)}
+                              </span>
+                              <span className="rounded-full bg-white/[0.04] px-2.5 py-1 text-white/55">
+                                Bs {formatBs(c.monto_profesional_bs)}
+                              </span>
+                            </div>
                           </div>
-                          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-white/45">
-                            <span>{operacion.fecha}</span>
-                            <span>•</span><span>{operacion.categoria}</span>
-                            <span>•</span><span>{operacion.tipo_origen}</span>
-                            {operacion.cliente_nombre && (<><span>•</span><span>{operacion.cliente_nombre}</span></>)}
-                            {operacion.es_pago_mixto && (<><span>•</span><span>{operacion.items_total} pagos</span></>)}
-                            <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${estadoUi === 'pagado' ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300' : 'border-amber-400/20 bg-amber-400/10 text-amber-300'}`}>
-                              {operacion.estado}
+
+                          <div className="flex items-center justify-between gap-3 md:block md:text-right">
+                            <div>
+                              <p className="text-xs text-white/35">Monto a liquidar</p>
+                              <p className="text-lg font-bold text-emerald-300">
+                                {formatMontoByMoneda(monto, monedaPago)}
+                              </p>
+                            </div>
+                            <span
+                              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-bold transition ${
+                                checked
+                                  ? 'border-emerald-400/40 bg-emerald-400/20 text-emerald-200'
+                                  : 'border-white/10 bg-white/[0.03] text-white/25 group-hover:text-white/50'
+                              }`}
+                            >
+                              {checked ? '✓' : '+'}
                             </span>
                           </div>
-                          <div className="mt-3 space-y-2">
-                            {operacion.items.map((item) => (
-                              <div key={item.id} className="rounded-2xl border border-white/10 bg-white/[0.02] px-3 py-2">
-                                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                                  <div className="flex flex-wrap items-center gap-2 text-white/70">
-                                    <span className="font-medium text-white">{item.metodos_pago_v2?.nombre || 'Método'}</span>
-                                    <span>·</span><span>{item.moneda_pago || 'USD'}</span>
-                                    {item.referencia && (<><span>·</span><span>Ref: {item.referencia}</span></>)}
-                                  </div>
-                                  <div className="text-right">
-                                    <p className="font-semibold text-white">{formatearMoneda(Number(item.monto_equivalente_usd || 0), 'USD')}</p>
-                                    <p className="text-xs text-white/45">{formatearMoneda(Number(item.monto_equivalente_bs || 0), 'BS')}</p>
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
                         </div>
-                        <div className="flex items-start gap-4 lg:ml-4 lg:flex-shrink-0">
-                          <div className="text-right">
-                            <p className="text-sm font-semibold text-white">{formatearMoneda(Number(operacion.total_usd || 0), 'USD')}</p>
-                            <p className="mt-1 text-xs text-white/45">{formatearMoneda(Number(operacion.total_bs || 0), 'BS')}</p>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </Card>
+
+            <Card className="mb-4 border-amber-400/20 bg-amber-400/5 p-4">
+              <p className="text-sm font-medium text-amber-300">Métodos de pago / carteras</p>
+              <p className="mt-1 text-xs text-white/45">
+                Puedes pagar con una sola cartera o dividir entre varias. Si el monto pendiente está en USD y eliges un método en Bs, aquí se calcula el equivalente con BCV para pagar la diferencia en bolívares.
+              </p>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <Card className="p-4">
+                  <p className="text-xs text-white/45">Monto seleccionado</p>
+                  <p className="mt-1 text-lg font-semibold text-white">
+                    {formatMontoByMoneda(montoFacturar, monedaPago)}
+                  </p>
+                </Card>
+
+                <Card className="border-violet-400/20 bg-violet-400/5 p-4">
+                  <p className="text-xs text-white/45">Asignado en métodos</p>
+                  <p className="mt-1 text-lg font-semibold text-violet-300">
+                    {formatMontoByMoneda(totalSplits, monedaPago)}
+                  </p>
+                </Card>
+
+                <Card className="border-emerald-400/20 bg-emerald-400/5 p-4">
+                  <p className="text-xs text-white/45">Restante por asignar</p>
+                  <p
+                    className={`mt-1 text-lg font-semibold ${
+                      restantePorAsignar === 0 ? 'text-emerald-400' : 'text-amber-300'
+                    }`}
+                  >
+                    {formatMontoByMoneda(restantePorAsignar, monedaPago)}
+                  </p>
+                </Card>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {splitsConMetodo.map((split, index) => {
+                  const metodo = split.metodo
+                  const saldo = split.saldo
+                  const monedaMetodo = split.metodoMoneda
+                  const montoContraMetodo = split.requiereConversion
+                    ? split.montoDescontar
+                    : split.montoLiquidacion
+
+                  return (
+                    <div
+                      key={split.id}
+                      className="grid gap-3 rounded-2xl border border-white/10 bg-white/[0.02] p-3 md:grid-cols-[1.3fr_0.8fr_auto_auto]"
+                    >
+                      <div>
+                        <label className="mb-2 block text-xs text-white/45">
+                          Método #{index + 1}
+                        </label>
+                        <select
+                          value={split.metodoPagoId}
+                          onChange={(e) => updateSplit(split.id, { metodoPagoId: e.target.value })}
+                          className={inputCls()}
+                        >
+                          <option value="" className="bg-[#11131a] text-white">
+                            Seleccionar método
+                          </option>
+                          {metodosPago.map((m) => {
+                            const saldoMetodo = getMetodoSaldo(m)
+                            const monedaM = getMetodoMoneda(m)
+
+                            return (
+                              <option key={m.id} value={m.id} className="bg-[#11131a] text-white">
+                                {m.nombre}
+                                {m.cartera?.nombre ? ` · ${m.cartera.nombre}` : ''}
+                                {` · ${monedaM}`}
+                                {saldoMetodo > 0
+                                  ? ` · Saldo ${formatMontoByMoneda(saldoMetodo, monedaM)}`
+                                  : ''}
+                              </option>
+                            )
+                          })}
+                        </select>
+
+                        {metodo && (
+                          <div className="mt-2 space-y-1 text-xs text-white/40">
+                            <p>
+                              Cartera: {metodo.cartera?.nombre || '—'} · Moneda método: {monedaMetodo} ·
+                              Saldo: {formatMontoByMoneda(saldo, monedaMetodo)}
+                            </p>
+
+                            {split.requiereConversion && (
+                              <p className="text-amber-300">
+                                Para cubrir {formatMontoByMoneda(split.montoLiquidacion, monedaPago)} en{' '}
+                                {monedaPago}, se descontarán{' '}
+                                {montoContraMetodo !== null
+                                  ? formatMontoByMoneda(montoContraMetodo, monedaMetodo)
+                                  : '—'}{' '}
+                                de esta cartera.
+                              </p>
+                            )}
                           </div>
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => startEdit(operacion)}
-                              className="rounded-2xl border border-white/10 bg-white/[0.03] p-2 text-white/60 transition hover:bg-white/[0.06] hover:text-white" title="Editar">
-                              <Edit2 className="h-4 w-4" />
-                            </button>
-                            <button onClick={() => eliminarPago(operacion)}
-                              className="rounded-2xl border border-rose-400/20 bg-rose-400/10 p-2 text-rose-300 transition hover:bg-rose-400/15" title="Eliminar">
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="mb-2 block text-xs text-white/45">
+                          Monto en {monedaPago}
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={split.monto}
+                          onChange={(e) => updateSplit(split.id, { monto: e.target.value })}
+                          className={inputCls()}
+                          placeholder="0.00"
+                        />
+                      </div>
+
+                      <div className="flex items-end">
+                        <button
+                          type="button"
+                          onClick={() => fillRemainingOnSplit(split.id)}
+                          className="h-[50px] rounded-2xl border border-white/10 bg-white/[0.03] px-4 text-xs font-medium text-white/70 hover:bg-white/[0.06]"
+                        >
+                          Completar
+                        </button>
+                      </div>
+
+                      <div className="flex items-end">
+                        <button
+                          type="button"
+                          onClick={() => removeSplit(split.id)}
+                          className="h-[50px] rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 text-xs font-medium text-rose-300 hover:bg-rose-400/15"
+                        >
+                          Quitar
+                        </button>
                       </div>
                     </div>
                   )
-                })
+                })}
+              </div>
+
+              <button
+                type="button"
+                onClick={addSplit}
+                className="mt-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/70 transition hover:bg-white/[0.06]"
+              >
+                + Agregar otro método
+              </button>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">
+                    Referencia
+                  </label>
+                  <input
+                    type="text"
+                    value={referencia}
+                    onChange={(e) => setReferencia(e.target.value)}
+                    className={inputCls()}
+                    placeholder="N° referencia"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">Notas</label>
+                  <input
+                    type="text"
+                    value={notasLiquidacion}
+                    onChange={(e) => setNotasLiquidacion(e.target.value)}
+                    className={inputCls()}
+                    placeholder="Notas de la liquidación"
+                  />
+                </div>
+              </div>
+
+              {resumenSeleccionado.pendientes > 0 && (
+                <button
+                  type="button"
+                  onClick={liquidarSaldoDisponible}
+                  disabled={facturando}
+                  className="mt-4 w-full rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-400/20 disabled:opacity-60"
+                >
+                  {facturando
+                    ? 'Liquidando saldo...'
+                    : `✓ Liquidar ${resumenSeleccionado.pendientes} comisión(es) en ${monedaPago}`}
+                </button>
               )}
+
+              {comisionesLiquidadaHoyQuincena.length > 0 && (
+                <p className="mt-3 text-xs text-white/35">
+                  ✓ {comisionesLiquidadaHoyQuincena.length} registro(s) ya liquidados dentro de esta
+                  quincena calendario, pero puedes seguir liquidando nuevos ingresos.
+                </p>
+              )}
+            </Card>
+          </Section>
+
+          <Section
+            title={`Quincena calendario actual · ${quincenaActual.label}`}
+            description="Referencia visual. Ya no bloquea la liquidación."
+          >
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <Card className="p-4">
+                <p className="text-xs text-white/45">Pendiente dentro de quincena</p>
+                <p className="mt-1 font-semibold text-white">
+                  {
+                    comisiones.filter(
+                      (c) =>
+                        isPendienteEstado(c.estado) &&
+                        c.fecha >= quincenaActual.inicio &&
+                        c.fecha <= quincenaActual.fin
+                    ).length
+                  }{' '}
+                  registros
+                </p>
+              </Card>
+
+              <Card className="p-4">
+                <p className="text-xs text-white/45">Liquidado dentro de quincena</p>
+                <p className="mt-1 font-semibold text-white">
+                  {comisionesLiquidadaHoyQuincena.length} registros
+                </p>
+              </Card>
+
+              <Card className="p-4">
+                <p className="text-xs text-white/45">Rango</p>
+                <p className="mt-1 font-semibold text-white">
+                  {formatDate(quincenaActual.inicio)} – {formatDate(quincenaActual.fin)}
+                </p>
+              </Card>
             </div>
-          </div>
+          </Section>
+
+          {liquidaciones.length > 0 && (
+            <Section title="Historial de liquidaciones" description="Pagos realizados al profesional.">
+              <div className="space-y-3">
+                {liquidaciones.map((liq) => (
+                  <div
+                    key={liq.id}
+                    className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3"
+                  >
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <p className="font-medium text-white">
+                          {formatDate(liq.fecha_inicio)} – {formatDate(liq.fecha_fin)}
+                        </p>
+                        <p className="text-xs text-white/45">
+                          {liq.cantidad_citas} registros · Base USD: {formatMoney(liq.total_base)}
+                        </p>
+                        <p className="mt-1 text-xs text-white/35">
+                          Moneda: {liq.moneda_pago || '—'}
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-right">
+                        <div>
+                          <p className="text-xs text-white/35">Liquidado</p>
+                          <p className="font-semibold text-emerald-400">
+                            {liq.moneda_pago === 'BS'
+                              ? formatBs(liq.monto_pago)
+                              : formatMoney(liq.monto_pago)}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-white/35">Equivalente</p>
+                          <p className="font-semibold text-white">
+                            {formatMoney(liq.monto_equivalente_usd)}
+                          </p>
+                          <p className="text-xs text-white/35">
+                            {formatBs(liq.monto_equivalente_bs)}
+                          </p>
+                        </div>
+                        <div className="col-span-2">
+                          <span
+                            className={`inline-flex rounded-xl border px-3 py-1.5 text-xs font-medium ${
+                              isFacturadaEstado(liq.estado)
+                                ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
+                                : 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+                            }`}
+                          >
+                            {isFacturadaEstado(liq.estado) ? '✓ Liquidado' : liq.estado}
+                          </span>
+                          <p className="mt-1 text-xs text-white/35">
+                            {liq.pagado_at ? `Fecha: ${new Date(liq.pagado_at).toLocaleString()}` : '—'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
         </div>
-      </div>
+      )}
+
+      <Link
+        href="/admin/personas/personal"
+        className="inline-flex rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]"
+      >
+        Volver al listado
+      </Link>
     </div>
   )
 }

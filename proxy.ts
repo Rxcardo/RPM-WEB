@@ -36,18 +36,10 @@ export async function proxy(req: NextRequest) {
           return req.cookies.get(name)?.value
         },
         set(name: string, value: string, options: Record<string, any>) {
-          res.cookies.set({
-            name,
-            value,
-            ...options,
-          })
+          res.cookies.set({ name, value, ...options })
         },
         remove(name: string, options: Record<string, any>) {
-          res.cookies.set({
-            name,
-            value: '',
-            ...options,
-          })
+          res.cookies.set({ name, value: '', ...options })
         },
       },
     }
@@ -61,9 +53,10 @@ export async function proxy(req: NextRequest) {
 
   const isAdminArea = pathname.startsWith('/admin')
   const isClienteArea = pathname.startsWith('/cliente')
+  const isEmpleadoArea = pathname.startsWith('/empleado')
   const isLogin = pathname === '/login'
 
-  if (!user && (isAdminArea || isClienteArea)) {
+  if (!user && (isAdminArea || isClienteArea || isEmpleadoArea)) {
     const redirectUrl = req.nextUrl.clone()
     redirectUrl.pathname = '/login'
     return NextResponse.redirect(redirectUrl)
@@ -79,7 +72,7 @@ export async function proxy(req: NextRequest) {
 
   const rol = getRolNombre(empleado)
 
-  if (!rol && (isAdminArea || isClienteArea)) {
+  if (!rol && (isAdminArea || isClienteArea || isEmpleadoArea)) {
     const redirectUrl = req.nextUrl.clone()
     redirectUrl.pathname = '/sin-acceso'
     return NextResponse.redirect(redirectUrl)
@@ -93,14 +86,25 @@ export async function proxy(req: NextRequest) {
       return NextResponse.redirect(redirectUrl)
     }
 
+    if (rol === 'terapeuta') {
+      redirectUrl.pathname = '/empleado'
+      return NextResponse.redirect(redirectUrl)
+    }
+
     redirectUrl.pathname = '/admin'
     return NextResponse.redirect(redirectUrl)
   }
 
   if (isAdminArea) {
-    if (rol === 'admin' || rol === 'recepcionista' || rol === 'terapeuta') {
-      return res
-    }
+    if (rol === 'admin' || rol === 'recepcionista') return res
+
+    const redirectUrl = req.nextUrl.clone()
+    redirectUrl.pathname = rol === 'terapeuta' ? '/empleado' : '/sin-acceso'
+    return NextResponse.redirect(redirectUrl)
+  }
+
+  if (isEmpleadoArea) {
+    if (rol === 'terapeuta' || rol === 'admin' || rol === 'recepcionista') return res
 
     const redirectUrl = req.nextUrl.clone()
     redirectUrl.pathname = '/sin-acceso'
@@ -108,9 +112,7 @@ export async function proxy(req: NextRequest) {
   }
 
   if (isClienteArea) {
-    if (rol === 'cliente') {
-      return res
-    }
+    if (rol === 'cliente') return res
 
     const redirectUrl = req.nextUrl.clone()
     redirectUrl.pathname = '/sin-acceso'
@@ -121,5 +123,5 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/admin/:path*', '/cliente/:path*', '/login'],
+  matcher: ['/admin/:path*', '/cliente/:path*', '/empleado/:path*', '/login'],
 }

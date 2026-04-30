@@ -16,6 +16,7 @@ type Empleado = {
   telefono: string | null
   email: string | null
   rol: string | null
+  auth_user_id: string | null
   estado: string
   created_at: string
 }
@@ -37,7 +38,15 @@ type PersonalRow = {
   canceladas: number
 }
 
-type RolUI = 'admin' | 'recepcionista' | 'fisioterapeuta'
+type RolUI = 'admin' | 'recepcionista' | 'terapeuta'
+
+type CuentaFormState = {
+  empleadoId: string
+  nombre: string
+  email: string
+  password: string
+  role: string
+}
 
 type FormState = {
   nombre: string
@@ -48,12 +57,25 @@ type FormState = {
   estado: string
 }
 
+const INITIAL_CUENTA_FORM: CuentaFormState = {
+  empleadoId: '',
+  nombre: '',
+  email: '',
+  password: '',
+  role: 'terapeuta',
+}
+
+function generarPasswordTemporal() {
+  const token = Math.random().toString(36).slice(2, 8).toUpperCase()
+  return `RPM-${token}-2026`
+}
+
 const INITIAL_FORM: FormState = {
   nombre: '',
   cedula: '',
   email: '',
   telefono: '',
-  rol: 'fisioterapeuta',
+  rol: 'terapeuta',
   estado: 'activo',
 }
 
@@ -95,15 +117,25 @@ function limpiarCedula(value: string) {
   return value.trim().toUpperCase()
 }
 
-function mostrarRol(rol: string | null | undefined) {
-  const value = (rol || '').toLowerCase()
-  if (value === 'terapeuta' || value === 'fisioterapeuta') return 'Fisioterapeuta'
-  if (value === 'recepcionista' || value === 'recepcion') return 'Recepcionista'
-  if (value === 'admin') return 'Admin'
-  if (value === 'entrenador') return 'Entrenador'
-  return rol || 'Sin rol'
+function normalizarRol(value: string | null | undefined): RolUI {
+  const rol = (value || '').trim().toLowerCase()
+
+  if (rol === 'admin') return 'admin'
+  if (rol === 'recepcionista' || rol === 'recepcion') return 'recepcionista'
+
+  // Legacy: cualquier rol operativo anterior se muestra y guarda como terapeuta.
+  return 'terapeuta'
 }
 
+function mostrarRol(rol: string | null | undefined) {
+  const value = normalizarRol(rol)
+
+  if (value === 'terapeuta') return 'Terapeuta'
+  if (value === 'recepcionista') return 'Recepcionista'
+  if (value === 'admin') return 'Admin'
+
+  return 'Sin rol'
+}
 function estadoBadge(estado: string) {
   switch ((estado || '').toLowerCase()) {
     case 'activo':
@@ -137,9 +169,9 @@ function getFirstExistingKey(obj: Record<string, any>, keys: string[]) {
 }
 
 function mapearRolCatalogo(rolUI: RolUI): 'admin' | 'recepcionista' | 'terapeuta' {
-  if (rolUI === 'fisioterapeuta') return 'terapeuta'
-  return rolUI
+  return normalizarRol(rolUI)
 }
+
 
 export default function PersonalPage() {
   const [loading, setLoading] = useState(true)
@@ -155,6 +187,12 @@ export default function PersonalPage() {
   const [errorMsg, setErrorMsg] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
+
+  const [showCuentaPanel, setShowCuentaPanel] = useState(false)
+  const [cuentaSaving, setCuentaSaving] = useState(false)
+  const [cuentaError, setCuentaError] = useState('')
+  const [cuentaSuccess, setCuentaSuccess] = useState('')
+  const [cuentaForm, setCuentaForm] = useState<CuentaFormState>(INITIAL_CUENTA_FORM)
 
   const rolCatalogo = useMemo(() => mapearRolCatalogo(form.rol), [form.rol])
 
@@ -177,6 +215,7 @@ export default function PersonalPage() {
             telefono,
             email,
             rol,
+            auth_user_id,
             estado,
             created_at,
             comision_plan_porcentaje,
@@ -242,6 +281,82 @@ export default function PersonalPage() {
     resetForm()
   }
 
+  function abrirCrearCuenta(empleado: Empleado) {
+    setCuentaError('')
+    setCuentaSuccess('')
+    setCuentaForm({
+      empleadoId: empleado.id,
+      nombre: empleado.nombre || '',
+      email: empleado.email || '',
+      password: generarPasswordTemporal(),
+      role: empleado.rol === 'terapeuta' ? 'terapeuta' : empleado.rol || 'terapeuta',
+    })
+    setShowCuentaPanel(true)
+  }
+
+  function cerrarPanelCuenta() {
+    setShowCuentaPanel(false)
+    setCuentaError('')
+    setCuentaSuccess('')
+    setCuentaForm(INITIAL_CUENTA_FORM)
+  }
+
+  async function crearCuentaEmpleado() {
+    setCuentaError('')
+    setCuentaSuccess('')
+
+    if (!cuentaForm.empleadoId) {
+      setCuentaError('No se pudo identificar el empleado.')
+      return
+    }
+
+    if (!cuentaForm.email.trim()) {
+      setCuentaError('El correo es obligatorio para crear la cuenta.')
+      return
+    }
+
+    if (!cuentaForm.password.trim() || cuentaForm.password.trim().length < 6) {
+      setCuentaError('La contraseña temporal debe tener mínimo 6 caracteres.')
+      return
+    }
+
+    setCuentaSaving(true)
+
+    try {
+      const res = await fetch('/api/admin/empleados/crear-cuenta', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          empleadoId: cuentaForm.empleadoId,
+          empleado_id: cuentaForm.empleadoId,
+          email: cuentaForm.email.trim().toLowerCase(),
+          password: cuentaForm.password.trim(),
+          fullName: cuentaForm.nombre.trim(),
+          nombre: cuentaForm.nombre.trim(),
+          role: normalizarRol(cuentaForm.role),
+        }),
+      })
+
+      const json = await res.json().catch(() => null)
+
+      if (!res.ok) {
+        throw new Error(json?.error || 'No se pudo crear la cuenta.')
+      }
+
+      setCuentaSuccess('Cuenta creada y vinculada correctamente.')
+      await loadPersonal()
+
+      setTimeout(() => {
+        cerrarPanelCuenta()
+      }, 900)
+    } catch (error: any) {
+      console.error(error)
+      setCuentaError(error?.message || 'No se pudo crear la cuenta.')
+    } finally {
+      setCuentaSaving(false)
+    }
+  }
+
   async function guardarNuevoPersonal() {
     setErrorMsg('')
     setSuccessMsg('')
@@ -297,10 +412,10 @@ export default function PersonalPage() {
         cedula,
         email,
         telefono,
-        rol: form.rol,
+        rol: rolCatalogo,
         rol_id: rolId,
         estado: form.estado,
-        especialidad: form.rol === 'fisioterapeuta' ? '' : null,
+        especialidad: rolCatalogo === 'terapeuta' ? '' : null,
       }
 
       const { error } = await supabase.from('empleados').insert(payload)
@@ -388,8 +503,8 @@ export default function PersonalPage() {
     const q = search.trim().toLowerCase()
 
     return rows.filter(({ empleado }) => {
-      const rolNormalizado =
-        empleado.rol?.toLowerCase() === 'terapeuta' ? 'fisioterapeuta' : empleado.rol?.toLowerCase()
+      const rolNormalizado = normalizarRol(empleado.rol)
+      const rolTexto = mostrarRol(empleado.rol).toLowerCase()
 
       const matchSearch =
         !q ||
@@ -398,13 +513,11 @@ export default function PersonalPage() {
         empleado.email?.toLowerCase().includes(q) ||
         empleado.telefono?.toLowerCase().includes(q) ||
         empleado.rol?.toLowerCase().includes(q) ||
-        rolNormalizado?.includes(q) ||
+        rolNormalizado.includes(q) ||
+        rolTexto.includes(q) ||
         empleado.estado?.toLowerCase().includes(q)
 
-      const matchRol =
-        rolFiltro === 'todos' ||
-        empleado.rol?.toLowerCase() === rolFiltro.toLowerCase() ||
-        (rolFiltro === 'fisioterapeuta' && empleado.rol?.toLowerCase() === 'terapeuta')
+      const matchRol = rolFiltro === 'todos' || rolNormalizado === rolFiltro.toLowerCase()
 
       const matchEstado =
         estadoFiltro === 'todos' || empleado.estado?.toLowerCase() === estadoFiltro.toLowerCase()
@@ -416,17 +529,17 @@ export default function PersonalPage() {
   const stats = useMemo(() => {
     const total = empleados.length
     const activos = empleados.filter((e) => e.estado?.toLowerCase() === 'activo').length
-    const terapeutas = empleados.filter((e) =>
-      ['terapeuta', 'fisioterapeuta'].includes(e.rol?.toLowerCase() || '')
-    ).length
-    const entrenadores = empleados.filter((e) => e.rol?.toLowerCase() === 'entrenador').length
+    const terapeutas = empleados.filter((e) => normalizarRol(e.rol) === 'terapeuta').length
+    const recepcion = empleados.filter((e) => normalizarRol(e.rol) === 'recepcionista').length
+    const admins = empleados.filter((e) => normalizarRol(e.rol) === 'admin').length
     const citasHoy = citas.filter((c) => c.fecha === hoy).length
 
     return {
       total,
       activos,
       terapeutas,
-      entrenadores,
+      recepcion,
+      admins,
       citasHoy,
     }
   }, [empleados, citas, hoy])
@@ -476,8 +589,8 @@ export default function PersonalPage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           <StatCard title="Total personal" value={stats.total} color="text-white" />
           <StatCard title="Activos" value={stats.activos} color="text-emerald-400" />
-          <StatCard title="Fisioterapeutas" value={stats.terapeutas} color="text-violet-400" />
-          <StatCard title="Entrenadores" value={stats.entrenadores} color="text-amber-300" />
+          <StatCard title="Terapeutas" value={stats.terapeutas} color="text-violet-400" />
+          <StatCard title="Recepción" value={stats.recepcion} color="text-amber-300" />
           <StatCard title="Citas hoy" value={stats.citasHoy} color="text-sky-400" />
         </div>
 
@@ -507,8 +620,8 @@ export default function PersonalPage() {
                   <option value="todos" className="bg-[#11131a] text-white">
                     Todos
                   </option>
-                  <option value="fisioterapeuta" className="bg-[#11131a] text-white">
-                    Fisioterapeuta
+                  <option value="terapeuta" className="bg-[#11131a] text-white">
+                    Terapeuta
                   </option>
                   <option value="admin" className="bg-[#11131a] text-white">
                     Admin
@@ -560,6 +673,7 @@ export default function PersonalPage() {
                   <th className="px-4 py-3 font-medium">Contacto</th>
                   <th className="px-4 py-3 font-medium">Rol</th>
                   <th className="px-4 py-3 font-medium">Estado</th>
+                  <th className="px-4 py-3 font-medium">Cuenta</th>
                   <th className="px-4 py-3 font-medium">Carga hoy</th>
                   
                   <th className="px-4 py-3 font-medium">Registro</th>
@@ -646,6 +760,18 @@ export default function PersonalPage() {
                         </td>
 
                         <td className="px-4 py-4">
+                          {empleado.auth_user_id ? (
+                            <span className="inline-flex rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-xs font-medium text-emerald-300">
+                              Cuenta creada
+                            </span>
+                          ) : (
+                            <span className="inline-flex rounded-full border border-amber-400/20 bg-amber-400/10 px-2.5 py-1 text-xs font-medium text-amber-300">
+                              Interno
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="px-4 py-4">
                           <span
                             className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${cargaBadge(
                               citasHoy
@@ -684,6 +810,24 @@ export default function PersonalPage() {
                             >
                               Editar
                             </Link>
+
+                            {empleado.auth_user_id ? (
+                              <span className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs font-medium text-emerald-300">
+                                Con cuenta
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => abrirCrearCuenta(empleado)}
+                                className="
+                                  rounded-xl border border-sky-400/20 bg-sky-400/10
+                                  px-3 py-1.5 text-xs font-medium text-sky-300
+                                  transition hover:bg-sky-400/15
+                                "
+                              >
+                                Crear cuenta
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -716,7 +860,7 @@ export default function PersonalPage() {
                   <p className="text-sm text-white/45">Personas</p>
                   <h2 className="mt-1 text-xl font-semibold text-white">Nuevo personal</h2>
                   <p className="mt-1 text-sm text-white/55">
-                    Crea un fisioterapeuta o miembro del equipo.
+                    Crea un terapeuta o miembro del equipo.
                   </p>
                 </div>
 
@@ -803,8 +947,8 @@ export default function PersonalPage() {
                           onChange={(e) => setForm({ ...form, rol: e.target.value as RolUI })}
                           className={inputClassName}
                         >
-                          <option value="fisioterapeuta" className="bg-[#11131a] text-white">
-                            Fisioterapeuta
+                          <option value="terapeuta" className="bg-[#11131a] text-white">
+                            Terapeuta
                           </option>
                           <option value="recepcionista" className="bg-[#11131a] text-white">
                             Recepcionista
@@ -867,6 +1011,44 @@ export default function PersonalPage() {
           </div>
         </div>
       ) : null}
+
+      {showCuentaPanel ? (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px]" onClick={cerrarPanelCuenta} />
+          <div className="absolute right-0 top-0 h-full w-full max-w-2xl border-l border-white/10 bg-[#0b0f17] shadow-[-20px_0_60px_rgba(0,0,0,0.45)]">
+            <div className="flex h-full flex-col">
+              <div className="flex items-center justify-between border-b border-white/10 px-6 py-5">
+                <div>
+                  <p className="text-sm text-white/45">Personal</p>
+                  <h2 className="mt-1 text-xl font-semibold text-white">Crear cuenta de acceso</h2>
+                  <p className="mt-1 text-sm text-white/55">Convierte este empleado interno en usuario con login.</p>
+                </div>
+                <button type="button" onClick={cerrarPanelCuenta} className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/80 transition hover:bg-white/[0.07]">Cerrar</button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-6 py-6">
+                <div className="space-y-6">
+                  {cuentaError ? <Card className="p-4"><p className="text-sm font-medium text-rose-400">Error</p><p className="mt-1 text-sm text-white/55">{cuentaError}</p></Card> : null}
+                  {cuentaSuccess ? <Card className="p-4"><p className="text-sm font-medium text-emerald-400">Listo</p><p className="mt-1 text-sm text-white/55">{cuentaSuccess}</p></Card> : null}
+                  <Section title="Datos de acceso" description="Se creará un usuario en Auth, un profile y se vinculará con empleados.auth_user_id.">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Field label="Nombre"><input type="text" value={cuentaForm.nombre} onChange={(e) => setCuentaForm({ ...cuentaForm, nombre: e.target.value })} placeholder="Nombre completo" className={inputClassName} /></Field>
+                      <Field label="Rol de acceso"><select value={cuentaForm.role} onChange={(e) => setCuentaForm({ ...cuentaForm, role: e.target.value })} className={inputClassName}><option value="terapeuta" className="bg-[#11131a] text-white">Terapeuta</option><option value="recepcionista" className="bg-[#11131a] text-white">Recepcionista</option><option value="admin" className="bg-[#11131a] text-white">Admin</option></select></Field>
+                      <Field label="Correo de acceso" helper="Este será el correo para iniciar sesión."><input type="email" value={cuentaForm.email} onChange={(e) => setCuentaForm({ ...cuentaForm, email: e.target.value })} placeholder="correo@ejemplo.com" className={inputClassName} /></Field>
+                      <Field label="Contraseña temporal" helper="Entrégala al empleado y luego podrá cambiarla."><input type="text" value={cuentaForm.password} onChange={(e) => setCuentaForm({ ...cuentaForm, password: e.target.value })} placeholder="Contraseña temporal" className={inputClassName} /></Field>
+                    </div>
+                    <div className="mt-6 flex flex-wrap gap-3">
+                      <button type="button" onClick={crearCuentaEmpleado} disabled={cuentaSaving} className="rounded-2xl border border-sky-400/20 bg-sky-400/10 px-5 py-3 text-sm font-semibold text-sky-200 transition hover:bg-sky-400/15 disabled:opacity-60">{cuentaSaving ? 'Creando cuenta...' : 'Crear cuenta'}</button>
+                      <button type="button" onClick={() => setCuentaForm({ ...cuentaForm, password: generarPasswordTemporal() })} className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]">Generar otra contraseña</button>
+                      <button type="button" onClick={cerrarPanelCuenta} className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/[0.06]">Cancelar</button>
+                    </div>
+                  </Section>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
     </>
   )
 }

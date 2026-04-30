@@ -39,7 +39,8 @@ export default function LoginPage() {
     if (empleadoError || !empleado) return
     const rol = getRolNombre(empleado) ?? empleado?.rol ?? null
     if (rol === 'cliente') { router.replace('/cliente'); return }
-    if (rol === 'admin' || rol === 'recepcionista' || rol === 'terapeuta') { router.replace('/admin'); return }
+    if (rol === 'terapeuta') { router.replace('/empleado'); return }
+    if (rol === 'admin' || rol === 'recepcionista') { router.replace('/admin'); return }
     router.replace('/sin-acceso')
   }
 
@@ -63,7 +64,8 @@ export default function LoginPage() {
       if (!empleado) { setError('Tu usuario autenticado no está vinculado a un empleado'); return }
       const rol = getRolNombre(empleado) ?? empleado?.rol ?? null
       if (rol === 'cliente') { router.replace('/cliente'); return }
-      if (rol === 'admin' || rol === 'recepcionista' || rol === 'terapeuta') { router.replace('/admin'); return }
+      if (rol === 'terapeuta') { router.replace('/empleado'); return }
+    if (rol === 'admin' || rol === 'recepcionista') { router.replace('/admin'); return }
       router.replace('/sin-acceso')
     } catch (err: any) {
       setError(err?.message || 'Ocurrió un error inesperado')

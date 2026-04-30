@@ -62,6 +62,15 @@ type ComisionDetalle = {
   fecha_pago: string | null
   liquidacion_id?: string | null
   pago_empleado_id?: string | null
+  cliente_id?: string | null
+  cita_id?: string | null
+  servicio_id?: string | null
+  concepto?: string | null
+  descripcion?: string | null
+  cliente_nombre?: string | null
+  servicio_nombre?: string | null
+  cita_fecha?: string | null
+  cita_hora_inicio?: string | null
 }
 
 type Liquidacion = {
@@ -361,6 +370,49 @@ function convertirMonto(
   return null
 }
 
+
+function normalizeComisionDetalle(row: any): ComisionDetalle {
+  const cita = firstOrNull(row?.citas)
+  const clienteDirecto = firstOrNull(row?.clientes)
+  const servicioDirecto = firstOrNull(row?.servicios)
+  const clienteCita = firstOrNull(cita?.clientes)
+  const servicioCita = firstOrNull(cita?.servicios)
+
+  return {
+    ...(row as ComisionDetalle),
+    cliente_nombre: row?.cliente_nombre ?? clienteDirecto?.nombre ?? clienteCita?.nombre ?? null,
+    servicio_nombre: row?.servicio_nombre ?? servicioDirecto?.nombre ?? servicioCita?.nombre ?? null,
+    cita_fecha: row?.cita_fecha ?? cita?.fecha ?? null,
+    cita_hora_inicio: row?.cita_hora_inicio ?? cita?.hora_inicio ?? null,
+    concepto: row?.concepto ?? row?.descripcion ?? null,
+  }
+}
+
+function getComisionConcepto(c: ComisionDetalle) {
+  if (c.concepto?.trim()) return c.concepto.trim()
+
+  const tipo = (c.tipo || '').toLowerCase()
+  const servicio = c.servicio_nombre?.trim()
+  const cliente = c.cliente_nombre?.trim()
+
+  if (servicio && cliente) return `${servicio} · ${cliente}`
+  if (servicio) return servicio
+  if (cliente) return `Comisión de ${cliente}`
+  if (tipo === 'plan') return 'Comisión por plan'
+  if (tipo === 'cita') return 'Comisión por cita'
+  return 'Comisión'
+}
+
+function getComisionSubtitulo(c: ComisionDetalle) {
+  const partes = [
+    c.cliente_nombre ? `Cliente: ${c.cliente_nombre}` : null,
+    c.servicio_nombre ? `Servicio: ${c.servicio_nombre}` : null,
+    c.cita_hora_inicio ? `Hora: ${String(c.cita_hora_inicio).slice(0, 5)}` : null,
+  ].filter(Boolean)
+
+  return partes.length ? partes.join(' · ') : 'Sin detalle de cliente registrado'
+}
+
 function chunkAgendaByCliente(items: AgendaItem[]) {
   const map = new Map<string, { cliente: string; items: AgendaItem[] }>()
 
@@ -447,6 +499,122 @@ export default function VerPersonalPage() {
     setTasaBCVAuto(null)
   }, [monedaPago])
 
+  async function fetchComisionesDetalladas(empleadoId: string) {
+    // IMPORTANTE:
+    // En tu BD, comisiones_detalle SÍ tiene cliente_id, cita_id y servicio_id,
+    // pero no tiene FK directa declarada hacia clientes/servicios. Por eso Supabase
+    // no puede hacer clientes:cliente_id ni servicios:servicio_id desde esta tabla.
+    // La solución estable es cargar la comisión base y luego resolver cliente/servicio
+    // manualmente por IDs y por cita_id.
+    const baseSelect = `
+      id,
+      liquidacion_id,
+      cita_id,
+      empleado_id,
+      cliente_id,
+      servicio_id,
+      cliente_plan_id,
+      base,
+      profesional,
+      rpm,
+      fecha,
+      tipo,
+      estado,
+      moneda,
+      tasa_bcv,
+      monto_base_usd,
+      monto_base_bs,
+      monto_rpm_usd,
+      monto_rpm_bs,
+      monto_profesional_usd,
+      monto_profesional_bs,
+      pagado,
+      fecha_pago,
+      pago_empleado_id,
+      porcentaje_rpm
+    `
+
+    const comRes = await supabase
+      .from('comisiones_detalle')
+      .select(baseSelect)
+      .eq('empleado_id', empleadoId)
+      .order('fecha', { ascending: false })
+
+    if (comRes.error) return comRes
+
+    const rows = ((comRes.data || []) as any[])
+
+    const citaIds = [...new Set(rows.map((r) => r.cita_id).filter(Boolean))]
+    const clienteIdsDirectos = [...new Set(rows.map((r) => r.cliente_id).filter(Boolean))]
+    const servicioIdsDirectos = [...new Set(rows.map((r) => r.servicio_id).filter(Boolean))]
+
+    const [citasSettled, clientesSettled, serviciosSettled] = await Promise.allSettled([
+      citaIds.length
+        ? supabase
+            .from('citas')
+            .select('id, fecha, hora_inicio, cliente_id, servicio_id, clientes:cliente_id ( nombre ), servicios:servicio_id ( nombre )')
+            .in('id', citaIds)
+        : Promise.resolve({ data: [], error: null }),
+      clienteIdsDirectos.length
+        ? supabase.from('clientes').select('id, nombre').in('id', clienteIdsDirectos)
+        : Promise.resolve({ data: [], error: null }),
+      servicioIdsDirectos.length
+        ? supabase.from('servicios').select('id, nombre').in('id', servicioIdsDirectos)
+        : Promise.resolve({ data: [], error: null }),
+    ])
+
+    const citasData = citasSettled.status === 'fulfilled' && !citasSettled.value.error
+      ? ((citasSettled.value.data || []) as any[])
+      : []
+
+    const clientesData = clientesSettled.status === 'fulfilled' && !clientesSettled.value.error
+      ? ((clientesSettled.value.data || []) as any[])
+      : []
+
+    const serviciosData = serviciosSettled.status === 'fulfilled' && !serviciosSettled.value.error
+      ? ((serviciosSettled.value.data || []) as any[])
+      : []
+
+    const citasMap = new Map(citasData.map((c) => [String(c.id), c]))
+    const clientesMap = new Map(clientesData.map((c) => [String(c.id), c]))
+    const serviciosMap = new Map(serviciosData.map((s) => [String(s.id), s]))
+
+    const data = rows.map((row) => {
+      const cita = row.cita_id ? citasMap.get(String(row.cita_id)) : null
+      const clienteDirecto = row.cliente_id ? clientesMap.get(String(row.cliente_id)) : null
+      const servicioDirecto = row.servicio_id ? serviciosMap.get(String(row.servicio_id)) : null
+
+      const clienteNombre =
+        clienteDirecto?.nombre ||
+        firstOrNull(cita?.clientes)?.nombre ||
+        null
+
+      const servicioNombre =
+        servicioDirecto?.nombre ||
+        firstOrNull(cita?.servicios)?.nombre ||
+        null
+
+      return normalizeComisionDetalle({
+        ...row,
+        citas: cita,
+        cliente_nombre: clienteNombre,
+        servicio_nombre: servicioNombre,
+        cita_fecha: cita?.fecha ?? null,
+        cita_hora_inicio: cita?.hora_inicio ?? null,
+        // Este concepto es calculado para UI porque comisiones_detalle no tiene columna concepto.
+        concepto: servicioNombre && clienteNombre
+          ? `${servicioNombre} · ${clienteNombre}`
+          : servicioNombre
+            ? servicioNombre
+            : clienteNombre
+              ? `Comisión de ${clienteNombre}`
+              : null,
+      })
+    })
+
+    return { ...comRes, data }
+  }
+
   async function loadAll() {
     setLoading(true)
     setErrorMsg('')
@@ -484,31 +652,7 @@ export default function VerPersonalPage() {
           .order('fecha')
           .order('hora_inicio'),
 
-        supabase
-          .from('comisiones_detalle')
-          .select(`
-            id,
-            base,
-            profesional,
-            rpm,
-            fecha,
-            tipo,
-            estado,
-            moneda,
-            tasa_bcv,
-            monto_base_usd,
-            monto_base_bs,
-            monto_rpm_usd,
-            monto_rpm_bs,
-            monto_profesional_usd,
-            monto_profesional_bs,
-            pagado,
-            fecha_pago,
-            liquidacion_id,
-            pago_empleado_id
-          `)
-          .eq('empleado_id', id)
-          .order('fecha', { ascending: false }),
+        fetchComisionesDetalladas(id),
 
         supabase
           .from('comisiones_liquidaciones')
@@ -617,7 +761,7 @@ export default function VerPersonalPage() {
       )
     )
 
-    setComisiones((comRes.data || []) as ComisionDetalle[])
+    setComisiones(((comRes.data || []) as any[]).map(normalizeComisionDetalle))
     setLiquidaciones((liqRes.data || []) as Liquidacion[])
     setMetodosPago(metodosNormalizados)
     setEstadoCuentaEmpleado((estadoCuentaRes.data as EstadoCuentaEmpleado | null) ?? null)
@@ -1758,55 +1902,81 @@ export default function VerPersonalPage() {
                   No hay comisiones pendientes con monto para {monedaPago}.
                 </p>
               ) : (
-                <div className="space-y-2">
+                <div className="grid gap-3">
                   {comisionesPendientesMoneda.map((c) => {
                     const checked = selectedComisionIds.includes(c.id)
                     const monto = getComisionMontoByMoneda(c, monedaPago)
+                    const concepto = getComisionConcepto(c)
+                    const subtitulo = getComisionSubtitulo(c)
 
                     return (
-                      <label
+                      <button
                         key={c.id}
-                        className={`flex cursor-pointer items-center justify-between rounded-2xl border px-4 py-3 transition ${
+                        type="button"
+                        onClick={() => toggleComision(c.id)}
+                        aria-pressed={checked}
+                        className={`group w-full rounded-3xl border p-4 text-left transition ${
                           checked
-                            ? 'border-emerald-400/30 bg-emerald-400/10'
-                            : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'
+                            ? 'border-emerald-400/40 bg-emerald-400/[0.10] shadow-[0_0_0_1px_rgba(52,211,153,0.08)]'
+                            : 'border-white/10 bg-white/[0.025] hover:border-white/15 hover:bg-white/[0.045]'
                         }`}
                       >
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleComision(c.id)}
-                            className="h-4 w-4 accent-emerald-400"
-                          />
-
-                          <div>
-                            <div className="flex items-center gap-2">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div className="min-w-0 flex-1">
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
                               <span
-                                className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                                className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
                                   c.tipo === 'plan'
-                                    ? 'bg-violet-500/10 text-violet-400'
-                                    : 'bg-sky-500/10 text-sky-400'
+                                    ? 'bg-violet-500/10 text-violet-300'
+                                    : 'bg-sky-500/10 text-sky-300'
                                 }`}
                               >
-                                {c.tipo}
+                                {c.tipo || 'comisión'}
                               </span>
-                              <span className="text-sm text-white/70">{formatDate(c.fecha)}</span>
+                              <span className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-xs text-white/55">
+                                {formatDate(c.fecha)}
+                              </span>
+                              {checked && (
+                                <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-300">
+                                  Seleccionada
+                                </span>
+                              )}
                             </div>
-                            <p className="mt-1 text-xs text-white/35">
-                              USD: {formatMoney(c.monto_profesional_usd ?? c.profesional)} · BS:{' '}
-                              {formatBs(c.monto_profesional_bs)}
+
+                            <p className="truncate text-sm font-semibold text-white md:text-base">
+                              {concepto}
                             </p>
+                            <p className="mt-1 text-xs text-white/45">{subtitulo}</p>
+
+                            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                              <span className="rounded-full bg-white/[0.04] px-2.5 py-1 text-white/55">
+                                USD {formatMoney(c.monto_profesional_usd ?? c.profesional)}
+                              </span>
+                              <span className="rounded-full bg-white/[0.04] px-2.5 py-1 text-white/55">
+                                Bs {formatBs(c.monto_profesional_bs)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-3 md:block md:text-right">
+                            <div>
+                              <p className="text-xs text-white/35">Monto a liquidar</p>
+                              <p className="text-lg font-bold text-emerald-300">
+                                {formatMontoByMoneda(monto, monedaPago)}
+                              </p>
+                            </div>
+                            <span
+                              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-sm font-bold transition ${
+                                checked
+                                  ? 'border-emerald-400/40 bg-emerald-400/20 text-emerald-200'
+                                  : 'border-white/10 bg-white/[0.03] text-white/25 group-hover:text-white/50'
+                              }`}
+                            >
+                              {checked ? '✓' : '+'}
+                            </span>
                           </div>
                         </div>
-
-                        <div className="text-right">
-                          <p className="text-xs text-white/35">Monto a liquidar</p>
-                          <p className="font-semibold text-emerald-400">
-                            {formatMontoByMoneda(monto, monedaPago)}
-                          </p>
-                        </div>
-                      </label>
+                      </button>
                     )
                   })}
                 </div>
@@ -1816,7 +1986,7 @@ export default function VerPersonalPage() {
             <Card className="mb-4 border-amber-400/20 bg-amber-400/5 p-4">
               <p className="text-sm font-medium text-amber-300">Métodos de pago / carteras</p>
               <p className="mt-1 text-xs text-white/45">
-                Puedes pagar con una sola cartera o dividir entre varias. También puedes usar una cartera de otra moneda y convertir aquí mismo.
+                Puedes pagar con una sola cartera o dividir entre varias. Si el monto pendiente está en USD y eliges un método en Bs, aquí se calcula el equivalente con BCV para pagar la diferencia en bolívares.
               </p>
 
               <div className="mt-4 grid gap-3 md:grid-cols-3">

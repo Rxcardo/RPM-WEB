@@ -48,6 +48,11 @@ type ClientePlan = {
   estado: string
   fecha_fin: string | null
   created_at?: string | null
+  creado_por_empleado_id?: string | null
+  creado_por_auth_user_id?: string | null
+  creado_por_nombre?: string | null
+  creado_por_email?: string | null
+  creado_en?: string | null
   planes: {
     nombre: string
     precio: number | null
@@ -426,6 +431,15 @@ function resolveEmpleadoNombre(cliente: Cliente) {
   return fisioterapeuta || empleado || 'Sin asignar'
 }
 
+function getPlanCreatorLine(plan: ClientePlan | null | undefined) {
+  if (!plan) return '—'
+
+  const nombre = plan.creado_por_nombre?.trim() || 'Sistema / No registrado'
+  const email = plan.creado_por_email?.trim()
+  const fecha = formatAuditDate(plan.creado_en || plan.created_at || null)
+
+  return `${nombre}${email ? ` · ${email}` : ''} · ${fecha}`
+}
 function getAuditLines(cliente: Cliente) {
   const creador = cliente.creado_por?.nombre || 'Sin registro'
   const editor = cliente.editado_por?.nombre || 'Sin registro'
@@ -498,6 +512,7 @@ export default function ClientesPage() {
 
         supabase.from('clientes_planes').select(`
           id, cliente_id, sesiones_totales, sesiones_usadas, estado, fecha_fin, created_at,
+          creado_por_empleado_id, creado_por_auth_user_id, creado_por_nombre, creado_por_email, creado_en,
           planes:plan_id (nombre, precio, vigencia_valor, vigencia_tipo)
         `).eq('estado', 'activo'),
 
@@ -836,6 +851,9 @@ export default function ClientesPage() {
                           <div className="mt-1 text-xs text-white/45">Vence: {formatDate(planActivo.fecha_fin)}</div>
                           <div className="mt-1 text-xs text-white/45">Vigencia: {formatVigencia(planActivo.planes?.vigencia_valor, planActivo.planes?.vigencia_tipo)}</div>
                           <div className="mt-1 text-xs text-white/45">Valor: {money(planActivo.planes?.precio)}</div>
+                          <div className="mt-2 rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-2 text-[11px] leading-4 text-white/45">
+                            <span className="font-semibold text-white/65">Creado por:</span> {getPlanCreatorLine(planActivo)}
+                          </div>
                         </div>
                       ) : (
                         <span className="text-white/55">Sin plan activo</span>
