@@ -155,6 +155,42 @@ function formatMoney(v: number | null | undefined) {
 function formatBs(v: number | null | undefined) {
   return new Intl.NumberFormat('es-VE', { style: 'currency', currency: 'VES', maximumFractionDigits: 2 }).format(Number(v || 0))
 }
+
+
+function safeNumber(value: any) {
+  const n = Number(value ?? 0)
+  return Number.isFinite(n) ? n : 0
+}
+
+function sumPagosPayloadUsd(payload: any, fallbackTasa?: number | null) {
+  if (!Array.isArray(payload)) return 0
+  return r2(payload.reduce((acc, item) => {
+    const moneda = String(item?.moneda_pago ?? item?.moneda ?? item?.monedaPago ?? '').toUpperCase()
+    const tasa = safeNumber(item?.tasa_bcv ?? item?.tasa ?? item?.tasaBcv ?? fallbackTasa ?? 0)
+    const directoUsd = safeNumber(
+      item?.monto_equivalente_usd ??
+      item?.monto_usd ??
+      item?.montoUsd ??
+      item?.equivalente_usd
+    )
+    if (directoUsd > 0) return acc + directoUsd
+
+    const monto = safeNumber(item?.monto_pago ?? item?.monto ?? item?.montoPago ?? item?.amount)
+    if (moneda === 'BS' || moneda === 'VES' || moneda === 'VEF') {
+      return acc + (tasa > 0 ? monto / tasa : 0)
+    }
+    return acc + monto
+  }, 0))
+}
+
+function buildEstadoFinanciero(total: number, pagado: number) {
+  const t = r2(total)
+  const p = r2(pagado)
+  const saldo = r2(Math.max(t - p, 0))
+  const excedente = r2(Math.max(p - t, 0))
+  const estado = p <= 0 ? 'pendiente' : saldo > 0 ? 'parcial' : 'pagado'
+  return { total: t, pagado: p, saldo, excedente, estado }
+}
 function getPlanDisponible(p: ClientePlan) { return Math.max(Number(p.sesiones_totales || 0) - Number(p.sesiones_usadas || 0), 0) }
 function getPlanLabel(p: ClientePlan) { return `${p.planes?.nombre || 'Plan'} · ${getPlanDisponible(p)}/${p.sesiones_totales} disponibles` }
 
@@ -483,22 +519,35 @@ function NuevaCitaPageContent() {
       alert('Completa cliente, fisioterapeuta, servicio y agrega al menos una hora al lote.')
       return
     }
+
     // Tipo de cita fijo: Recovery. No consume plan ni permite independiente.
     if (form.estado === 'cancelada') { alert('No se puede cobrar una cita cancelada.'); return }
     if (montoBase <= 0) { alert('El monto de la cita debe ser mayor a 0.'); return }
-    if (baseComisionAplicada <= 0) { alert('La base de comisión debe ser mayor a 0.'); return }
+    if (baseComisionAplicada <= 0) { alert('La base de comisión por cita debe ser mayor a 0.'); return }
     if (!comisionBalanceOk) { alert('La distribución de comisión no cuadra correctamente.'); return }
+
+    // IMPORTANTE:
+    // - El pago/deuda se registra UNA sola vez por el total del lote.
+    // - Las comisiones se registran UNA por cita usando base unitaria.
+    // - Si el pago es parcial o no hay pago, se crea UNA sola cuenta por cobrar por el saldo del lote.
+    // - Si entra más dinero que el total, se conserva el pago real y el excedente queda auditado en notas.
     const errorPago = validarPagoConDeuda(pagoState, montoTotalLote)
     if (errorPago) { alert(errorPago); return }
+
+    const pagosPayloadPreview = pagoState.tipoCobro !== 'sin_pago' ? buildPagosRpcPayload(pagoState, montoTotalLote) : null
+    const totalPagadoPreviewUsd = pagoState.tipoCobro === 'sin_pago' ? 0 : sumPagosPayloadUsd(pagosPayloadPreview, getTasaReferenciaFromState(pagoState))
+    const estadoFinancieroPreview = buildEstadoFinanciero(montoTotalLote, totalPagadoPreviewUsd)
 
     setLoading(true)
     try {
       let auditorId = empleadoActualId || ''
       if (!auditorId) { auditorId = await resolveEmpleadoActualId(); setEmpleadoActualId(auditorId) }
 
-      const clienteNombre     = clientes.find((c) => c.id === form.cliente_id)?.nombre || 'Cliente'
-      const nombreServicio    = servicioSeleccionado?.nombre || 'Servicio'
+      const clienteNombre  = clientes.find((c) => c.id === form.cliente_id)?.nombre || 'Cliente'
+      const nombreServicio = servicioSeleccionado?.nombre || 'Servicio'
+      const createdCitas: Array<{ id: string; fecha: string; hora_inicio: string }> = []
 
+      // 1) Crear todas las citas y sus comisiones UNITARIAS.
       for (const slot of slotsFinal) {
         const hiN = normHoraConSegundos(slot.hora_inicio)
         const hfN = normHoraConSegundos(slot.hora_fin)
@@ -507,79 +556,137 @@ function NuevaCitaPageContent() {
           throw new Error(`La hora fin de ${slot.hora_inicio} debe ser mayor que la hora inicio.`)
         }
 
-        // Validar disponibilidad — usa la fecha propia del slot
         const { data: validacion, error: valErr } = await supabase.rpc('validar_disponibilidad_cita', {
-          p_cliente_id: form.cliente_id, p_terapeuta_id: form.terapeuta_id,
+          p_cliente_id: form.cliente_id,
+          p_terapeuta_id: form.terapeuta_id,
           p_recurso_id: form.recurso_id || null,
-          p_fecha: slot.fecha,   // ← fecha propia del slot
-          p_hora_inicio: hiN, p_hora_fin: hfN,
+          p_fecha: slot.fecha,
+          p_hora_inicio: hiN,
+          p_hora_fin: hfN,
         })
         if (valErr) throw new Error(`Error validando (${slot.fecha} ${slot.hora_inicio}): ${valErr.message}`)
         if (!(validacion as ValidacionCita)?.disponible) {
           throw new Error(`${slot.fecha} ${slot.hora_inicio}: ${buildErrorFromValidacion(validacion as ValidacionCita)}`)
         }
 
-        // Crear cita — usa la fecha propia del slot
         const { data: citaData, error: citaErr } = await supabase.from('citas').insert({
-          cliente_id: form.cliente_id, terapeuta_id: form.terapeuta_id,
-          servicio_id: form.servicio_id, recurso_id: form.recurso_id || null,
-          fecha: slot.fecha,   // ← fecha propia del slot
-          hora_inicio: hiN, hora_fin: hfN,
-          estado: form.estado, notas: form.notas || null,
+          cliente_id: form.cliente_id,
+          terapeuta_id: form.terapeuta_id,
+          servicio_id: form.servicio_id,
+          recurso_id: form.recurso_id || null,
+          fecha: slot.fecha,
+          hora_inicio: hiN,
+          hora_fin: hfN,
+          estado: form.estado,
+          notas: form.notas || null,
           cliente_plan_id: null,
-          created_by: auditorId || null, updated_by: auditorId || null,
+          created_by: auditorId || null,
+          updated_by: auditorId || null,
         }).select('id').single()
         if (citaErr) throw new Error(`${slot.fecha} ${slot.hora_inicio}: ${citaErr.message}`)
+
         const citaId = citaData.id
+        createdCitas.push({ id: citaId, fecha: slot.fecha, hora_inicio: slot.hora_inicio })
 
-        const conceptoBase = `${nombreServicio} - ${clienteNombre} - ${slot.fecha} ${slot.hora_inicio}`
-        const concepto = `${conceptoBase} [Recovery]`
-
-        // Registrar pago
-        if (pagoState.tipoCobro !== 'sin_pago') {
-          const pagosPayload = buildPagosRpcPayload(pagoState, montoBase)
-          if (pagosPayload) {
-            const { error: pagoErr } = await supabase.rpc('registrar_pagos_mixtos', {
-              p_fecha: fechaPago, p_tipo_origen: 'cita', p_categoria: 'cita', p_concepto: concepto,
-              p_cliente_id: form.cliente_id, p_cita_id: citaId,
-              p_cliente_plan_id: null,
-              p_cuenta_cobrar_id: null, p_inventario_id: null,
-              p_registrado_por: auditorId || null, p_notas_generales: null,
-              p_pagos: pagosPayload,
-            })
-            if (pagoErr) throw new Error(`Error pago (${slot.fecha} ${slot.hora_inicio}): ${pagoErr.message}`)
-          }
-        }
-
-        // Cuenta por cobrar si hay deuda
-        const cxcPayload = buildCuentaPorCobrarPayload({
-          state: pagoState, montoTotal: montoBase, clienteId: form.cliente_id,
-          clienteNombre, concepto, fecha: fechaPago, registradoPor: auditorId || null,
-        })
-        if (cxcPayload) {
-          const { error: cxcErr } = await supabase.from('cuentas_por_cobrar').insert(cxcPayload)
-          if (cxcErr) console.warn('No se pudo crear cuenta por cobrar:', cxcErr.message)
-        }
-
-        // Comisión
         const { error: comisionErr } = await supabase.from('comisiones_detalle').insert({
-          empleado_id: form.terapeuta_id, cliente_id: form.cliente_id,
-          cita_id: citaId, servicio_id: form.servicio_id, fecha: fechaPago,
-          tipo: 'cita', estado: 'pendiente', pagado: false,
-          base: baseComisionAplicada, rpm: rpmMonto, profesional: terapeutaMonto,
-          moneda: tasaReferenciaComision ? 'BS' : 'USD', tasa_bcv: tasaReferenciaComision,
+          empleado_id: form.terapeuta_id,
+          cliente_id: form.cliente_id,
+          cita_id: citaId,
+          servicio_id: form.servicio_id,
+          fecha: slot.fecha,
+          tipo: 'cita',
+          estado: 'pendiente',
+          pagado: false,
+          base: baseComisionAplicada,
+          rpm: rpmMonto,
+          profesional: terapeutaMonto,
+          moneda: tasaReferenciaComision ? 'BS' : 'USD',
+          tasa_bcv: tasaReferenciaComision,
           porcentaje_rpm: porcentajeRpmAplicado,
-          monto_base_usd: comisionEq.monto_base_usd, monto_base_bs: comisionEq.monto_base_bs,
-          monto_rpm_usd: comisionEq.monto_rpm_usd,   monto_rpm_bs: comisionEq.monto_rpm_bs,
-          monto_profesional_usd: comisionEq.monto_profesional_usd, monto_profesional_bs: comisionEq.monto_profesional_bs,
+          monto_base_usd: comisionEq.monto_base_usd,
+          monto_base_bs: comisionEq.monto_base_bs,
+          monto_rpm_usd: comisionEq.monto_rpm_usd,
+          monto_rpm_bs: comisionEq.monto_rpm_bs,
+          monto_profesional_usd: comisionEq.monto_profesional_usd,
+          monto_profesional_bs: comisionEq.monto_profesional_bs,
         })
         if (comisionErr) throw new Error(`Error comisión (${slot.fecha} ${slot.hora_inicio}): ${comisionErr.message}`)
+      }
+
+      if (createdCitas.length === 0) throw new Error('No se creó ninguna cita.')
+
+      // 2) Registrar UN SOLO pago para todo el lote.
+      const primeraCita = createdCitas[0]
+      const ultimaCita = createdCitas[createdCitas.length - 1]
+      const rangoTexto = createdCitas.length > 1
+        ? `${createdCitas.length} citas · ${primeraCita.fecha} ${primeraCita.hora_inicio} → ${ultimaCita.fecha} ${ultimaCita.hora_inicio}`
+        : `${primeraCita.fecha} ${primeraCita.hora_inicio}`
+      const concepto = `${nombreServicio} - ${clienteNombre} - ${rangoTexto} [Recovery]`
+      const estadoFinanciero = estadoFinancieroPreview
+      const notasFinancieras = [
+        `Pago único por lote. Citas: ${createdCitas.map((c) => c.id).join(', ')}`,
+        `Total lote USD: ${estadoFinanciero.total}`,
+        `Pagado USD estimado: ${estadoFinanciero.pagado}`,
+        `Saldo/deuda USD: ${estadoFinanciero.saldo}`,
+        estadoFinanciero.excedente > 0 ? `Saldo a favor/excedente USD: ${estadoFinanciero.excedente}` : '',
+        `Estado financiero calculado: ${estadoFinanciero.estado}`,
+      ].filter(Boolean)
+      const notasLote = notasFinancieras.join(' | ')
+
+      if (pagoState.tipoCobro !== 'sin_pago') {
+        const pagosPayload = pagosPayloadPreview
+        if (pagosPayload) {
+          const { error: pagoErr } = await supabase.rpc('registrar_pagos_mixtos', {
+            p_fecha: fechaPago,
+            p_tipo_origen: 'cita',
+            p_categoria: 'cita',
+            p_concepto: concepto,
+            p_cliente_id: form.cliente_id,
+            // Sin lote_id en la BD actual: enlazamos el cobro al primer registro y dejamos los IDs en notas.
+            p_cita_id: primeraCita.id,
+            p_cliente_plan_id: null,
+            p_cuenta_cobrar_id: null,
+            p_inventario_id: null,
+            p_registrado_por: auditorId || null,
+            p_notas_generales: notasLote,
+            p_pagos: pagosPayload,
+          })
+          if (pagoErr) throw new Error(`Error registrando pago único del lote: ${pagoErr.message}`)
+        }
+      }
+
+      // 3) Crear UNA SOLA cuenta por cobrar si quedó deuda del lote.
+      const cxcPayload = estadoFinanciero.saldo > 0 ? buildCuentaPorCobrarPayload({
+        state: pagoState,
+        montoTotal: montoTotalLote,
+        clienteId: form.cliente_id,
+        clienteNombre,
+        concepto,
+        fecha: fechaPago,
+        registradoPor: auditorId || null,
+      }) : null
+      if (cxcPayload) {
+        const cxcSafe = cxcPayload as any
+        const { error: cxcErr } = await supabase.from('cuentas_por_cobrar').insert({
+          ...cxcSafe,
+          monto_total_usd: estadoFinanciero.total,
+          monto_pagado_usd: estadoFinanciero.pagado,
+          saldo_usd: estadoFinanciero.saldo,
+          estado: cxcSafe.estado ?? 'pendiente',
+          notas: [cxcSafe.notas, notasLote].filter(Boolean).join(' | '),
+          origen_tipo: cxcSafe.origen_tipo ?? 'cita_lote',
+          origen_id: primeraCita.id,
+          operacion_origen: cxcSafe.operacion_origen ?? 'cita_lote',
+        })
+        if (cxcErr) console.warn('No se pudo crear cuenta por cobrar del lote:', cxcErr.message)
       }
 
       router.push('/admin/operaciones/agenda')
     } catch (err: any) {
       alert(err?.message || 'No se pudieron crear las citas.')
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+    }
   }
 
   // ─── JSX ──────────────────────────────────────────────────────────────
@@ -591,7 +698,9 @@ function NuevaCitaPageContent() {
   )
   const totalCitas = slots.length + (horaActualPendiente ? 1 : 0)
   const montoTotalLote = useMemo(() => r2(montoBase * Math.max(totalCitas, 1)), [montoBase, totalCitas])
-  const baseComisionAplicada  = useMemo(() => usarPrecioServicio ? r2(baseComisionOriginal * Math.max(totalCitas, 1)) : montoTotalLote, [usarPrecioServicio, baseComisionOriginal, totalCitas, montoTotalLote])
+  // Comisión UNITARIA por cita. Nunca se multiplica por la cantidad del lote.
+  const baseComisionAplicada  = useMemo(() => usarPrecioServicio ? r2(baseComisionOriginal) : montoBase, [usarPrecioServicio, baseComisionOriginal, montoBase])
+  const baseComisionTotalLote = useMemo(() => r2(baseComisionAplicada * Math.max(totalCitas, 1)), [baseComisionAplicada, totalCitas])
   const porcentajeRpmAplicado    = useMemo(() => clamp(r2(porcentajeRpmEditable), 0, 100), [porcentajeRpmEditable])
   const porcentajeEntAplicado    = useMemo(() => clamp(r2(100 - porcentajeRpmAplicado), 0, 100), [porcentajeRpmAplicado])
   const rpmMonto                 = useMemo(() => r2((baseComisionAplicada * porcentajeRpmAplicado) / 100), [baseComisionAplicada, porcentajeRpmAplicado])
@@ -626,7 +735,7 @@ function NuevaCitaPageContent() {
           <p className="text-sm text-white/55">Agenda</p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">Nueva cita</h1>
           <p className="mt-2 text-sm text-white/55">
-            Crea una o varias citas de golpe — el pago y la comisión se aplican a cada una.
+            Crea una o varias citas de golpe — el pago/deuda se registra una sola vez y las comisiones quedan por cita.
           </p>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -769,7 +878,7 @@ function NuevaCitaPageContent() {
                   </div>
                   <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
                     <p className="text-[11px] uppercase tracking-wide text-white/40">Total estimado</p>
-                    <p className="mt-1 text-sm font-semibold text-white">{formatMoney(r2(montoBase * (slots.length || 1)))}</p>
+                    <p className="mt-1 text-sm font-semibold text-white">{formatMoney(montoTotalLote)}</p>
                   </div>
                 </div>
 
@@ -798,7 +907,7 @@ function NuevaCitaPageContent() {
 
                 {slots.length > 0 && (
                   <p className="mt-3 text-xs text-white/35">
-                    El pago, la deuda y la comisión se aplicarán a <strong className="text-white/60">cada cita</strong> del lote por separado.
+                    El pago/deuda se registrará una sola vez por el lote. La comisión sí se calcula por cita con base unitaria.
                   </p>
                 )}
               </div>
@@ -814,7 +923,7 @@ function NuevaCitaPageContent() {
       </Section>
 
       {/* ── Pago ── */}
-      <Section title="Pago" description="Registra el pago. Se aplica a cada cita del lote por separado.">
+      <Section title="Pago" description="Registra un único pago para todo el lote. Si no cubre el total, se genera una deuda por el saldo.">
         <Card className="p-6">
           <div className="space-y-5">
             <div className="grid gap-4 md:grid-cols-2">
@@ -835,10 +944,14 @@ function NuevaCitaPageContent() {
               <div className="flex flex-col justify-center rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
                 <p className="text-xs text-white/45">Por cita: {formatMoney(montoBase)}</p>
                 <p className="mt-1 text-base font-semibold text-white">
-                  Lote total: {formatMoney(r2(montoBase * Math.max(totalCitas, 1)))}
+                  Lote total: {formatMoney(montoTotalLote)}
                   {totalCitas > 1 && <span className="ml-2 text-xs font-normal text-white/45">({totalCitas} citas)</span>}
                 </p>
               </div>
+            </div>
+            <div className="rounded-2xl border border-emerald-400/15 bg-emerald-400/5 p-4 text-xs text-emerald-50/80">
+              <p className="font-semibold text-emerald-100">Regla blindada</p>
+              <p className="mt-1">El total del lote se cobra una sola vez. Si el pago es menor, se crea una sola deuda por el saldo. Si el pago supera el total, el excedente queda auditado en notas del pago.</p>
             </div>
             {montoBase > 0 ? (
               <>
@@ -869,7 +982,7 @@ function NuevaCitaPageContent() {
       </Section>
 
       {/* ── Comisión ── */}
-      <Section title="Configuración de comisión" description="Los porcentajes vienen del servicio pero pueden editarse para esta cita.">
+      <Section title="Configuración de comisión" description="Los porcentajes vienen del servicio/profesional y se aplican por cita, nunca sobre el total del lote.">
         <Card className="p-6">
           <div className="space-y-5">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -886,7 +999,7 @@ function NuevaCitaPageContent() {
                   <button type="button" onClick={() => setUsarPrecioServicio((p) => !p)} className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.03] px-3 text-xs text-white/60 hover:bg-white/[0.06]">{usarPrecioServicio ? 'Editar' : 'Servicio'}</button>
                 </div>
               </Field>
-              <Field label="Base comisión" helper="Igual al monto cobrado.">
+              <Field label="Base comisión por cita" helper="Base unitaria. No se multiplica al guardar comisiones del lote.">
                 <input type="number" value={String(baseComisionAplicada)} readOnly className={`${inputCls} cursor-not-allowed opacity-80`} />
               </Field>
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
@@ -908,17 +1021,17 @@ function NuevaCitaPageContent() {
             </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div className="rounded-[28px] border border-white/10 bg-white/[0.05] p-5">
-                <p className="text-sm text-white/60">Base</p>
+                <p className="text-sm text-white/60">Base por cita</p>
                 <p className="mt-2 text-3xl font-bold text-white">{formatMoney(baseComisionAplicada)}</p>
-                <p className="mt-2 text-xs text-white/40">Precio cobrado: {formatMoney(montoTotalLote)}</p>
+                <p className="mt-2 text-xs text-white/40">Base total lote: {formatMoney(baseComisionTotalLote)} · Cobro total: {formatMoney(montoTotalLote)}</p>
               </div>
               <div className="rounded-[28px] border border-violet-400/15 bg-white/[0.05] p-5">
-                <p className="text-sm text-white/60">RPM recibe</p>
+                <p className="text-sm text-white/60">RPM recibe por cita</p>
                 <p className="mt-2 text-3xl font-bold text-violet-400">{formatMoney(rpmMonto)}</p>
                 <p className="mt-2 text-sm text-white/50">{porcentajeRpmAplicado}%</p>
               </div>
               <div className="rounded-[28px] border border-emerald-400/15 bg-white/[0.05] p-5">
-                <p className="text-sm text-white/60">Fisioterapeuta recibe</p>
+                <p className="text-sm text-white/60">Fisioterapeuta recibe por cita</p>
                 <p className="mt-2 text-3xl font-bold text-emerald-400">{formatMoney(terapeutaMonto)}</p>
                 <p className="mt-2 text-sm text-white/50">{porcentajeEntAplicado}%</p>
               </div>
