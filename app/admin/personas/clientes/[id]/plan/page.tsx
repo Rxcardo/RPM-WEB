@@ -711,25 +711,92 @@ export default function ClientePlanPage() {
   async function handleCancelar(e: React.FormEvent) {
     e.preventDefault()
     if (cancellingRef.current || saving) return
-    setErrorMsg(''); setSuccessMsg('')
+    setErrorMsg('')
+    setSuccessMsg('')
     if (!motivoCancelacion) { setErrorMsg('Selecciona el motivo.'); return }
     if (pagoAlCancelar === null) { setErrorMsg('Indica si el cliente realizó el pago.'); return }
     if (!planActivo) { setErrorMsg('No hay plan activo.'); return }
-    cancellingRef.current = true; setSaving(true)
+
+    cancellingRef.current = true
+    setSaving(true)
+
     try {
-      await supabase.from('clientes_planes').update({ estado: 'cancelado' }).eq('id', planActivo.id)
-      await supabase.from('entrenamientos').update({ estado: 'cancelado' }).eq('cliente_plan_id', planActivo.id).eq('estado', 'programado')
+      await supabase
+        .from('clientes_planes')
+        .update({ estado: 'cancelado' })
+        .eq('id', planActivo.id)
+
+      await supabase
+        .from('entrenamientos')
+        .update({ estado: 'cancelado' })
+        .eq('cliente_plan_id', planActivo.id)
+        .eq('estado', 'programado')
+
       const detalle = `${motivoCancelacion} | pago:${pagoAlCancelar}`
-      const { data: eventoExistente } = await supabase.from('clientes_planes_eventos').select('id').eq('cliente_plan_id', planActivo.id).eq('cliente_id', id).eq('tipo', 'cancelado').eq('detalle', detalle).limit(1).maybeSingle()
-      if (!eventoExistente?.id) await supabase.from('clientes_planes_eventos').insert({ cliente_plan_id: planActivo.id, cliente_id: id, tipo: 'cancelado', detalle })
-      if (pagoAlCancelar === 'no') {
-        await supabase.from('pagos').update({ estado: 'anulado', notas: 'Anulado por cancelación de plan sin pago confirmado' }).eq('cliente_plan_id', planActivo.id).eq('estado', 'pagado')
-        await supabase.from('comisiones_detalle').delete().eq('cliente_plan_id', planActivo.id).eq('estado', 'pendiente')
+      const { data: eventoExistente } = await supabase
+        .from('clientes_planes_eventos')
+        .select('id')
+        .eq('cliente_plan_id', planActivo.id)
+        .eq('cliente_id', id)
+        .eq('tipo', 'cancelado')
+        .eq('detalle', detalle)
+        .limit(1)
+        .maybeSingle()
+
+      if (!eventoExistente?.id) {
+        await supabase.from('clientes_planes_eventos').insert({
+          cliente_plan_id: planActivo.id,
+          cliente_id: id,
+          tipo: 'cancelado',
+          detalle,
+        })
       }
-      setSuccessMsg(pagoAlCancelar === 'no' ? 'Plan cancelado sin efecto económico.' : 'Plan cancelado. El pago/comisión se mantienen.')
-      resetForm(); setModo(null); await fetchAll()
-    } catch (err: any) { setErrorMsg(err?.message || 'Error al cancelar.') }
-    finally { setSaving(false); cancellingRef.current = false }
+
+      if (pagoAlCancelar === 'no') {
+        await supabase
+          .from('pagos')
+          .update({
+            estado: 'anulado',
+            notas: 'Anulado por cancelación de plan sin pago confirmado',
+          })
+          .eq('cliente_plan_id', planActivo.id)
+          .eq('tipo_origen', 'plan')
+
+        await supabase
+          .from('cuentas_por_cobrar')
+          .update({
+            estado: 'anulado',
+            saldo_usd: 0,
+            saldo_bs: 0,
+            monto_pagado_usd: 0,
+            monto_pagado_bs: 0,
+            notas: 'Anulado por cancelación de plan sin pago confirmado',
+          })
+          .eq('origen_id', planActivo.id)
+          .eq('origen_tipo', 'plan')
+
+        await supabase
+          .from('comisiones_detalle')
+          .delete()
+          .eq('cliente_plan_id', planActivo.id)
+          .eq('tipo', 'plan')
+          .eq('estado', 'pendiente')
+      }
+
+      setSuccessMsg(
+        pagoAlCancelar === 'no'
+          ? 'Plan cancelado sin efecto económico. Pagos anulados, deuda en cero y comisiones pendientes eliminadas.'
+          : 'Plan cancelado. El pago/comisión se mantienen.'
+      )
+      resetForm()
+      setModo(null)
+      await fetchAll()
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Error al cancelar.')
+    } finally {
+      setSaving(false)
+      cancellingRef.current = false
+    }
   }
 
   // ─── Render formulario de plan ────────────────────────────────────────
