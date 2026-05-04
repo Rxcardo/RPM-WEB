@@ -1063,6 +1063,21 @@ function IngresosPageContent() {
     return operacionPagoId as string | null
   }
 
+
+  async function obtenerPagoRealIdPorOperacion(operacionPagoId: string | null) {
+    if (!operacionPagoId) return null
+    const { data, error } = await supabase
+      .from('pagos')
+      .select('id')
+      .eq('operacion_pago_id', operacionPagoId)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    if (error) throw error
+    return data?.id || null
+  }
+
   async function registrarPagoMixtoSaldo(args: {
     fecha: string; concepto: string; clienteId: string; notasGenerales: string | null; pagos: any[]
   }) {
@@ -1157,9 +1172,10 @@ function IngresosPageContent() {
           notasGenerales: notas.trim() || null,
           pagos: buildPagosPayloadRapido(),
         })
+        const pagoRealId = await obtenerPagoRealIdPorOperacion(operacionPagoId)
         const cantidadAnterior = Number(productoSeleccionado?.cantidad_actual || 0)
         await descontarInventarioYCrearMovimiento({
-          pagoId: operacionPagoId, productoId, cantidad,
+          pagoId: pagoRealId, productoId, cantidad,
           cantidadAnterior, cantidadNueva: cantidadAnterior - cantidad,
           precioUnitarioUSD, totalUSD,
           conceptoMovimiento: 'Venta rápida (sin cliente)',
@@ -1273,9 +1289,10 @@ ${notas.trim()}` : ''}`,
             })
           }
 
+          const pagoRealId = await obtenerPagoRealIdPorOperacion(operacionPagoId)
           const cantidadAnterior = Number(productoSeleccionado?.cantidad_actual || 0)
           await descontarInventarioYCrearMovimiento({
-            pagoId: operacionPagoId,
+            pagoId: pagoRealId,
             productoId,
             cantidad,
             cantidadAnterior,
@@ -1459,9 +1476,10 @@ ${notas.trim()}` : ''}`,
         }
 
         // Descontar inventario
+        const pagoRealId = await obtenerPagoRealIdPorOperacion(operacionPagoId)
         const cantidadAnterior = Number(productoSeleccionado?.cantidad_actual || 0)
         await descontarInventarioYCrearMovimiento({
-          pagoId: operacionPagoId, productoId, cantidad,
+          pagoId: pagoRealId, productoId, cantidad,
           cantidadAnterior, cantidadNueva: cantidadAnterior - cantidad,
           precioUnitarioUSD, totalUSD,
           conceptoMovimiento: `Venta a ${clienteSeleccionado.nombre}`,
