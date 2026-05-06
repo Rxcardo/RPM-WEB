@@ -690,7 +690,7 @@ export default function ClienteDetallePage() {
 
     const { error } = await supabase
       .from('clientes_planes')
-      .update({ fecha_fin: fechaNueva, updated_at: new Date().toISOString() })
+      .update({ fecha_fin: fechaNueva })
       .eq('id', clientePlanId)
 
     if (error) throw new Error(`No se pudo extender vencimiento del plan: ${error.message}`)
