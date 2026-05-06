@@ -706,7 +706,100 @@ export default function ClientePlanPage() {
     finally { setSaving(false); renewingRef.current = false }
   }
 
-  // ─── Cancelar ─────────────────────────────────────────────────────────
+  // ─── Cancelar / limpiar efecto económico ────────────────────────────────
+
+  async function getCuentasPorCobrarPlan(clientePlanId: string) {
+    const clienteNombre = cliente?.nombre || ''
+    const planNombre = planActivo?.planes?.nombre || ''
+
+    const filtros = [
+      `origen_id.eq.${clientePlanId}`,
+      `concepto.ilike.%${planNombre}%`,
+      `concepto.ilike.%${clienteNombre}%`,
+    ].filter(Boolean).join(',')
+
+    const { data, error } = await supabase
+      .from('cuentas_por_cobrar')
+      .select('id, concepto, estado, saldo_usd, monto_total_usd')
+      .eq('cliente_id', id)
+      .or(filtros)
+
+    if (error) throw new Error(`Buscar deuda del plan: ${error.message}`)
+    return (data || []) as Array<{ id: string; concepto: string | null; estado: string | null; saldo_usd: number | null; monto_total_usd: number | null }>
+  }
+
+  async function getPagosPlan(clientePlanId: string) {
+    const { data, error } = await supabase
+      .from('pagos')
+      .select('id, concepto, estado, monto, monto_usd, monto_bs')
+      .eq('cliente_id', id)
+      .eq('cliente_plan_id', clientePlanId)
+
+    if (error) throw new Error(`Buscar pagos del plan: ${error.message}`)
+    return (data || []) as Array<{ id: string; concepto: string | null; estado: string | null; monto?: number | null; monto_usd?: number | null; monto_bs?: number | null }>
+  }
+
+  async function eliminarEfectoEconomicoPlan(clientePlanId: string) {
+    const cuentas = await getCuentasPorCobrarPlan(clientePlanId)
+    const pagos = await getPagosPlan(clientePlanId)
+
+    const cuentaIds = cuentas.map((c) => c.id).filter(Boolean)
+    const pagoIds = pagos.map((p) => p.id).filter(Boolean)
+
+    // 1) Primero se eliminan movimientos dependientes para que no bloqueen los DELETE.
+    // Si la tabla no existe o alguna columna no existe, no se detiene la cancelación.
+    if (cuentaIds.length) {
+      const { error } = await supabase
+        .from('movimientos_inventario')
+        .delete()
+        .in('cuenta_cobrar_id', cuentaIds)
+      if (error) console.warn('No se pudieron eliminar movimientos por cuenta por cobrar:', error.message)
+    }
+
+    if (pagoIds.length) {
+      const { error } = await supabase
+        .from('movimientos_inventario')
+        .delete()
+        .in('pago_id', pagoIds)
+      if (error) console.warn('No se pudieron eliminar movimientos por pago:', error.message)
+    }
+
+    // 2) Eliminar pagos reales o parciales del plan.
+    // Esto cubre: no pagó, pagó mitad, pago mixto, pago viejo cargado por error.
+    if (pagoIds.length) {
+      const { error } = await supabase
+        .from('pagos')
+        .delete()
+        .in('id', pagoIds)
+      if (error) throw new Error(`Eliminar pagos del plan: ${error.message}`)
+    }
+
+    // 3) Eliminar deuda/cuenta por cobrar del plan.
+    // No usamos estado='anulado' porque tu check constraint no lo permite.
+    if (cuentaIds.length) {
+      const { error } = await supabase
+        .from('cuentas_por_cobrar')
+        .delete()
+        .in('id', cuentaIds)
+      if (error) throw new Error(`Eliminar deuda del plan: ${error.message}`)
+    }
+
+    // 4) Eliminar comisiones pendientes del plan.
+    // Si ya estuvieran liquidadas/pagadas, no se borran para no romper liquidaciones históricas.
+    const { error: comisionError } = await supabase
+      .from('comisiones_detalle')
+      .delete()
+      .eq('cliente_plan_id', clientePlanId)
+      .eq('tipo', 'plan')
+      .eq('estado', 'pendiente')
+
+    if (comisionError) throw new Error(`Eliminar comisiones del plan: ${comisionError.message}`)
+
+    return {
+      cuentasEliminadas: cuentaIds.length,
+      pagosEliminados: pagoIds.length,
+    }
+  }
 
   async function handleCancelar(e: React.FormEvent) {
     e.preventDefault()
@@ -752,41 +845,19 @@ export default function ClientePlanPage() {
         })
       }
 
+      let resumenLimpieza = { cuentasEliminadas: 0, pagosEliminados: 0 }
+
+      // Caso importante:
+      // Si se creó mal el plan y marcas que NO pagó, se borra TODO el efecto económico.
+      // Esto también cubre el caso de pago parcial: se elimina el pago parcial y la deuda restante.
       if (pagoAlCancelar === 'no') {
-        await supabase
-          .from('pagos')
-          .update({
-            estado: 'anulado',
-            notas: 'Anulado por cancelación de plan sin pago confirmado',
-          })
-          .eq('cliente_plan_id', planActivo.id)
-          .eq('tipo_origen', 'plan')
-
-        await supabase
-          .from('cuentas_por_cobrar')
-          .update({
-            estado: 'anulado',
-            saldo_usd: 0,
-            saldo_bs: 0,
-            monto_pagado_usd: 0,
-            monto_pagado_bs: 0,
-            notas: 'Anulado por cancelación de plan sin pago confirmado',
-          })
-          .eq('origen_id', planActivo.id)
-          .eq('origen_tipo', 'plan')
-
-        await supabase
-          .from('comisiones_detalle')
-          .delete()
-          .eq('cliente_plan_id', planActivo.id)
-          .eq('tipo', 'plan')
-          .eq('estado', 'pendiente')
+        resumenLimpieza = await eliminarEfectoEconomicoPlan(planActivo.id)
       }
 
       setSuccessMsg(
         pagoAlCancelar === 'no'
-          ? 'Plan cancelado sin efecto económico. Pagos anulados, deuda en cero y comisiones pendientes eliminadas.'
-          : 'Plan cancelado. El pago/comisión se mantienen.'
+          ? `Plan cancelado sin efecto económico. Se eliminaron ${resumenLimpieza.pagosEliminados} pago(s), ${resumenLimpieza.cuentasEliminadas} deuda(s) y comisiones pendientes del plan.`
+          : 'Plan cancelado. El pago, la deuda y las comisiones se mantienen porque marcaste que sí pagó.'
       )
       resetForm()
       setModo(null)
