@@ -270,6 +270,16 @@ function getPlanStatusLabel(estado: string | null | undefined) {
   }
 }
 
+function getEstadoPlanEfectivo(estado: string | null | undefined, fechaFin: string | null | undefined, hoy = getTodayKey()) {
+  const estadoNormalizado = (estado || '').toLowerCase()
+
+  if (estadoNormalizado === 'activo' && fechaFin && fechaFin < hoy) {
+    return 'vencido'
+  }
+
+  return estadoNormalizado || 'sin_estado'
+}
+
 
 function getTodayKey() {
   return new Date().toISOString().slice(0, 10)
@@ -928,9 +938,9 @@ export default function ClienteDetallePage() {
       const planId = sesion.cliente_plan_id || 'sin-plan'
       const plan = planesMap.get(planId) || null
       const fechaFin = plan?.fecha_fin || sesion.clientes_planes?.fecha_fin || null
-      const estado = plan?.estado || sesion.clientes_planes?.estado || 'sin_estado'
+      const estado = getEstadoPlanEfectivo(plan?.estado || sesion.clientes_planes?.estado || 'sin_estado', fechaFin, hoyKey)
       const nombre = plan?.planes?.nombre || sesion.clientes_planes?.planes?.nombre || 'Sesiones sin plan asociado'
-      const operativo = plan ? isPlanOperativo(plan, hoyKey) : isSesionDePlanOperativo(sesion, activePlanIds)
+      const operativo = !!plan && isPlanOperativo(plan, hoyKey)
 
       if (!grupos.has(planId)) {
         grupos.set(planId, {
@@ -950,18 +960,34 @@ export default function ClienteDetallePage() {
     })
 
     return Array.from(grupos.values())
-      .map((grupo) => ({
-        ...grupo,
-        sesiones: [...grupo.sesiones].sort((a, b) => `${b.fecha || ''} ${b.hora_inicio || ''}`.localeCompare(`${a.fecha || ''} ${a.hora_inicio || ''}`)),
-        resumen: calcularResumenSesiones(grupo.operativo ? grupo.sesiones : grupo.sesiones.filter((s) => (s.asistencia_estado || 'pendiente') !== 'pendiente')),
-      }))
+      .map((grupo) => {
+        const sesionesOrdenadas = [...grupo.sesiones].sort((a, b) => {
+          const fechaA = `${a.fecha || ''} ${a.hora_inicio || ''}`
+          const fechaB = `${b.fecha || ''} ${b.hora_inicio || ''}`
+          return fechaB.localeCompare(fechaA)
+        })
+
+        return {
+          ...grupo,
+          sesiones: sesionesOrdenadas,
+          resumen: grupo.operativo
+            ? calcularResumenSesiones(sesionesOrdenadas)
+            : {
+                asistio: sesionesOrdenadas.filter((s) => s.asistencia_estado === 'asistio').length,
+                aviso: sesionesOrdenadas.filter((s) => s.asistencia_estado === 'no_asistio_aviso').length,
+                sinAviso: sesionesOrdenadas.filter((s) => s.asistencia_estado === 'no_asistio_sin_aviso').length,
+                pendientes: 0,
+                reprogramables: 0,
+              },
+        }
+      })
       .sort((a, b) => {
         if (a.operativo !== b.operativo) return a.operativo ? -1 : 1
         const dateA = a.plan?.created_at || a.fechaFin || ''
         const dateB = b.plan?.created_at || b.fechaFin || ''
         return dateB.localeCompare(dateA)
       })
-  }, [sesionesPlan, historialPlanes, hoyKey, activePlanIds])
+  }, [sesionesPlan, historialPlanes, hoyKey])
 
   if (loading) {
     return (
@@ -1117,8 +1143,8 @@ export default function ClienteDetallePage() {
                           <td className="px-4 py-3 text-white/75">{item.fecha_fin || '—'}</td>
                           <td className="px-4 py-3 text-white/75">{item.sesiones_usadas}/{item.sesiones_totales} · Rest. {restantes}</td>
                           <td className="px-4 py-3">
-                            <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(item.estado)}`}>
-                              {getPlanStatusLabel(item.estado)}
+                            <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoPlanBadge(getEstadoPlanEfectivo(item.estado, item.fecha_fin, hoyKey))}`}>
+                              {getPlanStatusLabel(getEstadoPlanEfectivo(item.estado, item.fecha_fin, hoyKey))}
                             </span>
                           </td>
                         </tr>
@@ -1139,7 +1165,7 @@ export default function ClienteDetallePage() {
               <div>
                 <p className="font-semibold text-white">Sesiones y asistencia por plan</p>
                 <p className="mt-0.5 text-sm text-white/45">
-                  Activas: {sesionesActivasPlan.length} · Historial: {Math.max(0, sesionesPlan.length - sesionesActivasPlan.length)} ·{' '}
+                  Activas: {sesionesActivasPlan.length} · Historial: {sesionesPlan.filter((s) => !isSesionDePlanOperativo(s, activePlanIds)).length} ·{' '}
                   Pendientes activas: {resumenAsistenciaPlan.pendientes}
                 </p>
               </div>
@@ -1176,9 +1202,9 @@ export default function ClienteDetallePage() {
                                 {getPlanStatusLabel(grupo.estado)}
                               </span>
                               {grupo.operativo ? (
-                                <span className="inline-flex rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-xs font-medium text-emerald-300">Cuenta activo</span>
+                                <span className="inline-flex rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-xs font-medium text-emerald-300">Activo</span>
                               ) : (
-                                <span className="inline-flex rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-white/50">Solo historial</span>
+                                <span className="inline-flex rounded-full border border-amber-400/20 bg-amber-400/10 px-2.5 py-1 text-xs font-medium text-amber-300">Historial bloqueado</span>
                               )}
                             </div>
                             <p className="mt-1 text-xs text-white/45">

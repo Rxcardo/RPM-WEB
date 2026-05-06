@@ -82,7 +82,7 @@ type ClienteRow = {
   empleadoNombre: string
 }
 
-type PlanEstadoFiltro = 'todos' | 'con_plan' | 'sin_plan' | 'por_vencer'
+type PlanEstadoFiltro = 'todos' | 'con_plan' | 'sin_plan' | 'por_vencer' | 'planes_vencidos'
 
 type OrdenKey =
   | 'nombre_asc'
@@ -395,6 +395,42 @@ function getPlanStatusLabel(estado: string | null | undefined) {
   }
 }
 
+function getTodayKey() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function getDiasHastaFin(fechaFin: string | null | undefined) {
+  if (!fechaFin) return Number.POSITIVE_INFINITY
+  const fin = new Date(`${fechaFin}T00:00:00`)
+  const hoy = new Date(`${getTodayKey()}T00:00:00`)
+  return Math.ceil((fin.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24))
+}
+
+function getPlanEstadoReal(plan: ClientePlan | null | undefined) {
+  if (!plan) return 'sin_plan'
+
+  const estadoDb = (plan.estado || '').toLowerCase()
+  if (estadoDb === 'cancelado' || estadoDb === 'renovado') return estadoDb
+
+  const total = Number(plan.sesiones_totales || 0)
+  const usadas = Number(plan.sesiones_usadas || 0)
+
+  if (estadoDb === 'agotado' || (total > 0 && usadas >= total)) return 'agotado'
+  if (estadoDb === 'vencido' || (!!plan.fecha_fin && plan.fecha_fin < getTodayKey())) return 'vencido'
+  if (estadoDb === 'activo') return 'activo'
+
+  return estadoDb || 'sin_estado'
+}
+
+function isPlanActivoReal(plan: ClientePlan | null | undefined) {
+  return getPlanEstadoReal(plan) === 'activo'
+}
+
+function isPlanVencidoOAgotadoReal(plan: ClientePlan | null | undefined) {
+  const estado = getPlanEstadoReal(plan)
+  return estado === 'vencido' || estado === 'agotado'
+}
+
 function getRestantes(plan: ClientePlan | null) {
   if (!plan) return 0
   return Math.max(0, Number(plan.sesiones_totales || 0) - Number(plan.sesiones_usadas || 0))
@@ -494,6 +530,7 @@ export default function ClientesPage() {
     if (planEstado === 'activo' || planEstado === 'con_plan') setPlanEstadoFiltro('con_plan')
     if (planEstado === 'sin_plan') setPlanEstadoFiltro('sin_plan')
     if (planEstado === 'por_vencer') setPlanEstadoFiltro('por_vencer')
+    if (planEstado === 'planes_vencidos' || planEstado === 'vencidos' || planEstado === 'vencido') setPlanEstadoFiltro('planes_vencidos')
   }, [])
 
   async function loadClientes() {
@@ -514,7 +551,7 @@ export default function ClientesPage() {
           id, cliente_id, sesiones_totales, sesiones_usadas, estado, fecha_fin, created_at,
           creado_por_empleado_id, creado_por_auth_user_id, creado_por_nombre, creado_por_email, creado_en,
           planes:plan_id (nombre, precio, vigencia_valor, vigencia_tipo)
-        `).eq('estado', 'activo'),
+        `).order('created_at', { ascending: false }),
 
         supabase.from('pagos').select(
           'id, cliente_id, cliente_plan_id, fecha, monto, moneda_pago, estado, created_at, monto_equivalente_usd, monto_equivalente_bs'
@@ -543,14 +580,31 @@ export default function ClientesPage() {
 
   const planMap = useMemo(() => {
     const map = new Map<string, ClientePlan>()
+
     for (const plan of planesActivos) {
       if (!plan?.cliente_id) continue
+
       const current = map.get(plan.cliente_id)
-      if (!current) { map.set(plan.cliente_id, plan); continue }
-      const a = current.created_at ? new Date(current.created_at).getTime() : 0
-      const b = plan.created_at ? new Date(plan.created_at).getTime() : 0
-      if (b >= a) map.set(plan.cliente_id, plan)
+      if (!current) {
+        map.set(plan.cliente_id, plan)
+        continue
+      }
+
+      const currentActivo = isPlanActivoReal(current)
+      const nextActivo = isPlanActivoReal(plan)
+
+      if (nextActivo && !currentActivo) {
+        map.set(plan.cliente_id, plan)
+        continue
+      }
+
+      if (nextActivo === currentActivo) {
+        const a = current.created_at ? new Date(current.created_at).getTime() : 0
+        const b = plan.created_at ? new Date(plan.created_at).getTime() : 0
+        if (b >= a) map.set(plan.cliente_id, plan)
+      }
     }
+
     return map
   }, [planesActivos])
 
@@ -600,11 +654,18 @@ export default function ClientesPage() {
   }, [rows])
 
   function isPlanPorVencer(plan: ClientePlan | null) {
-    if (!plan?.fecha_fin) return false
-    const fin = new Date(`${plan.fecha_fin}T00:00:00`)
-    const hoy = new Date(); hoy.setHours(0, 0, 0, 0)
-    const dias = Math.ceil((fin.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24))
-    return dias >= 0 && dias <= 7
+    if (!plan || !isPlanActivoReal(plan)) return false
+
+    const sesionesRestantes = getRestantes(plan)
+    const total = Number(plan.sesiones_totales || 0)
+    const porSesiones = total > 0 && sesionesRestantes > 0 && sesionesRestantes <= 2
+
+    if (!plan.fecha_fin) return porSesiones
+
+    const dias = getDiasHastaFin(plan.fecha_fin)
+    const porTiempo = dias >= 0 && dias <= 7
+
+    return porTiempo || porSesiones
   }
 
   function limpiarFiltros() {
@@ -625,9 +686,10 @@ export default function ClientesPage() {
       const matchEstado = estadoFiltro === 'todos' || cliente.estado?.toLowerCase() === estadoFiltro.toLowerCase()
       const matchEmpleado = empleadoFiltro === 'todos' || empleadoNombre.toLowerCase() === empleadoFiltro.toLowerCase()
       const matchPlanEstado = planEstadoFiltro === 'todos' ||
-        (planEstadoFiltro === 'con_plan' && !!planActivo) ||
-        (planEstadoFiltro === 'sin_plan' && !planActivo) ||
-        (planEstadoFiltro === 'por_vencer' && isPlanPorVencer(planActivo))
+        (planEstadoFiltro === 'con_plan' && isPlanActivoReal(planActivo)) ||
+        (planEstadoFiltro === 'sin_plan' && !isPlanActivoReal(planActivo)) ||
+        (planEstadoFiltro === 'por_vencer' && isPlanPorVencer(planActivo)) ||
+        (planEstadoFiltro === 'planes_vencidos' && isPlanVencidoOAgotadoReal(planActivo))
       const matchPlanNombre = planNombreFiltro === 'todos' ||
         (planActivo?.planes?.nombre || '').toLowerCase() === planNombreFiltro.toLowerCase()
       return matchSearch && matchEstado && matchEmpleado && matchPlanEstado && matchPlanNombre
@@ -654,9 +716,10 @@ export default function ClientesPage() {
   const stats = useMemo(() => ({
     total: rows.length,
     activos: rows.filter((r) => r.cliente.estado === 'activo').length,
-    conPlan: rows.filter((r) => !!r.planActivo).length,
-    sinPlan: rows.filter((r) => !r.planActivo).length,
+    conPlan: rows.filter((r) => isPlanActivoReal(r.planActivo)).length,
+    sinPlan: rows.filter((r) => !isPlanActivoReal(r.planActivo)).length,
     porVencer: rows.filter((r) => isPlanPorVencer(r.planActivo)).length,
+    planesVencidos: rows.filter((r) => isPlanVencidoOAgotadoReal(r.planActivo)).length,
   }), [rows])
 
   function handleEliminacionConfirmada() {
@@ -694,7 +757,7 @@ export default function ClientesPage() {
         </Card>
       )}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
         <button type="button" onClick={() => setPlanEstadoFiltro('todos')} className="text-left transition hover:-translate-y-0.5 hover:opacity-90">
           <StatCard title="Total clientes" value={stats.total} />
         </button>
@@ -708,7 +771,10 @@ export default function ClientesPage() {
           <StatCard title="Sin plan activo" value={stats.sinPlan} color="text-amber-300" />
         </button>
         <button type="button" onClick={() => setPlanEstadoFiltro('por_vencer')} className="text-left transition hover:-translate-y-0.5 hover:opacity-90">
-          <StatCard title="Planes por vencer" value={stats.porVencer} color="text-rose-400" />
+          <StatCard title="Planes por vencer" value={stats.porVencer} color="text-amber-300" />
+        </button>
+        <button type="button" onClick={() => setPlanEstadoFiltro('planes_vencidos')} className="text-left transition hover:-translate-y-0.5 hover:opacity-90">
+          <StatCard title="Planes vencidos" value={stats.planesVencidos} color="text-rose-400" />
         </button>
       </div>
 
@@ -742,12 +808,13 @@ export default function ClientesPage() {
             </Field>
           </div>
           <div>
-            <Field label="Plan activo">
+            <Field label="Filtro de plan">
               <select value={planEstadoFiltro} onChange={(e) => setPlanEstadoFiltro(e.target.value as PlanEstadoFiltro)} className={inputClassName}>
                 <option value="todos" className="bg-[#11131a] text-white">Todos</option>
                 <option value="con_plan" className="bg-[#11131a] text-white">Con plan activo</option>
                 <option value="sin_plan" className="bg-[#11131a] text-white">Sin plan activo</option>
                 <option value="por_vencer" className="bg-[#11131a] text-white">Por vencer</option>
+                <option value="planes_vencidos" className="bg-[#11131a] text-white">Planes vencidos</option>
               </select>
             </Field>
           </div>
@@ -791,7 +858,7 @@ export default function ClientesPage() {
       </Section>
 
       <Section title="Listado de clientes"
-        description="Vista general de clientes, plan activo, sesiones, empleado y pagos."
+        description="Vista general de clientes, plan real, sesiones, empleado y pagos."
         className="p-0" contentClassName="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -801,7 +868,7 @@ export default function ClientesPage() {
                 <th className="px-4 py-3 font-medium">Contacto</th>
                 <th className="px-4 py-3 font-medium">Fisioterapeuta</th>
                 <th className="px-4 py-3 font-medium">Estado</th>
-                <th className="px-4 py-3 font-medium">Plan activo</th>
+                <th className="px-4 py-3 font-medium">Plan</th>
                 <th className="px-4 py-3 font-medium">Sesiones</th>
                 <th className="px-4 py-3 font-medium">Último pago</th>
                 <th className="px-4 py-3 font-medium">Acciones</th>
@@ -844,8 +911,8 @@ export default function ClientesPage() {
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
                             <div className="font-medium text-white">{planActivo.planes?.nombre || 'Plan'}</div>
-                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${estadoPlanBadge(planActivo.estado)}`}>
-                              {getPlanStatusLabel(planActivo.estado)}
+                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${estadoPlanBadge(getPlanEstadoReal(planActivo))}`}>
+                              {getPlanStatusLabel(getPlanEstadoReal(planActivo))}
                             </span>
                           </div>
                           <div className="mt-1 text-xs text-white/45">Vence: {formatDate(planActivo.fecha_fin)}</div>
@@ -856,7 +923,7 @@ export default function ClientesPage() {
                           </div>
                         </div>
                       ) : (
-                        <span className="text-white/55">Sin plan activo</span>
+                        <span className="text-white/55">Sin plan registrado</span>
                       )}
                     </td>
                     <td className="px-4 py-4">
