@@ -1,262 +1,266 @@
-'use client'
-export const dynamic = 'force-dynamic'
+"use client";
+export const dynamic = "force-dynamic";
 
-import { useEffect, useMemo, useState } from 'react'
-import Link from 'next/link'
-import { useParams } from 'next/navigation'
-import { supabase } from '@/lib/supabase/client'
-import Card from '@/components/ui/Card'
-import Section from '@/components/ui/Section'
-import StatCard from '@/components/ui/StatCard'
-import ActionCard from '@/components/ui/ActionCard'
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { supabase } from "@/lib/supabase/client";
+import Card from "@/components/ui/Card";
+import Section from "@/components/ui/Section";
+import StatCard from "@/components/ui/StatCard";
+import ActionCard from "@/components/ui/ActionCard";
 
 type Empleado = {
-  id: string
-  nombre: string
-  email: string | null
-  telefono: string | null
-  rol: string
-  especialidad: string | null
-  estado: string
-  comision_plan_porcentaje: number
-  comision_cita_porcentaje: number
-  created_at: string
-}
+  id: string;
+  nombre: string;
+  email: string | null;
+  telefono: string | null;
+  rol: string;
+  especialidad: string | null;
+  estado: string;
+  comision_plan_porcentaje: number;
+  comision_cita_porcentaje: number;
+  created_at: string;
+};
 
 type ClienteAsignado = {
-  id: string
-  nombre: string
-  telefono: string | null
-  estado: string
-}
+  id: string;
+  nombre: string;
+  telefono: string | null;
+  estado: string;
+};
 
 type AgendaItem = {
-  id: string
-  fecha: string
-  hora_inicio: string
-  hora_fin: string
-  estado: string
-  nombre: string
-  subtitulo: string
-  tipo: 'entrenamiento' | 'cita'
-  notas: string | null
-}
+  id: string;
+  fecha: string;
+  hora_inicio: string;
+  hora_fin: string;
+  estado: string;
+  nombre: string;
+  subtitulo: string;
+  tipo: "entrenamiento" | "cita";
+  notas: string | null;
+};
 
 type ComisionDetalle = {
-  id: string
-  base: number
-  profesional: number
-  rpm: number
-  fecha: string
-  tipo: string
-  estado: string
-  moneda: 'USD' | 'BS' | string | null
-  tasa_bcv: number | null
-  monto_base_usd: number | null
-  monto_base_bs: number | null
-  monto_rpm_usd: number | null
-  monto_rpm_bs: number | null
-  monto_profesional_usd: number | null
-  monto_profesional_bs: number | null
-  pagado: boolean | null
-  fecha_pago: string | null
-  liquidacion_id?: string | null
-  pago_empleado_id?: string | null
-  pago_id?: string | null
-  cliente_id?: string | null
-  cliente_plan_id?: string | null
-  pago_concepto?: string | null
-  pago_categoria?: string | null
-  pago_fecha?: string | null
-  pago_cliente_nombre?: string | null
-  cita_id?: string | null
-  servicio_id?: string | null
-  concepto?: string | null
-  descripcion?: string | null
-  cliente_nombre?: string | null
-  servicio_nombre?: string | null
-  cita_fecha?: string | null
-  cita_hora_inicio?: string | null
-}
+  id: string;
+  base: number;
+  profesional: number;
+  rpm: number;
+  fecha: string;
+  tipo: string;
+  estado: string;
+  moneda: "USD" | "BS" | string | null;
+  tasa_bcv: number | null;
+  monto_base_usd: number | null;
+  monto_base_bs: number | null;
+  monto_rpm_usd: number | null;
+  monto_rpm_bs: number | null;
+  monto_profesional_usd: number | null;
+  monto_profesional_bs: number | null;
+  pagado: boolean | null;
+  fecha_pago: string | null;
+  liquidacion_id?: string | null;
+  pago_empleado_id?: string | null;
+  pago_id?: string | null;
+  cliente_id?: string | null;
+  cliente_plan_id?: string | null;
+  pago_concepto?: string | null;
+  pago_categoria?: string | null;
+  pago_fecha?: string | null;
+  pago_cliente_nombre?: string | null;
+  cita_id?: string | null;
+  servicio_id?: string | null;
+  concepto?: string | null;
+  descripcion?: string | null;
+  cliente_nombre?: string | null;
+  servicio_nombre?: string | null;
+  cita_fecha?: string | null;
+  cita_hora_inicio?: string | null;
+  descuento_deuda_usd?: number | null;
+  descuento_deuda_bs?: number | null;
+  monto_profesional_neto_usd?: number | null;
+  monto_profesional_neto_bs?: number | null;
+};
 
 type Liquidacion = {
-  id: string
-  fecha_inicio: string | null
-  fecha_fin: string | null
-  total_base: number
-  total_profesional: number
-  total_rpm: number
-  cantidad_citas: number
-  estado: string
-  pagado_at: string | null
-  moneda_pago: 'USD' | 'BS' | string | null
-  monto_pago: number | null
-  tasa_bcv: number | null
-  monto_equivalente_usd: number | null
-  monto_equivalente_bs: number | null
-  referencia: string | null
-  notas: string | null
-  metodo_pago_id: string | null
-  metodo_pago_v2_id?: string | null
-  pago_empleado_id: string | null
-  egreso_id: string | null
-}
+  id: string;
+  fecha_inicio: string | null;
+  fecha_fin: string | null;
+  total_base: number;
+  total_profesional: number;
+  total_rpm: number;
+  cantidad_citas: number;
+  estado: string;
+  pagado_at: string | null;
+  moneda_pago: "USD" | "BS" | string | null;
+  monto_pago: number | null;
+  tasa_bcv: number | null;
+  monto_equivalente_usd: number | null;
+  monto_equivalente_bs: number | null;
+  referencia: string | null;
+  notas: string | null;
+  metodo_pago_id: string | null;
+  metodo_pago_v2_id?: string | null;
+  pago_empleado_id: string | null;
+  egreso_id: string | null;
+};
 
 type EstadoCuentaEmpleado = {
-  empleado_id: string
-  nombre: string | null
-  rol: string | null
-  total_facturado_usd: number | null
-  total_pagado_usd: number | null
-  total_pendiente_usd: number | null
-  credito_disponible_usd: number | null
-  saldo_pendiente_neto_usd: number | null
-  saldo_favor_neto_usd: number | null
-}
+  empleado_id: string;
+  nombre: string | null;
+  rol: string | null;
+  total_facturado_usd: number | null;
+  total_pagado_usd: number | null;
+  total_pendiente_usd: number | null;
+  credito_disponible_usd: number | null;
+  saldo_pendiente_neto_usd: number | null;
+  saldo_favor_neto_usd: number | null;
+};
 
 type CuentaPendienteEmpleado = {
-  id: string
-  empleado_id: string | null
-  empleado_nombre: string
-  concepto: string
-  monto_total_usd: number | null
-  monto_pagado_usd: number | null
-  saldo_usd: number | null
-  fecha_venta: string
-  fecha_vencimiento: string | null
-  estado: string
-}
+  id: string;
+  empleado_id: string | null;
+  empleado_nombre: string;
+  concepto: string;
+  monto_total_usd: number | null;
+  monto_pagado_usd: number | null;
+  saldo_usd: number | null;
+  fecha_venta: string;
+  fecha_vencimiento: string | null;
+  estado: string;
+};
 
 type MetodoPago = {
-  id: string
-  nombre: string
-  tipo?: string | null
-  moneda?: string | null
-  color?: string | null
-  icono?: string | null
+  id: string;
+  nombre: string;
+  tipo?: string | null;
+  moneda?: string | null;
+  color?: string | null;
+  icono?: string | null;
   cartera?: {
-    id?: string
-    nombre: string
-    codigo: string
-    saldo_actual?: number | string | null
-    moneda?: string | null
-  } | null
-}
+    id?: string;
+    nombre: string;
+    codigo: string;
+    saldo_actual?: number | string | null;
+    moneda?: string | null;
+  } | null;
+};
 
 type SplitPago = {
-  id: string
-  metodoPagoId: string
-  monto: string
-}
+  id: string;
+  metodoPagoId: string;
+  monto: string;
+};
 
 type TipoCambioRow = {
-  fecha?: string | null
-  tasa?: number | string | null
-  valor?: number | string | null
-  monto?: number | string | null
-  bcv?: number | string | null
-  precio?: number | string | null
-}
+  fecha?: string | null;
+  tasa?: number | string | null;
+  valor?: number | string | null;
+  monto?: number | string | null;
+  bcv?: number | string | null;
+  precio?: number | string | null;
+};
 
-type Moneda = 'USD' | 'BS'
-type Tab = 'info' | 'agenda' | 'comisiones'
+type Moneda = "USD" | "BS";
+type Tab = "info" | "agenda" | "comisiones";
 
 function getTodayLocal() {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-    now.getDate()
-  ).padStart(2, '0')}`
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+    now.getDate(),
+  ).padStart(2, "0")}`;
 }
 
 function getCurrentQuincenaRange() {
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = String(now.getMonth() + 1).padStart(2, '0')
-  const dia = now.getDate()
-  const lastDay = new Date(y, now.getMonth() + 1, 0).getDate()
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const dia = now.getDate();
+  const lastDay = new Date(y, now.getMonth() + 1, 0).getDate();
 
   if (dia <= 15) {
     return {
-      label: `1–15 de ${now.toLocaleDateString('es', { month: 'long' })}`,
+      label: `1–15 de ${now.toLocaleDateString("es", { month: "long" })}`,
       inicio: `${y}-${m}-01`,
       fin: `${y}-${m}-15`,
-    }
+    };
   }
 
   return {
-    label: `16–${lastDay} de ${now.toLocaleDateString('es', { month: 'long' })}`,
+    label: `16–${lastDay} de ${now.toLocaleDateString("es", { month: "long" })}`,
     inicio: `${y}-${m}-16`,
-    fin: `${y}-${m}-${String(lastDay).padStart(2, '0')}`,
-  }
+    fin: `${y}-${m}-${String(lastDay).padStart(2, "0")}`,
+  };
 }
 
 function formatMoney(v: number | null | undefined) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(Number(v || 0))
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(Number(v || 0));
 }
 
 function formatBs(v: number | null | undefined) {
-  return new Intl.NumberFormat('es-VE', {
-    style: 'currency',
-    currency: 'VES',
+  return new Intl.NumberFormat("es-VE", {
+    style: "currency",
+    currency: "VES",
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(Number(v || 0))
+  }).format(Number(v || 0));
 }
 
 function formatMontoByMoneda(v: number | null | undefined, moneda: Moneda) {
-  return moneda === 'USD' ? formatMoney(v) : formatBs(v)
+  return moneda === "USD" ? formatMoney(v) : formatBs(v);
 }
 
 function formatDate(v: string | null) {
-  if (!v) return '—'
+  if (!v) return "—";
   try {
-    return new Date(`${v}T00:00:00`).toLocaleDateString('es')
+    return new Date(`${v}T00:00:00`).toLocaleDateString("es");
   } catch {
-    return v
+    return v;
   }
 }
 
 function formatDateLong(v: string | null) {
-  if (!v) return '—'
+  if (!v) return "—";
   try {
-    return new Date(`${v}T00:00:00`).toLocaleDateString('es', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-    })
+    return new Date(`${v}T00:00:00`).toLocaleDateString("es", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+    });
   } catch {
-    return v
+    return v;
   }
 }
 
 function estadoBadge(e: string) {
-  switch ((e || '').toLowerCase()) {
-    case 'activo':
-      return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
-    case 'inactivo':
-      return 'border-white/10 bg-white/[0.05] text-white/50'
-    case 'suspendido':
-      return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
+  switch ((e || "").toLowerCase()) {
+    case "activo":
+      return "border-emerald-400/20 bg-emerald-400/10 text-emerald-300";
+    case "inactivo":
+      return "border-white/10 bg-white/[0.05] text-white/50";
+    case "suspendido":
+      return "border-rose-400/20 bg-rose-400/10 text-rose-300";
     default:
-      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+      return "border-amber-400/20 bg-amber-400/10 text-amber-300";
   }
 }
 
 function citaBadge(e: string) {
-  switch ((e || '').toLowerCase()) {
-    case 'confirmada':
-      return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
-    case 'completada':
-      return 'border-violet-400/20 bg-violet-400/10 text-violet-300'
-    case 'cancelada':
-      return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
-    case 'reprogramada':
-      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+  switch ((e || "").toLowerCase()) {
+    case "confirmada":
+      return "border-emerald-400/20 bg-emerald-400/10 text-emerald-300";
+    case "completada":
+      return "border-violet-400/20 bg-violet-400/10 text-violet-300";
+    case "cancelada":
+      return "border-rose-400/20 bg-rose-400/10 text-rose-300";
+    case "reprogramada":
+      return "border-amber-400/20 bg-amber-400/10 text-amber-300";
     default:
-      return 'border-sky-400/20 bg-sky-400/10 text-sky-300'
+      return "border-sky-400/20 bg-sky-400/10 text-sky-300";
   }
 }
 
@@ -266,38 +270,38 @@ function inputCls(disabled = false) {
     px-4 py-3 text-sm text-white outline-none transition
     placeholder:text-white/35
     focus:border-white/20 focus:bg-white/[0.05]
-    ${disabled ? 'cursor-not-allowed opacity-60' : ''}
-  `
+    ${disabled ? "cursor-not-allowed opacity-60" : ""}
+  `;
 }
 
 function r2(v: number) {
-  return Math.round(v * 100) / 100
+  return Math.round(v * 100) / 100;
 }
 
 function normalizeEstado(value: string | null | undefined) {
-  return (value || '').trim().toLowerCase()
+  return (value || "").trim().toLowerCase();
 }
 
 function isPendienteEstado(value: string | null | undefined) {
-  return normalizeEstado(value) === 'pendiente'
+  return normalizeEstado(value) === "pendiente";
 }
 
 function isFacturadaEstado(value: string | null | undefined) {
-  const estado = normalizeEstado(value)
-  return ['liquidado', 'liquidada', 'pagado', 'pagada'].includes(estado)
+  const estado = normalizeEstado(value);
+  return ["liquidado", "liquidada", "pagado", "pagada"].includes(estado);
 }
 
 function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
-  if (Array.isArray(value)) return value[0] ?? null
-  return value ?? null
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
 }
 
 function normalizeMetodoPago(row: any): MetodoPago {
-  const cartera = firstOrNull(row?.cartera)
+  const cartera = firstOrNull(row?.cartera);
 
   return {
-    id: String(row?.id ?? ''),
-    nombre: String(row?.nombre ?? ''),
+    id: String(row?.id ?? ""),
+    nombre: String(row?.nombre ?? ""),
     tipo: row?.tipo ?? null,
     moneda: row?.moneda ?? null,
     color: row?.color ?? null,
@@ -305,131 +309,183 @@ function normalizeMetodoPago(row: any): MetodoPago {
     cartera: cartera
       ? {
           id: cartera?.id ? String(cartera.id) : undefined,
-          nombre: String(cartera?.nombre ?? ''),
-          codigo: String(cartera?.codigo ?? ''),
+          nombre: String(cartera?.nombre ?? ""),
+          codigo: String(cartera?.codigo ?? ""),
           saldo_actual: cartera?.saldo_actual ?? null,
           moneda: cartera?.moneda ?? null,
         }
       : null,
-  }
+  };
 }
 
 function monedaMetodoEsBs(metodo: MetodoPago | null) {
-  if (!metodo) return false
+  if (!metodo) return false;
 
-  const moneda = (metodo.moneda || '').toUpperCase()
-  const nombre = (metodo.nombre || '').toLowerCase()
-  const tipo = (metodo.tipo || '').toLowerCase()
-  const carteraCodigo = (metodo.cartera?.codigo || '').toLowerCase()
-  const carteraMoneda = (metodo.cartera?.moneda || '').toUpperCase()
+  const moneda = (metodo.moneda || "").toUpperCase();
+  const nombre = (metodo.nombre || "").toLowerCase();
+  const tipo = (metodo.tipo || "").toLowerCase();
+  const carteraCodigo = (metodo.cartera?.codigo || "").toLowerCase();
+  const carteraMoneda = (metodo.cartera?.moneda || "").toUpperCase();
 
   return (
-    moneda === 'BS' ||
-    moneda === 'VES' ||
-    carteraMoneda === 'BS' ||
-    carteraMoneda === 'VES' ||
-    nombre.includes('bs') ||
-    nombre.includes('bolívar') ||
-    nombre.includes('bolivar') ||
-    nombre.includes('pago movil') ||
-    nombre.includes('pago móvil') ||
-    nombre.includes('movil') ||
-    nombre.includes('móvil') ||
-    tipo.includes('pago_movil') ||
-    carteraCodigo.includes('bs') ||
-    carteraCodigo.includes('ves')
-  )
+    moneda === "BS" ||
+    moneda === "VES" ||
+    carteraMoneda === "BS" ||
+    carteraMoneda === "VES" ||
+    nombre.includes("bs") ||
+    nombre.includes("bolívar") ||
+    nombre.includes("bolivar") ||
+    nombre.includes("pago movil") ||
+    nombre.includes("pago móvil") ||
+    nombre.includes("movil") ||
+    nombre.includes("móvil") ||
+    tipo.includes("pago_movil") ||
+    carteraCodigo.includes("bs") ||
+    carteraCodigo.includes("ves")
+  );
 }
 
 function getMetodoMoneda(metodo: MetodoPago | null): Moneda {
-  return monedaMetodoEsBs(metodo) ? 'BS' : 'USD'
+  return monedaMetodoEsBs(metodo) ? "BS" : "USD";
 }
 
 function getMetodoSaldo(metodo: MetodoPago | null) {
-  const raw = metodo?.cartera?.saldo_actual
-  const n = Number(raw || 0)
-  return Number.isFinite(n) ? n : 0
+  const raw = metodo?.cartera?.saldo_actual;
+  const n = Number(raw || 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function getComisionBrutoByMoneda(c: ComisionDetalle, moneda: Moneda) {
+  return moneda === "USD"
+    ? Number(c.monto_profesional_usd ?? c.profesional ?? 0)
+    : Number(c.monto_profesional_bs ?? 0);
+}
+
+function getComisionDescuentoDeudaByMoneda(c: ComisionDetalle, moneda: Moneda) {
+  return moneda === "USD"
+    ? Number(c.descuento_deuda_usd ?? 0)
+    : Number(c.descuento_deuda_bs ?? 0);
 }
 
 function getComisionMontoByMoneda(c: ComisionDetalle, moneda: Moneda) {
-  return moneda === 'USD'
-    ? Number(c.monto_profesional_usd ?? c.profesional ?? 0)
-    : Number(c.monto_profesional_bs ?? 0)
+  const bruto = getComisionBrutoByMoneda(c, moneda);
+  const descuento = getComisionDescuentoDeudaByMoneda(c, moneda);
+
+  const netoPersistido =
+    moneda === "USD"
+      ? Number(c.monto_profesional_neto_usd ?? NaN)
+      : Number(c.monto_profesional_neto_bs ?? NaN);
+
+  if (Number.isFinite(netoPersistido)) {
+    return r2(Math.max(netoPersistido, 0));
+  }
+
+  return r2(Math.max(bruto - descuento, 0));
 }
 
 function convertirMonto(
   monto: number,
   from: Moneda,
   to: Moneda,
-  tasa: number | null | undefined
+  tasa: number | null | undefined,
 ): number | null {
-  const montoNum = Number(monto || 0)
+  const montoNum = Number(monto || 0);
 
-  if (!Number.isFinite(montoNum)) return null
-  if (from === to) return r2(montoNum)
-  if (!tasa || tasa <= 0) return null
+  if (!Number.isFinite(montoNum)) return null;
+  if (from === to) return r2(montoNum);
+  if (!tasa || tasa <= 0) return null;
 
-  if (from === 'USD' && to === 'BS') return r2(montoNum * tasa)
-  if (from === 'BS' && to === 'USD') return r2(montoNum / tasa)
+  if (from === "USD" && to === "BS") return r2(montoNum * tasa);
+  if (from === "BS" && to === "USD") return r2(montoNum / tasa);
 
-  return null
+  return null;
 }
 
 function uniqueStrings(values: any[]) {
-  return [...new Set(values.map((v) => (v ? String(v) : '')).filter(Boolean))]
+  return [...new Set(values.map((v) => (v ? String(v) : "")).filter(Boolean))];
 }
 
-function mapById<T extends { id?: string | null }>(rows: T[] | null | undefined) {
-  const map = new Map<string, T>()
+function mapById<T extends { id?: string | null }>(
+  rows: T[] | null | undefined,
+) {
+  const map = new Map<string, T>();
   for (const row of rows || []) {
-    if (row?.id) map.set(String(row.id), row)
+    if (row?.id) map.set(String(row.id), row);
   }
-  return map
+  return map;
 }
 
 // ─── MEJORADO: extrae el concepto real desde pagos cuando existe pago_id ─────
 function normalizeComisionDetalle(
   row: any,
   ctx?: {
-    pagosMap?: Map<string, any>
-    clientesMap?: Map<string, any>
-    citasMap?: Map<string, any>
-    serviciosMap?: Map<string, any>
-    clientesPlanesMap?: Map<string, any>
-  }
+    pagosMap?: Map<string, any>;
+    clientesMap?: Map<string, any>;
+    citasMap?: Map<string, any>;
+    serviciosMap?: Map<string, any>;
+    clientesPlanesMap?: Map<string, any>;
+    descuentosMap?: Map<string, { usd: number; bs: number }>;
+  },
 ): ComisionDetalle {
   const get = (v: any) => {
-    if (!v) return null
-    return Array.isArray(v) ? v[0] : v
-  }
+    if (!v) return null;
+    return Array.isArray(v) ? v[0] : v;
+  };
 
-  const pago = get(row?.pagos) ?? (row?.pago_id ? ctx?.pagosMap?.get(String(row.pago_id)) : null)
-  const cita = get(row?.citas) ?? (row?.cita_id ? ctx?.citasMap?.get(String(row.cita_id)) : null)
-  const plan = get(row?.clientes_planes) ?? (row?.cliente_plan_id ? ctx?.clientesPlanesMap?.get(String(row.cliente_plan_id)) : null)
+  const pago =
+    get(row?.pagos) ??
+    (row?.pago_id ? ctx?.pagosMap?.get(String(row.pago_id)) : null);
+  const cita =
+    get(row?.citas) ??
+    (row?.cita_id ? ctx?.citasMap?.get(String(row.cita_id)) : null);
+  const plan =
+    get(row?.clientes_planes) ??
+    (row?.cliente_plan_id
+      ? ctx?.clientesPlanesMap?.get(String(row.cliente_plan_id))
+      : null);
 
-  const clientePago = pago?.cliente_id ? ctx?.clientesMap?.get(String(pago.cliente_id)) : get(pago?.clientes)
-  const clienteDirecto = get(row?.clientes) ?? (row?.cliente_id ? ctx?.clientesMap?.get(String(row.cliente_id)) : null)
-  const clienteCita = cita?.cliente_id ? ctx?.clientesMap?.get(String(cita.cliente_id)) : get(cita?.clientes)
-  const clientePlan = plan?.cliente_id ? ctx?.clientesMap?.get(String(plan.cliente_id)) : get(plan?.clientes)
+  const clientePago = pago?.cliente_id
+    ? ctx?.clientesMap?.get(String(pago.cliente_id))
+    : get(pago?.clientes);
+  const clienteDirecto =
+    get(row?.clientes) ??
+    (row?.cliente_id ? ctx?.clientesMap?.get(String(row.cliente_id)) : null);
+  const clienteCita = cita?.cliente_id
+    ? ctx?.clientesMap?.get(String(cita.cliente_id))
+    : get(cita?.clientes);
+  const clientePlan = plan?.cliente_id
+    ? ctx?.clientesMap?.get(String(plan.cliente_id))
+    : get(plan?.clientes);
 
-  const servicioDirecto = get(row?.servicios) ?? (row?.servicio_id ? ctx?.serviciosMap?.get(String(row.servicio_id)) : null)
-  const servicioCita = cita?.servicio_id ? ctx?.serviciosMap?.get(String(cita.servicio_id)) : get(cita?.servicios)
+  const servicioDirecto =
+    get(row?.servicios) ??
+    (row?.servicio_id ? ctx?.serviciosMap?.get(String(row.servicio_id)) : null);
+  const servicioCita = cita?.servicio_id
+    ? ctx?.serviciosMap?.get(String(cita.servicio_id))
+    : get(cita?.servicios);
 
-  const conceptoPago = typeof pago?.concepto === 'string' ? pago.concepto.trim() : ''
+  const conceptoPago =
+    typeof pago?.concepto === "string" ? pago.concepto.trim() : "";
 
   const servicioNombre =
     servicioDirecto?.nombre ??
     servicioCita?.nombre ??
     row?.servicio_nombre ??
-    null
+    null;
 
   const clienteNombre =
     clientePago?.nombre ??
     clienteDirecto?.nombre ??
     clienteCita?.nombre ??
     clientePlan?.nombre ??
-    (row?.cliente_id ? `Cliente ${String(row.cliente_id).slice(0, 6)}` : null) ??
-    'Cliente desconocido'
+    (row?.cliente_id
+      ? `Cliente ${String(row.cliente_id).slice(0, 6)}`
+      : null) ??
+    "Cliente desconocido";
+
+  const descuentoAplicado = row?.id
+    ? ctx?.descuentosMap?.get(String(row.id))
+    : null;
 
   return {
     ...row,
@@ -443,217 +499,279 @@ function normalizeComisionDetalle(
     servicio_nombre: servicioNombre,
     cita_fecha: cita?.fecha ?? null,
     cita_hora_inicio: cita?.hora_inicio ?? null,
-  }
+    descuento_deuda_usd: r2(Number(descuentoAplicado?.usd || 0)),
+    descuento_deuda_bs: r2(Number(descuentoAplicado?.bs || 0)),
+    monto_profesional_neto_usd: r2(
+      Math.max(
+        Number(row?.monto_profesional_usd ?? row?.profesional ?? 0) -
+          Number(descuentoAplicado?.usd || 0),
+        0,
+      ),
+    ),
+    monto_profesional_neto_bs: r2(
+      Math.max(
+        Number(row?.monto_profesional_bs ?? 0) -
+          Number(descuentoAplicado?.bs || 0),
+        0,
+      ),
+    ),
+  };
 }
 // ─── MEJORADO: concepto más descriptivo ─────────────────────────────────────
 function getComisionConcepto(c: ComisionDetalle): string {
   // 1. Si viene concepto explícito de la DB, úsalo
-  if (c.concepto?.trim()) return c.concepto.trim()
+  if (c.concepto?.trim()) return c.concepto.trim();
 
-  const tipo = (c.tipo || '').toLowerCase()
-  const servicio = c.servicio_nombre?.trim()
-  const cliente = c.cliente_nombre?.trim()
-  const fecha = c.cita_fecha ? formatDate(c.cita_fecha) : formatDate(c.fecha)
+  const tipo = (c.tipo || "").toLowerCase();
+  const servicio = c.servicio_nombre?.trim();
+  const cliente = c.cliente_nombre?.trim();
+  const fecha = c.cita_fecha ? formatDate(c.cita_fecha) : formatDate(c.fecha);
 
   // 2. Plan: "Plan · NombreServicio · NombreCliente"
-  if (tipo === 'plan') {
-    if (servicio && cliente) return `Plan · ${servicio} · ${cliente}`
-    if (servicio) return `Plan · ${servicio}`
-    if (cliente) return `Plan · ${cliente}`
-    return 'Comisión por plan'
+  if (tipo === "plan") {
+    if (servicio && cliente) return `Plan · ${servicio} · ${cliente}`;
+    if (servicio) return `Plan · ${servicio}`;
+    if (cliente) return `Plan · ${cliente}`;
+    return "Comisión por plan";
   }
 
   // 3. Cita: "Cita · NombreServicio · NombreCliente · Fecha"
-  if (tipo === 'cita') {
-    if (servicio && cliente) return `Cita · ${servicio} · ${cliente}`
-    if (servicio) return `Cita · ${servicio}`
-    if (cliente) return `Cita · ${cliente}`
-    return 'Comisión por cita'
+  if (tipo === "cita") {
+    if (servicio && cliente) return `Cita · ${servicio} · ${cliente}`;
+    if (servicio) return `Cita · ${servicio}`;
+    if (cliente) return `Cita · ${cliente}`;
+    return "Comisión por cita";
   }
 
   // 4. Fallback genérico
-  if (servicio && cliente) return `${servicio} · ${cliente}`
-  if (servicio) return servicio
-  if (cliente) return `Comisión · ${cliente}`
-  return `Comisión · ${fecha}`
+  if (servicio && cliente) return `${servicio} · ${cliente}`;
+  if (servicio) return servicio;
+  if (cliente) return `Comisión · ${cliente}`;
+  return `Comisión · ${fecha}`;
 }
 
 // ─── MEJORADO: subtítulo con fecha y hora de la cita ────────────────────────
 function getComisionSubtitulo(c: ComisionDetalle): string {
-  const partes: string[] = []
+  const partes: string[] = [];
 
-  if (c.cliente_nombre && c.cliente_nombre !== 'Cliente desconocido') {
-    partes.push(c.cliente_nombre)
+  if (c.cliente_nombre && c.cliente_nombre !== "Cliente desconocido") {
+    partes.push(c.cliente_nombre);
   }
 
   if (c.cita_fecha) {
-    partes.push(formatDate(c.cita_fecha))
+    partes.push(formatDate(c.cita_fecha));
   } else {
-    partes.push(formatDate(c.fecha))
+    partes.push(formatDate(c.fecha));
   }
 
   if (c.cita_hora_inicio) {
-    partes.push(String(c.cita_hora_inicio).slice(0, 5))
+    partes.push(String(c.cita_hora_inicio).slice(0, 5));
   }
 
   if (c.servicio_nombre) {
-    partes.push(c.servicio_nombre)
+    partes.push(c.servicio_nombre);
   }
 
-  return partes.length ? partes.join(' · ') : (c.concepto || 'Comisión registrada')
+  return partes.length
+    ? partes.join(" · ")
+    : c.concepto || "Comisión registrada";
 }
 
 function chunkAgendaByCliente(items: AgendaItem[]) {
-  const map = new Map<string, { cliente: string; items: AgendaItem[] }>()
+  const map = new Map<string, { cliente: string; items: AgendaItem[] }>();
 
   for (const item of items) {
-    const key = item.nombre || 'Sin cliente'
+    const key = item.nombre || "Sin cliente";
     if (!map.has(key)) {
-      map.set(key, { cliente: key, items: [] })
+      map.set(key, { cliente: key, items: [] });
     }
-    map.get(key)!.items.push(item)
+    map.get(key)!.items.push(item);
   }
 
   return [...map.values()]
     .map((group) => ({
       ...group,
       items: [...group.items].sort((a, b) =>
-        `${a.fecha} ${a.hora_inicio}`.localeCompare(`${b.fecha} ${b.hora_inicio}`)
+        `${a.fecha} ${a.hora_inicio}`.localeCompare(
+          `${b.fecha} ${b.hora_inicio}`,
+        ),
       ),
     }))
-    .sort((a, b) => a.cliente.localeCompare(b.cliente))
+    .sort((a, b) => a.cliente.localeCompare(b.cliente));
 }
 
 export default function VerPersonalPage() {
-  const params = useParams()
+  const params = useParams();
   const id =
-    typeof params?.id === 'string'
+    typeof params?.id === "string"
       ? params.id
       : Array.isArray(params?.id)
         ? params.id[0]
-        : ''
+        : "";
 
-  const [mounted, setMounted] = useState(false)
+  const [mounted, setMounted] = useState(false);
 
-  const [tab, setTab] = useState<Tab>('info')
-  const [loading, setLoading] = useState(true)
-  const [empleado, setEmpleado] = useState<Empleado | null>(null)
-  const [clientes, setClientes] = useState<ClienteAsignado[]>([])
-  const [agenda, setAgenda] = useState<AgendaItem[]>([])
-  const [comisiones, setComisiones] = useState<ComisionDetalle[]>([])
-  const [liquidaciones, setLiquidaciones] = useState<Liquidacion[]>([])
-  const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([])
-  const [estadoCuentaEmpleado, setEstadoCuentaEmpleado] = useState<EstadoCuentaEmpleado | null>(null)
-  const [cuentasPendientesEmpleado, setCuentasPendientesEmpleado] = useState<CuentaPendienteEmpleado[]>([])
-  const [errorMsg, setErrorMsg] = useState('')
-  const [facturando, setFacturando] = useState(false)
-  const [agendaFiltro, setAgendaFiltro] = useState<'hoy' | 'proximos' | 'todos'>('hoy')
-  const [agendaTipo, setAgendaTipo] = useState<'todos' | 'entrenamientos' | 'citas'>('todos')
-  const [agendaClienteFiltro, setAgendaClienteFiltro] = useState('todos')
+  const [tab, setTab] = useState<Tab>("info");
+  const [loading, setLoading] = useState(true);
+  const [empleado, setEmpleado] = useState<Empleado | null>(null);
+  const [clientes, setClientes] = useState<ClienteAsignado[]>([]);
+  const [agenda, setAgenda] = useState<AgendaItem[]>([]);
+  const [comisiones, setComisiones] = useState<ComisionDetalle[]>([]);
+  const [liquidaciones, setLiquidaciones] = useState<Liquidacion[]>([]);
+  const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([]);
+  const [estadoCuentaEmpleado, setEstadoCuentaEmpleado] =
+    useState<EstadoCuentaEmpleado | null>(null);
+  const [cuentasPendientesEmpleado, setCuentasPendientesEmpleado] = useState<
+    CuentaPendienteEmpleado[]
+  >([]);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [facturando, setFacturando] = useState(false);
+  const [agendaFiltro, setAgendaFiltro] = useState<
+    "hoy" | "proximos" | "todos"
+  >("hoy");
+  const [agendaTipo, setAgendaTipo] = useState<
+    "todos" | "entrenamientos" | "citas"
+  >("todos");
+  const [agendaClienteFiltro, setAgendaClienteFiltro] = useState("todos");
 
-  const [monedaPago, setMonedaPago] = useState<Moneda>('USD')
-  const [referencia, setReferencia] = useState('')
-  const [notasLiquidacion, setNotasLiquidacion] = useState('')
-  const [tasaBCV, setTasaBCV] = useState<number | null>(null)
-  const [tasaBCVAuto, setTasaBCVAuto] = useState<number | null>(null)
-  const [cargandoTasa, setCargandoTasa] = useState(false)
-  const [selectedComisionIds, setSelectedComisionIds] = useState<string[]>([])
+  const [monedaPago, setMonedaPago] = useState<Moneda>("USD");
+  const [referencia, setReferencia] = useState("");
+  const [notasLiquidacion, setNotasLiquidacion] = useState("");
+  const [tasaBCV, setTasaBCV] = useState<number | null>(null);
+  const [tasaBCVAuto, setTasaBCVAuto] = useState<number | null>(null);
+  const [cargandoTasa, setCargandoTasa] = useState(false);
+  const [selectedComisionIds, setSelectedComisionIds] = useState<string[]>([]);
   const [splitsPago, setSplitsPago] = useState<SplitPago[]>([
-    { id: crypto.randomUUID(), metodoPagoId: '', monto: '' },
-  ])
+    { id: crypto.randomUUID(), metodoPagoId: "", monto: "" },
+  ]);
+
+  const [aplicarDescuentoDeuda, setAplicarDescuentoDeuda] = useState(false);
+  const [descuentoDeudaUsdInput, setDescuentoDeudaUsdInput] = useState("");
+  const [modoDescuentoDeuda, setModoDescuentoDeuda] = useState<
+    "solo_descuento" | "descuento_y_pagar"
+  >("descuento_y_pagar");
+  const [destinoDescuentoDeuda, setDestinoDescuentoDeuda] = useState<
+    "ingreso_rpm" | "ajuste_nomina"
+  >("ingreso_rpm");
 
   useEffect(() => {
-    setMounted(true)
-  }, [])
+    setMounted(true);
+  }, []);
 
-  const hoy = useMemo(() => (mounted ? getTodayLocal() : ''), [mounted])
+  const hoy = useMemo(() => (mounted ? getTodayLocal() : ""), [mounted]);
   const quincenaActual = useMemo(
     () =>
-      mounted
-        ? getCurrentQuincenaRange()
-        : { label: '', inicio: '', fin: '' },
-    [mounted]
-  )
+      mounted ? getCurrentQuincenaRange() : { label: "", inicio: "", fin: "" },
+    [mounted],
+  );
 
   useEffect(() => {
-    if (!mounted || !id) return
-    void loadAll()
-  }, [id, mounted])
+    if (!mounted || !id) return;
+    void loadAll();
+  }, [id, mounted]);
 
   useEffect(() => {
-    setSelectedComisionIds([])
-    setSplitsPago([{ id: crypto.randomUUID(), metodoPagoId: '', monto: '' }])
-    setReferencia('')
-    setNotasLiquidacion('')
-    setTasaBCV(null)
-    setTasaBCVAuto(null)
-  }, [monedaPago])
+    setSelectedComisionIds([]);
+    setSplitsPago([{ id: crypto.randomUUID(), metodoPagoId: "", monto: "" }]);
+    setReferencia("");
+    setNotasLiquidacion("");
+    setTasaBCV(null);
+    setTasaBCVAuto(null);
+    setAplicarDescuentoDeuda(false);
+    setDescuentoDeudaUsdInput("");
+    setModoDescuentoDeuda("descuento_y_pagar");
+    setDestinoDescuentoDeuda("ingreso_rpm");
+  }, [monedaPago]);
 
   // ─── ROBUSTO: carga comisiones primero y luego enriquece pagos/clientes ─────
   // Esto evita que Supabase/PostgREST esconda las comisiones si el FK pago_id todavía
   // no está refrescado en caché o si una relación opcional falla.
   async function fetchComisionesDetalladas(empleadoId: string) {
     const baseRes = await supabase
-      .from('comisiones_detalle')
-      .select('*')
-      .eq('empleado_id', empleadoId)
-      .order('fecha', { ascending: false })
+      .from("comisiones_detalle")
+      .select("*")
+      .eq("empleado_id", empleadoId)
+      .order("fecha", { ascending: false });
 
-    if (baseRes.error) return baseRes
+    if (baseRes.error) return baseRes;
 
-    const rows = (baseRes.data || []) as any[]
+    const rows = (baseRes.data || []) as any[];
 
-    const pagoIds = uniqueStrings(rows.map((r) => r.pago_id))
-    const citaIds = uniqueStrings(rows.map((r) => r.cita_id))
-    const servicioIdsDirectos = uniqueStrings(rows.map((r) => r.servicio_id))
-    const clienteIdsDirectos = uniqueStrings(rows.map((r) => r.cliente_id))
-    const clientePlanIds = uniqueStrings(rows.map((r) => r.cliente_plan_id))
+    const pagoIds = uniqueStrings(rows.map((r) => r.pago_id));
+    const citaIds = uniqueStrings(rows.map((r) => r.cita_id));
+    const servicioIdsDirectos = uniqueStrings(rows.map((r) => r.servicio_id));
+    const clienteIdsDirectos = uniqueStrings(rows.map((r) => r.cliente_id));
+    const clientePlanIds = uniqueStrings(rows.map((r) => r.cliente_plan_id));
+    const comisionIds = uniqueStrings(rows.map((r) => r.id));
 
-    let pagosMap = new Map<string, any>()
-    let citasMap = new Map<string, any>()
-    let serviciosMap = new Map<string, any>()
-    let clientesPlanesMap = new Map<string, any>()
-    let clientesMap = new Map<string, any>()
+    let pagosMap = new Map<string, any>();
+    let citasMap = new Map<string, any>();
+    let serviciosMap = new Map<string, any>();
+    let clientesPlanesMap = new Map<string, any>();
+    let clientesMap = new Map<string, any>();
+    let descuentosMap = new Map<string, { usd: number; bs: number }>();
+
+    if (comisionIds.length > 0) {
+      const { data, error: descuentosError } = await supabase
+        .from("comisiones_descuentos_deuda")
+        .select("comision_id, monto_descuento_usd, monto_descuento_bs, estado")
+        .in("comision_id", comisionIds)
+        .eq("estado", "aplicado");
+
+      if (descuentosError) {
+        console.error("Error cargando descuentos de deuda:", descuentosError);
+      }
+
+      for (const d of (data || []) as any[]) {
+        const key = String(d.comision_id || "");
+        if (!key) continue;
+        const prev = descuentosMap.get(key) || { usd: 0, bs: 0 };
+        descuentosMap.set(key, {
+          usd: r2(prev.usd + Number(d.monto_descuento_usd || 0)),
+          bs: r2(prev.bs + Number(d.monto_descuento_bs || 0)),
+        });
+      }
+    }
 
     if (pagoIds.length > 0) {
       const { data } = await supabase
-        .from('pagos')
-        .select('id, concepto, categoria, fecha, cliente_id')
-        .in('id', pagoIds)
+        .from("pagos")
+        .select("id, concepto, categoria, fecha, cliente_id")
+        .in("id", pagoIds);
 
-      pagosMap = mapById((data || []) as any[])
+      pagosMap = mapById((data || []) as any[]);
     }
 
     if (citaIds.length > 0) {
       const { data } = await supabase
-        .from('citas')
-        .select('id, fecha, hora_inicio, cliente_id, servicio_id')
-        .in('id', citaIds)
+        .from("citas")
+        .select("id, fecha, hora_inicio, cliente_id, servicio_id")
+        .in("id", citaIds);
 
-      citasMap = mapById((data || []) as any[])
+      citasMap = mapById((data || []) as any[]);
     }
 
     if (clientePlanIds.length > 0) {
       const { data } = await supabase
-        .from('clientes_planes')
-        .select('id, cliente_id')
-        .in('id', clientePlanIds)
+        .from("clientes_planes")
+        .select("id, cliente_id")
+        .in("id", clientePlanIds);
 
-      clientesPlanesMap = mapById((data || []) as any[])
+      clientesPlanesMap = mapById((data || []) as any[]);
     }
 
     const servicioIds = uniqueStrings([
       ...servicioIdsDirectos,
       ...[...citasMap.values()].map((c) => c?.servicio_id),
-    ])
+    ]);
 
     if (servicioIds.length > 0) {
       const { data } = await supabase
-        .from('servicios')
-        .select('id, nombre')
-        .in('id', servicioIds)
+        .from("servicios")
+        .select("id, nombre")
+        .in("id", servicioIds);
 
-      serviciosMap = mapById((data || []) as any[])
+      serviciosMap = mapById((data || []) as any[]);
     }
 
     const clienteIds = uniqueStrings([
@@ -661,15 +779,15 @@ export default function VerPersonalPage() {
       ...[...pagosMap.values()].map((p) => p?.cliente_id),
       ...[...citasMap.values()].map((c) => c?.cliente_id),
       ...[...clientesPlanesMap.values()].map((p) => p?.cliente_id),
-    ])
+    ]);
 
     if (clienteIds.length > 0) {
       const { data } = await supabase
-        .from('clientes')
-        .select('id, nombre')
-        .in('id', clienteIds)
+        .from("clientes")
+        .select("id, nombre")
+        .in("id", clienteIds);
 
-      clientesMap = mapById((data || []) as any[])
+      clientesMap = mapById((data || []) as any[]);
     }
 
     return {
@@ -681,53 +799,66 @@ export default function VerPersonalPage() {
           citasMap,
           serviciosMap,
           clientesPlanesMap,
-        })
+          descuentosMap,
+        }),
       ),
-    }
+    };
   }
 
   async function loadAll() {
-    setLoading(true)
-    setErrorMsg('')
+    setLoading(true);
+    setErrorMsg("");
 
-    const [empRes, clientesRes, entRes, citasRes, comRes, liqRes, metodosRes, estadoCuentaRes, cuentasEmpleadoRes] =
-      await Promise.all([
-        supabase
-          .from('empleados')
-          .select(
-            'id, nombre, email, telefono, rol, especialidad, estado, comision_plan_porcentaje, comision_cita_porcentaje, created_at'
-          )
-          .eq('id', id)
-          .single(),
+    const [
+      empRes,
+      clientesRes,
+      entRes,
+      citasRes,
+      comRes,
+      liqRes,
+      metodosRes,
+      estadoCuentaRes,
+      cuentasEmpleadoRes,
+    ] = await Promise.all([
+      supabase
+        .from("empleados")
+        .select(
+          "id, nombre, email, telefono, rol, especialidad, estado, comision_plan_porcentaje, comision_cita_porcentaje, created_at",
+        )
+        .eq("id", id)
+        .single(),
 
-        supabase
-          .from('clientes')
-          .select('id, nombre, telefono, estado')
-          .eq('terapeuta_id', id)
-          .eq('estado', 'activo')
-          .order('nombre'),
+      supabase
+        .from("clientes")
+        .select("id, nombre, telefono, estado")
+        .eq("terapeuta_id", id)
+        .eq("estado", "activo")
+        .order("nombre"),
 
-        supabase
-          .from('entrenamientos')
-          .select('id, fecha, hora_inicio, hora_fin, estado, clientes:cliente_id ( nombre )')
-          .eq('empleado_id', id)
-          .order('fecha')
-          .order('hora_inicio'),
+      supabase
+        .from("entrenamientos")
+        .select(
+          "id, fecha, hora_inicio, hora_fin, estado, clientes:cliente_id ( nombre )",
+        )
+        .eq("empleado_id", id)
+        .order("fecha")
+        .order("hora_inicio"),
 
-        supabase
-          .from('citas')
-          .select(
-            'id, fecha, hora_inicio, hora_fin, estado, notas, clientes:cliente_id ( nombre ), servicios:servicio_id ( nombre )'
-          )
-          .eq('terapeuta_id', id)
-          .order('fecha')
-          .order('hora_inicio'),
+      supabase
+        .from("citas")
+        .select(
+          "id, fecha, hora_inicio, hora_fin, estado, notas, clientes:cliente_id ( nombre ), servicios:servicio_id ( nombre )",
+        )
+        .eq("terapeuta_id", id)
+        .order("fecha")
+        .order("hora_inicio"),
 
-        fetchComisionesDetalladas(id),
+      fetchComisionesDetalladas(id),
 
-        supabase
-          .from('comisiones_liquidaciones')
-          .select(`
+      supabase
+        .from("comisiones_liquidaciones")
+        .select(
+          `
             id,
             fecha_inicio,
             fecha_fin,
@@ -748,14 +879,16 @@ export default function VerPersonalPage() {
             metodo_pago_v2_id,
             pago_empleado_id,
             egreso_id
-          `)
-          .eq('empleado_id', id)
-          .order('pagado_at', { ascending: false })
-          .limit(30),
+          `,
+        )
+        .eq("empleado_id", id)
+        .order("pagado_at", { ascending: false })
+        .limit(30),
 
-        supabase
-          .from('metodos_pago_v2')
-          .select(`
+      supabase
+        .from("metodos_pago_v2")
+        .select(
+          `
             id,
             nombre,
             tipo,
@@ -769,34 +902,39 @@ export default function VerPersonalPage() {
               saldo_actual,
               moneda
             )
-          `)
-          .eq('activo', true)
-          .eq('permite_pagar', true)
-          .order('orden', { ascending: true })
-          .order('nombre', { ascending: true }),
+          `,
+        )
+        .eq("activo", true)
+        .eq("permite_pagar", true)
+        .order("orden", { ascending: true })
+        .order("nombre", { ascending: true }),
 
-        supabase
-          .from('v_empleados_estado_cuenta')
-          .select('empleado_id, nombre, rol, total_facturado_usd, total_pagado_usd, total_pendiente_usd, credito_disponible_usd, saldo_pendiente_neto_usd, saldo_favor_neto_usd')
-          .eq('empleado_id', id)
-          .maybeSingle(),
+      supabase
+        .from("v_empleados_estado_cuenta")
+        .select(
+          "empleado_id, nombre, rol, total_facturado_usd, total_pagado_usd, total_pendiente_usd, credito_disponible_usd, saldo_pendiente_neto_usd, saldo_favor_neto_usd",
+        )
+        .eq("empleado_id", id)
+        .maybeSingle(),
 
-        supabase
-          .from('v_empleados_cuentas_por_cobrar_resumen')
-          .select('id, empleado_id, empleado_nombre, concepto, monto_total_usd, monto_pagado_usd, saldo_usd, fecha_venta, fecha_vencimiento, estado')
-          .eq('empleado_id', id)
-          .in('estado', ['pendiente', 'parcial', 'vencida'])
-          .order('fecha_venta', { ascending: true }),
-      ])
+      supabase
+        .from("v_empleados_cuentas_por_cobrar_resumen")
+        .select(
+          "id, empleado_id, empleado_nombre, concepto, monto_total_usd, monto_pagado_usd, saldo_usd, fecha_venta, fecha_vencimiento, estado",
+        )
+        .eq("empleado_id", id)
+        .in("estado", ["pendiente", "parcial", "vencida"])
+        .order("fecha_venta", { ascending: true }),
+    ]);
 
     if (empRes.error || !empRes.data) {
-      setErrorMsg('No se pudo cargar.')
-      setLoading(false)
-      return
+      setErrorMsg("No se pudo cargar.");
+      setLoading(false);
+      return;
     }
 
-    setEmpleado(empRes.data as Empleado)
-    setClientes((clientesRes.data || []) as ClienteAsignado[])
+    setEmpleado(empRes.data as Empleado);
+    setClientes((clientesRes.data || []) as ClienteAsignado[]);
 
     const ents = ((entRes.data || []) as any[]).map((e) => ({
       id: e.id,
@@ -804,11 +942,11 @@ export default function VerPersonalPage() {
       hora_inicio: e.hora_inicio,
       hora_fin: e.hora_fin,
       estado: e.estado,
-      nombre: e.clientes?.nombre || '—',
-      subtitulo: 'Entrenamiento',
-      tipo: 'entrenamiento' as const,
+      nombre: e.clientes?.nombre || "—",
+      subtitulo: "Entrenamiento",
+      tipo: "entrenamiento" as const,
       notas: null,
-    }))
+    }));
 
     const cts = ((citasRes.data || []) as any[]).map((c) => ({
       id: c.id,
@@ -816,134 +954,144 @@ export default function VerPersonalPage() {
       hora_inicio: c.hora_inicio,
       hora_fin: c.hora_fin,
       estado: c.estado,
-      nombre: c.clientes?.nombre || '—',
-      subtitulo: c.servicios?.nombre || 'Cita',
-      tipo: 'cita' as const,
+      nombre: c.clientes?.nombre || "—",
+      subtitulo: c.servicios?.nombre || "Cita",
+      tipo: "cita" as const,
       notas: c.notas,
-    }))
+    }));
 
-    const metodosNormalizados: MetodoPago[] = ((metodosRes.data || []) as any[]).map(
-      normalizeMetodoPago
-    )
+    const metodosNormalizados: MetodoPago[] = (
+      (metodosRes.data || []) as any[]
+    ).map(normalizeMetodoPago);
 
     setAgenda(
       [...ents, ...cts].sort((a, b) =>
-        `${a.fecha} ${a.hora_inicio}`.localeCompare(`${b.fecha} ${b.hora_inicio}`)
-      )
-    )
+        `${a.fecha} ${a.hora_inicio}`.localeCompare(
+          `${b.fecha} ${b.hora_inicio}`,
+        ),
+      ),
+    );
 
-    setComisiones((comRes.data || []) as ComisionDetalle[])
-    setLiquidaciones((liqRes.data || []) as Liquidacion[])
-    setMetodosPago(metodosNormalizados)
-    setEstadoCuentaEmpleado((estadoCuentaRes.data as EstadoCuentaEmpleado | null) ?? null)
-    setCuentasPendientesEmpleado((cuentasEmpleadoRes.data || []) as CuentaPendienteEmpleado[])
-    setLoading(false)
+    setComisiones((comRes.data || []) as ComisionDetalle[]);
+    setLiquidaciones((liqRes.data || []) as Liquidacion[]);
+    setMetodosPago(metodosNormalizados);
+    setEstadoCuentaEmpleado(
+      (estadoCuentaRes.data as EstadoCuentaEmpleado | null) ?? null,
+    );
+    setCuentasPendientesEmpleado(
+      (cuentasEmpleadoRes.data || []) as CuentaPendienteEmpleado[],
+    );
+    setLoading(false);
   }
 
   async function resolverTasaBCVActual() {
-    const hoyFecha = new Date().toISOString().slice(0, 10)
+    const hoyFecha = new Date().toISOString().slice(0, 10);
 
     const { data, error } = await supabase
-      .from('tipos_cambio')
-      .select('*')
-      .lte('fecha', hoyFecha)
-      .order('fecha', { ascending: false })
+      .from("tipos_cambio")
+      .select("*")
+      .lte("fecha", hoyFecha)
+      .order("fecha", { ascending: false })
       .limit(1)
-      .maybeSingle()
+      .maybeSingle();
 
-    if (error) throw error
+    if (error) throw error;
 
-    const row = data as TipoCambioRow | null
+    const row = data as TipoCambioRow | null;
 
     const posibleTasa = Number(
-      row?.tasa ?? row?.valor ?? row?.monto ?? row?.bcv ?? row?.precio ?? 0
-    )
+      row?.tasa ?? row?.valor ?? row?.monto ?? row?.bcv ?? row?.precio ?? 0,
+    );
 
     if (!posibleTasa || posibleTasa <= 0) {
-      throw new Error('No se pudo obtener la tasa BCV automática')
+      throw new Error("No se pudo obtener la tasa BCV automática");
     }
 
-    return r2(posibleTasa)
+    return r2(posibleTasa);
   }
 
   async function cargarTasaBCVAutomatica() {
-    setCargandoTasa(true)
+    setCargandoTasa(true);
 
     try {
-      const tasa = await resolverTasaBCVActual()
-      setTasaBCVAuto(tasa)
-      setTasaBCV((prev) => (prev && prev > 0 ? prev : tasa))
+      const tasa = await resolverTasaBCVActual();
+      setTasaBCVAuto(tasa);
+      setTasaBCV((prev) => (prev && prev > 0 ? prev : tasa));
     } catch {
-      setTasaBCVAuto(null)
+      setTasaBCVAuto(null);
     } finally {
-      setCargandoTasa(false)
+      setCargandoTasa(false);
     }
   }
 
   const agendaFiltrada = useMemo(() => {
-    let items = agenda
+    let items = agenda;
 
-    if (agendaTipo === 'entrenamientos') items = items.filter((x) => x.tipo === 'entrenamiento')
-    if (agendaTipo === 'citas') items = items.filter((x) => x.tipo === 'cita')
-    if (agendaFiltro === 'hoy') items = items.filter((x) => x.fecha === hoy)
-    if (agendaFiltro === 'proximos') items = items.filter((x) => x.fecha >= hoy).slice(0, 100)
+    if (agendaTipo === "entrenamientos")
+      items = items.filter((x) => x.tipo === "entrenamiento");
+    if (agendaTipo === "citas") items = items.filter((x) => x.tipo === "cita");
+    if (agendaFiltro === "hoy") items = items.filter((x) => x.fecha === hoy);
+    if (agendaFiltro === "proximos")
+      items = items.filter((x) => x.fecha >= hoy).slice(0, 100);
 
-    if (agendaClienteFiltro !== 'todos') {
-      items = items.filter((x) => x.nombre === agendaClienteFiltro)
+    if (agendaClienteFiltro !== "todos") {
+      items = items.filter((x) => x.nombre === agendaClienteFiltro);
     }
 
-    return items
-  }, [agenda, agendaFiltro, agendaTipo, agendaClienteFiltro, hoy])
+    return items;
+  }, [agenda, agendaFiltro, agendaTipo, agendaClienteFiltro, hoy]);
 
   const agendaAgrupadaPorCliente = useMemo(
     () => chunkAgendaByCliente(agendaFiltrada),
-    [agendaFiltrada]
-  )
+    [agendaFiltrada],
+  );
 
   const comisionesPendientes = useMemo(
     () => comisiones.filter((c) => isPendienteEstado(c.estado)),
-    [comisiones]
-  )
+    [comisiones],
+  );
 
   const comisionesLiquidadaHoyQuincena = useMemo(
     () =>
       comisiones.filter((c) => {
-        if (!isFacturadaEstado(c.estado)) return false
-        return c.fecha >= quincenaActual.inicio && c.fecha <= quincenaActual.fin
+        if (!isFacturadaEstado(c.estado)) return false;
+        return (
+          c.fecha >= quincenaActual.inicio && c.fecha <= quincenaActual.fin
+        );
       }),
-    [comisiones, quincenaActual]
-  )
+    [comisiones, quincenaActual],
+  );
 
   const comisionesDisponibles = useMemo(
     () => comisiones.filter((c) => isPendienteEstado(c.estado)),
-    [comisiones]
-  )
+    [comisiones],
+  );
 
   const resumenDisponible = useMemo(() => {
     const baseUsd = comisionesDisponibles.reduce(
       (a, c) => a + Number(c.monto_base_usd ?? c.base ?? 0),
-      0
-    )
+      0,
+    );
     const baseBs = comisionesDisponibles.reduce(
       (a, c) => a + Number(c.monto_base_bs ?? 0),
-      0
-    )
+      0,
+    );
     const profesionalUsd = comisionesDisponibles.reduce(
-      (a, c) => a + Number(c.monto_profesional_usd ?? c.profesional ?? 0),
-      0
-    )
+      (a, c) => a + getComisionMontoByMoneda(c, "USD"),
+      0,
+    );
     const profesionalBs = comisionesDisponibles.reduce(
-      (a, c) => a + Number(c.monto_profesional_bs ?? 0),
-      0
-    )
+      (a, c) => a + getComisionMontoByMoneda(c, "BS"),
+      0,
+    );
     const rpmUsd = comisionesDisponibles.reduce(
       (a, c) => a + Number(c.monto_rpm_usd ?? c.rpm ?? 0),
-      0
-    )
+      0,
+    );
     const rpmBs = comisionesDisponibles.reduce(
       (a, c) => a + Number(c.monto_rpm_bs ?? 0),
-      0
-    )
+      0,
+    );
 
     return {
       baseUsd: r2(baseUsd),
@@ -953,8 +1101,8 @@ export default function VerPersonalPage() {
       rpmUsd: r2(rpmUsd),
       rpmBs: r2(rpmBs),
       pendientes: comisionesDisponibles.length,
-    }
-  }, [comisionesDisponibles])
+    };
+  }, [comisionesDisponibles]);
 
   const stats = useMemo(
     () => ({
@@ -963,48 +1111,52 @@ export default function VerPersonalPage() {
       comisionPendienteBs: resumenDisponible.profesionalBs,
       registrosPendientes: resumenDisponible.pendientes,
     }),
-    [agenda, hoy, resumenDisponible]
-  )
+    [agenda, hoy, resumenDisponible],
+  );
 
   const comisionesPendientesMoneda = useMemo(() => {
-    return comisionesPendientes.filter((c) => getComisionMontoByMoneda(c, monedaPago) > 0)
-  }, [comisionesPendientes, monedaPago])
+    return comisionesPendientes.filter(
+      (c) => getComisionMontoByMoneda(c, monedaPago) > 0,
+    );
+  }, [comisionesPendientes, monedaPago]);
 
   const allCurrentCurrencySelected = useMemo(() => {
-    if (comisionesPendientesMoneda.length === 0) return false
-    return comisionesPendientesMoneda.every((c) => selectedComisionIds.includes(c.id))
-  }, [comisionesPendientesMoneda, selectedComisionIds])
+    if (comisionesPendientesMoneda.length === 0) return false;
+    return comisionesPendientesMoneda.every((c) =>
+      selectedComisionIds.includes(c.id),
+    );
+  }, [comisionesPendientesMoneda, selectedComisionIds]);
 
   const comisionesSeleccionadas = useMemo(() => {
-    const ids = new Set(selectedComisionIds)
-    return comisionesPendientesMoneda.filter((c) => ids.has(c.id))
-  }, [comisionesPendientesMoneda, selectedComisionIds])
+    const ids = new Set(selectedComisionIds);
+    return comisionesPendientesMoneda.filter((c) => ids.has(c.id));
+  }, [comisionesPendientesMoneda, selectedComisionIds]);
 
   const resumenSeleccionado = useMemo(() => {
     const baseUsd = comisionesSeleccionadas.reduce(
       (a, c) => a + Number(c.monto_base_usd ?? c.base ?? 0),
-      0
-    )
+      0,
+    );
     const baseBs = comisionesSeleccionadas.reduce(
       (a, c) => a + Number(c.monto_base_bs ?? 0),
-      0
-    )
+      0,
+    );
     const profesionalUsd = comisionesSeleccionadas.reduce(
-      (a, c) => a + Number(c.monto_profesional_usd ?? c.profesional ?? 0),
-      0
-    )
+      (a, c) => a + getComisionMontoByMoneda(c, "USD"),
+      0,
+    );
     const profesionalBs = comisionesSeleccionadas.reduce(
-      (a, c) => a + Number(c.monto_profesional_bs ?? 0),
-      0
-    )
+      (a, c) => a + getComisionMontoByMoneda(c, "BS"),
+      0,
+    );
     const rpmUsd = comisionesSeleccionadas.reduce(
       (a, c) => a + Number(c.monto_rpm_usd ?? c.rpm ?? 0),
-      0
-    )
+      0,
+    );
     const rpmBs = comisionesSeleccionadas.reduce(
       (a, c) => a + Number(c.monto_rpm_bs ?? 0),
-      0
-    )
+      0,
+    );
 
     return {
       baseUsd: r2(baseUsd),
@@ -1014,37 +1166,94 @@ export default function VerPersonalPage() {
       rpmUsd: r2(rpmUsd),
       rpmBs: r2(rpmBs),
       pendientes: comisionesSeleccionadas.length,
-    }
-  }, [comisionesSeleccionadas])
+    };
+  }, [comisionesSeleccionadas]);
 
   const totalSplits = useMemo(() => {
     return r2(
       splitsPago.reduce((acc, split) => {
-        const monto = Number(split.monto || 0)
-        return acc + (Number.isFinite(monto) ? monto : 0)
-      }, 0)
-    )
-  }, [splitsPago])
+        const monto = Number(split.monto || 0);
+        return acc + (Number.isFinite(monto) ? monto : 0);
+      }, 0),
+    );
+  }, [splitsPago]);
 
   const montoFacturar = useMemo(() => {
-    return monedaPago === 'USD'
+    return monedaPago === "USD"
       ? r2(resumenSeleccionado.profesionalUsd)
-      : r2(resumenSeleccionado.profesionalBs)
-  }, [monedaPago, resumenSeleccionado])
+      : r2(resumenSeleccionado.profesionalBs);
+  }, [monedaPago, resumenSeleccionado]);
+
+  const deudaEmpleadoUsd = useMemo(() => {
+    const desdeEstado = Number(
+      estadoCuentaEmpleado?.saldo_pendiente_neto_usd || 0,
+    );
+    const desdeCuentas = cuentasPendientesEmpleado.reduce(
+      (acc, cuenta) => acc + Number(cuenta.saldo_usd || 0),
+      0,
+    );
+
+    const deuda = Math.max(desdeEstado, desdeCuentas, 0);
+    return r2(Number.isFinite(deuda) ? deuda : 0);
+  }, [estadoCuentaEmpleado, cuentasPendientesEmpleado]);
+
+  const descuentoDeudaUsd = useMemo(() => {
+    if (!aplicarDescuentoDeuda) return 0;
+
+    const solicitado = descuentoDeudaUsdInput.trim()
+      ? Number(descuentoDeudaUsdInput)
+      : deudaEmpleadoUsd;
+
+    const maximoPorComision = resumenSeleccionado.profesionalUsd;
+    const normalizado = Math.max(
+      0,
+      Math.min(Number(solicitado || 0), deudaEmpleadoUsd, maximoPorComision),
+    );
+
+    return r2(Number.isFinite(normalizado) ? normalizado : 0);
+  }, [
+    aplicarDescuentoDeuda,
+    descuentoDeudaUsdInput,
+    deudaEmpleadoUsd,
+    resumenSeleccionado.profesionalUsd,
+  ]);
+
+  const requiereTasaPorDescuentoDeuda = useMemo(() => {
+    return (
+      aplicarDescuentoDeuda && descuentoDeudaUsd > 0 && monedaPago === "BS"
+    );
+  }, [aplicarDescuentoDeuda, descuentoDeudaUsd, monedaPago]);
+
+  const descuentoDeudaEnMonedaPago = useMemo(() => {
+    if (!aplicarDescuentoDeuda || descuentoDeudaUsd <= 0) return 0;
+    if (monedaPago === "USD") return r2(descuentoDeudaUsd);
+    if (!tasaBCV || tasaBCV <= 0) return 0;
+    return r2(descuentoDeudaUsd * tasaBCV);
+  }, [aplicarDescuentoDeuda, descuentoDeudaUsd, monedaPago, tasaBCV]);
+
+  const montoNetoAPagar = useMemo(() => {
+    return r2(Math.max(montoFacturar - descuentoDeudaEnMonedaPago, 0));
+  }, [montoFacturar, descuentoDeudaEnMonedaPago]);
 
   const restantePorAsignar = useMemo(
-    () => r2(montoFacturar - totalSplits),
-    [montoFacturar, totalSplits]
-  )
+    () => r2(montoNetoAPagar - totalSplits),
+    [montoNetoAPagar, totalSplits],
+  );
 
   const splitsConMetodo = useMemo(() => {
     return splitsPago.map((split) => {
-      const metodo = metodosPago.find((m) => m.id === split.metodoPagoId) || null
-      const metodoMoneda = getMetodoMoneda(metodo)
-      const montoLiquidacion = r2(Number(split.monto || 0))
-      const montoDescontar = convertirMonto(montoLiquidacion, monedaPago, metodoMoneda, tasaBCV)
-      const requiereConversion = !!metodo && metodoMoneda !== monedaPago
-      const saldo = getMetodoSaldo(metodo)
+      const metodo =
+        metodosPago.find((m) => m.id === split.metodoPagoId) || null;
+      const metodoMoneda = getMetodoMoneda(metodo);
+      const montoLiquidacion = r2(Number(split.monto || 0));
+      const montoDescontar = convertirMonto(
+        montoLiquidacion,
+        monedaPago,
+        metodoMoneda,
+        tasaBCV,
+      );
+      const requiereConversion = !!metodo && metodoMoneda !== monedaPago;
+      const saldo = getMetodoSaldo(metodo);
 
       return {
         ...split,
@@ -1054,72 +1263,185 @@ export default function VerPersonalPage() {
         montoDescontar,
         requiereConversion,
         saldo,
-      }
-    })
-  }, [splitsPago, metodosPago, monedaPago, tasaBCV])
+      };
+    });
+  }, [splitsPago, metodosPago, monedaPago, tasaBCV]);
 
   const requiereTasa = useMemo(() => {
-    return splitsConMetodo.some((split) => split.metodo && split.requiereConversion)
-  }, [splitsConMetodo])
+    return (
+      splitsConMetodo.some(
+        (split) => split.metodo && split.requiereConversion,
+      ) || requiereTasaPorDescuentoDeuda
+    );
+  }, [splitsConMetodo, requiereTasaPorDescuentoDeuda]);
+
+  const soloDescontarDeudaActivo =
+    aplicarDescuentoDeuda && modoDescuentoDeuda === "solo_descuento";
 
   useEffect(() => {
-    if (!requiereTasa) return
-    if (tasaBCV && tasaBCV > 0) return
-    void cargarTasaBCVAutomatica()
-  }, [requiereTasa, tasaBCV])
+    if (!soloDescontarDeudaActivo) return;
+    setSplitsPago([{ id: crypto.randomUUID(), metodoPagoId: "", monto: "" }]);
+  }, [soloDescontarDeudaActivo]);
+
+  useEffect(() => {
+    if (!requiereTasa) return;
+    if (tasaBCV && tasaBCV > 0) return;
+    void cargarTasaBCVAutomatica();
+  }, [requiereTasa, tasaBCV]);
 
   function toggleComision(idComision: string) {
     setSelectedComisionIds((prev) =>
-      prev.includes(idComision) ? prev.filter((id) => id !== idComision) : [...prev, idComision]
-    )
+      prev.includes(idComision)
+        ? prev.filter((id) => id !== idComision)
+        : [...prev, idComision],
+    );
   }
 
   function selectAllCurrentCurrency() {
     if (allCurrentCurrencySelected) {
-      setSelectedComisionIds([])
-      return
+      setSelectedComisionIds([]);
+      return;
     }
-    setSelectedComisionIds(comisionesPendientesMoneda.map((c) => c.id))
+    setSelectedComisionIds(comisionesPendientesMoneda.map((c) => c.id));
   }
 
   function addSplit() {
-    setSplitsPago((prev) => [...prev, { id: crypto.randomUUID(), metodoPagoId: '', monto: '' }])
+    setSplitsPago((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), metodoPagoId: "", monto: "" },
+    ]);
   }
 
   function removeSplit(idSplit: string) {
     setSplitsPago((prev) => {
-      if (prev.length <= 1) return prev
-      return prev.filter((x) => x.id !== idSplit)
-    })
+      if (prev.length <= 1) return prev;
+      return prev.filter((x) => x.id !== idSplit);
+    });
   }
 
   function updateSplit(idSplit: string, patch: Partial<SplitPago>) {
-    setSplitsPago((prev) => prev.map((x) => (x.id === idSplit ? { ...x, ...patch } : x)))
+    setSplitsPago((prev) =>
+      prev.map((x) => (x.id === idSplit ? { ...x, ...patch } : x)),
+    );
   }
 
   function fillRemainingOnSplit(idSplit: string) {
     const otros = splitsPago
       .filter((x) => x.id !== idSplit)
-      .reduce((acc, x) => acc + Number(x.monto || 0), 0)
+      .reduce((acc, x) => acc + Number(x.monto || 0), 0);
 
-    const restante = r2(Math.max(montoFacturar - otros, 0))
-    updateSplit(idSplit, { monto: String(restante) })
+    const restante = r2(Math.max(montoNetoAPagar - otros, 0));
+    updateSplit(idSplit, { monto: String(restante) });
+  }
+
+  async function descontarDeudaSinPagarComision() {
+    const pendientes = comisionesSeleccionadas;
+
+    if (pendientes.length === 0) {
+      alert(
+        "Selecciona al menos una comisión pendiente para descontar la deuda.",
+      );
+      return;
+    }
+
+    if (!aplicarDescuentoDeuda || descuentoDeudaUsd <= 0) {
+      alert("Activa el descuento e indica un monto mayor a 0.");
+      return;
+    }
+
+    if (descuentoDeudaUsd > resumenSeleccionado.profesionalUsd) {
+      alert(
+        "El descuento de deuda no puede ser mayor que la comisión neta seleccionada.",
+      );
+      return;
+    }
+
+    if (requiereTasaPorDescuentoDeuda && (!tasaBCV || tasaBCV <= 0)) {
+      alert("Para descontar en Bs necesitas una tasa BCV válida.");
+      return;
+    }
+
+    const ok = window.confirm(
+      `¿Descontar deuda SIN pagar comisión ahora?\n\n` +
+        `Comisiones seleccionadas: ${pendientes.length}\n` +
+        `Comisión neta disponible: ${formatMoney(resumenSeleccionado.profesionalUsd)}\n` +
+        `Descuento a deuda: ${formatMoney(descuentoDeudaUsd)}\n` +
+        `Comisión pendiente luego: ${formatMoney(Math.max(resumenSeleccionado.profesionalUsd - descuentoDeudaUsd, 0))}\n\n` +
+        `La comisión NO quedará liquidada. Solo se bajará la deuda del empleado y se guardará auditoría.`,
+    );
+
+    if (!ok) return;
+
+    setFacturando(true);
+
+    try {
+      const { error } = await supabase.rpc(
+        "registrar_descuento_deuda_comision",
+        {
+          p_empleado_id: id,
+          p_comision_ids: pendientes.map((c) => c.id),
+          p_monto_usd: descuentoDeudaUsd,
+          p_monto_bs: descuentoDeudaEnMonedaPago,
+          p_tasa_bcv: tasaBCV,
+          p_liquidacion_id: null,
+          p_pago_empleado_id: null,
+          p_modo: "solo_descuento",
+          p_referencia: referencia.trim() || null,
+          p_notas: [
+            `Destino interno: ${destinoDescuentoDeuda === "ingreso_rpm" ? "Ingreso RPM / retención interna" : "Ajuste de nómina"}`,
+            notasLiquidacion.trim() ||
+              "Descuento de deuda aplicado contra comisión pendiente sin pagar comisión.",
+          ].join("\n"),
+        },
+      );
+
+      if (error)
+        throw new Error(error.message || "No se pudo descontar la deuda.");
+
+      alert(
+        `✅ Deuda descontada sin pagar comisión.\n\n` +
+          `Descontado: ${formatMoney(descuentoDeudaUsd)}\n` +
+          `La comisión queda pendiente por el neto restante.`,
+      );
+
+      setSelectedComisionIds([]);
+      setSplitsPago([{ id: crypto.randomUUID(), metodoPagoId: "", monto: "" }]);
+      setReferencia("");
+      setNotasLiquidacion("");
+      setTasaBCV(null);
+      setTasaBCVAuto(null);
+      setAplicarDescuentoDeuda(false);
+      setDescuentoDeudaUsdInput("");
+      setModoDescuentoDeuda("descuento_y_pagar");
+      setDestinoDescuentoDeuda("ingreso_rpm");
+      await loadAll();
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || "Error al descontar deuda contra comisión.");
+    } finally {
+      setFacturando(false);
+    }
   }
 
   async function liquidarSaldoDisponible() {
-    const pendientes = comisionesSeleccionadas
+    const pendientes = comisionesSeleccionadas;
 
     if (pendientes.length === 0) {
-      alert('Selecciona al menos una comisión pendiente.')
-      return
+      alert("Selecciona al menos una comisión pendiente.");
+      return;
     }
 
     const splitsValidos = splitsPago
       .map((s) => {
-        const metodo = metodosPago.find((m) => m.id === s.metodoPagoId) || null
-        const metodoMoneda = getMetodoMoneda(metodo)
-        const montoNum = r2(Number(s.monto || 0))
-        const montoDescontarMetodo = convertirMonto(montoNum, monedaPago, metodoMoneda, tasaBCV)
+        const metodo = metodosPago.find((m) => m.id === s.metodoPagoId) || null;
+        const metodoMoneda = getMetodoMoneda(metodo);
+        const montoNum = r2(Number(s.monto || 0));
+        const montoDescontarMetodo = convertirMonto(
+          montoNum,
+          monedaPago,
+          metodoMoneda,
+          tasaBCV,
+        );
 
         return {
           ...s,
@@ -1128,142 +1450,199 @@ export default function VerPersonalPage() {
           metodoMoneda,
           montoDescontarMetodo,
           requiereConversion: !!metodo && metodoMoneda !== monedaPago,
-        }
+        };
       })
-      .filter((s) => s.metodoPagoId && s.montoNum > 0)
+      .filter((s) => s.metodoPagoId && s.montoNum > 0);
 
-    if (splitsValidos.length === 0) {
-      alert('Debes indicar al menos un método de pago con monto.')
-      return
+    if (montoNetoAPagar > 0 && splitsValidos.length === 0) {
+      alert(
+        "Debes indicar al menos un método de pago con monto para pagar el neto al empleado.",
+      );
+      return;
     }
 
-    const requiereConversion = splitsValidos.some((s) => s.requiereConversion)
-
-    if (requiereConversion && (!tasaBCV || tasaBCV <= 0)) {
-      alert('No se pudo obtener la tasa automática. Indícala manualmente para hacer la conversión.')
-      return
+    if (montoNetoAPagar === 0 && splitsValidos.length > 0) {
+      alert(
+        "El neto a pagar es $0.00 porque la deuda cubre toda la liquidación. Quita los métodos de pago o deja los montos en 0.",
+      );
+      return;
     }
 
-    const metodoIds = new Set<string>()
+    const requiereConversion = splitsValidos.some((s) => s.requiereConversion);
+
+    if (
+      (requiereConversion || requiereTasaPorDescuentoDeuda) &&
+      (!tasaBCV || tasaBCV <= 0)
+    ) {
+      alert(
+        "No se pudo obtener la tasa automática. Indícala manualmente para hacer la conversión.",
+      );
+      return;
+    }
+
+    if (aplicarDescuentoDeuda && descuentoDeudaUsd <= 0) {
+      alert("Activa el descuento solo si vas a descontar una deuda mayor a 0.");
+      return;
+    }
+
+    if (descuentoDeudaUsd > resumenSeleccionado.profesionalUsd) {
+      alert(
+        "El descuento de deuda no puede ser mayor que la comisión seleccionada.",
+      );
+      return;
+    }
+
+    const metodoIds = new Set<string>();
     for (const split of splitsValidos) {
       if (metodoIds.has(split.metodoPagoId)) {
-        alert('No repitas el mismo método en dos líneas. Usa una sola línea por método.')
-        return
+        alert(
+          "No repitas el mismo método en dos líneas. Usa una sola línea por método.",
+        );
+        return;
       }
-      metodoIds.add(split.metodoPagoId)
+      metodoIds.add(split.metodoPagoId);
     }
 
-    const sumaSplits = r2(splitsValidos.reduce((acc, x) => acc + x.montoNum, 0))
-    if (sumaSplits !== montoFacturar) {
+    const sumaSplits = r2(
+      splitsValidos.reduce((acc, x) => acc + x.montoNum, 0),
+    );
+    if (sumaSplits !== montoNetoAPagar) {
       alert(
-        `La suma de métodos (${formatMontoByMoneda(sumaSplits, monedaPago)}) debe ser igual al monto a liquidar (${formatMontoByMoneda(montoFacturar, monedaPago)}).`
-      )
-      return
+        `La suma de métodos (${formatMontoByMoneda(sumaSplits, monedaPago)}) debe ser igual al neto a pagar (${formatMontoByMoneda(montoNetoAPagar, monedaPago)}).`,
+      );
+      return;
     }
 
     for (const split of splitsValidos) {
       if (!split.metodo) {
-        alert('Uno de los métodos seleccionados no es válido.')
-        return
+        alert("Uno de los métodos seleccionados no es válido.");
+        return;
       }
 
-      if (split.requiereConversion && (split.montoDescontarMetodo === null || split.montoDescontarMetodo <= 0)) {
-        alert(`No se pudo calcular la conversión para el método "${split.metodo.nombre}".`)
-        return
+      if (
+        split.requiereConversion &&
+        (split.montoDescontarMetodo === null || split.montoDescontarMetodo <= 0)
+      ) {
+        alert(
+          `No se pudo calcular la conversión para el método "${split.metodo.nombre}".`,
+        );
+        return;
       }
 
-      const saldo = getMetodoSaldo(split.metodo)
+      const saldo = getMetodoSaldo(split.metodo);
       const montoContraMetodo = split.requiereConversion
         ? Number(split.montoDescontarMetodo || 0)
-        : split.montoNum
+        : split.montoNum;
 
       if (saldo > 0 && montoContraMetodo > saldo) {
         alert(
           `El método "${split.metodo.nombre}" no tiene saldo suficiente.\nSaldo: ${formatMontoByMoneda(
             saldo,
-            split.metodoMoneda
-          )}\nIntentas usar: ${formatMontoByMoneda(montoContraMetodo, split.metodoMoneda)}`
-        )
-        return
+            split.metodoMoneda,
+          )}\nIntentas usar: ${formatMontoByMoneda(montoContraMetodo, split.metodoMoneda)}`,
+        );
+        return;
       }
     }
 
-    const montoPagoNum = montoFacturar
+    const montoPagoNum = montoNetoAPagar;
+    const montoBrutoLiquidacion = montoFacturar;
 
     const montoEquivalenteUsd =
-      monedaPago === 'USD'
+      monedaPago === "USD"
         ? r2(montoPagoNum)
         : tasaBCV && tasaBCV > 0
           ? r2(montoPagoNum / tasaBCV)
-          : r2(resumenSeleccionado.profesionalUsd)
+          : r2(resumenSeleccionado.profesionalUsd);
 
     const montoEquivalenteBs =
-      monedaPago === 'BS'
+      monedaPago === "BS"
         ? r2(montoPagoNum)
         : tasaBCV && tasaBCV > 0
           ? r2(montoPagoNum * tasaBCV)
-          : r2(resumenSeleccionado.profesionalBs)
+          : r2(resumenSeleccionado.profesionalBs);
 
-    const fechaFacturacion = getTodayLocal()
-    const fechaInicioRango = [...pendientes].map((c) => c.fecha).sort()[0]
+    const fechaFacturacion = getTodayLocal();
+    const fechaInicioRango = [...pendientes].map((c) => c.fecha).sort()[0];
     const fechaFinRango = [...pendientes]
       .map((c) => c.fecha)
       .sort()
-      .slice(-1)[0]
+      .slice(-1)[0];
 
     const resumenMetodos = splitsValidos
       .map((s) => {
-        const nombre = s.metodo?.nombre || 'Método'
-        const cartera = s.metodo?.cartera?.nombre ? ` / ${s.metodo.cartera.nombre}` : ''
-        const baseTxt = formatMontoByMoneda(s.montoNum, monedaPago)
+        const nombre = s.metodo?.nombre || "Método";
+        const cartera = s.metodo?.cartera?.nombre
+          ? ` / ${s.metodo.cartera.nombre}`
+          : "";
+        const baseTxt = formatMontoByMoneda(s.montoNum, monedaPago);
 
         if (!s.requiereConversion) {
-          return `• ${nombre}${cartera}: ${baseTxt}`
+          return `• ${nombre}${cartera}: ${baseTxt}`;
         }
 
-        const convertidoTxt = formatMontoByMoneda(s.montoDescontarMetodo, s.metodoMoneda)
-        return `• ${nombre}${cartera}: ${baseTxt} → se descuenta ${convertidoTxt}`
+        const convertidoTxt = formatMontoByMoneda(
+          s.montoDescontarMetodo,
+          s.metodoMoneda,
+        );
+        return `• ${nombre}${cartera}: ${baseTxt} → se descuenta ${convertidoTxt}`;
       })
-      .join('\n')
+      .join("\n");
 
     const ok = window.confirm(
       `¿Liquidar comisiones seleccionadas?\n\n` +
         `Registros: ${pendientes.length}\n` +
         `Moneda liquidación: ${monedaPago}\n` +
-        `Monto total: ${formatMontoByMoneda(montoPagoNum, monedaPago)}\n` +
-        `${requiereConversion && tasaBCV ? `Tasa BCV: ${tasaBCV}\n` : ''}\n` +
-        `Métodos:\n${resumenMetodos}`
-    )
+        `Monto neto seleccionado: ${formatMontoByMoneda(montoBrutoLiquidacion, monedaPago)}\n` +
+        `${descuentoDeudaUsd > 0 ? `Descuento deuda empleado: ${formatMoney(descuentoDeudaUsd)}${monedaPago === "BS" ? ` (${formatBs(descuentoDeudaEnMonedaPago)})` : ""}\n` : ""}` +
+        `Neto a pagar: ${formatMontoByMoneda(montoPagoNum, monedaPago)}\n` +
+        `${(requiereConversion || requiereTasaPorDescuentoDeuda) && tasaBCV ? `Tasa BCV: ${tasaBCV}\n` : ""}\n` +
+        `Métodos:\n${resumenMetodos}`,
+    );
 
-    if (!ok) return
+    if (!ok) return;
 
-    setFacturando(true)
+    setFacturando(true);
 
     try {
       const notasFinales = [
         notasLiquidacion.trim() ||
-          `Liquidación manual de saldo disponible - ${empleado?.nombre || 'Profesional'}`,
-        '',
+          `Liquidación manual de saldo disponible - ${empleado?.nombre || "Profesional"}`,
+        "",
         `Moneda liquidación: ${monedaPago}`,
-        ...(requiereConversion && tasaBCV ? [`Tasa BCV aplicada: ${tasaBCV}`] : []),
-        '',
-        'Desglose de pago:',
+        `Monto neto seleccionado: ${formatMontoByMoneda(montoBrutoLiquidacion, monedaPago)}`,
+        ...(descuentoDeudaUsd > 0
+          ? [
+              `Descuento aplicado a deuda del empleado: ${formatMoney(descuentoDeudaUsd)}`,
+              `Neto pagado al empleado: ${formatMontoByMoneda(montoPagoNum, monedaPago)}`,
+            ]
+          : []),
+        ...((requiereConversion || requiereTasaPorDescuentoDeuda) && tasaBCV
+          ? [`Tasa BCV aplicada: ${tasaBCV}`]
+          : []),
+        "",
+        "Desglose de pago:",
         ...splitsValidos.map((s) => {
-          const nombre = s.metodo?.nombre || 'Método'
-          const cartera = s.metodo?.cartera?.nombre ? ` (${s.metodo.cartera.nombre})` : ''
-          const montoTxt = formatMontoByMoneda(s.montoNum, monedaPago)
+          const nombre = s.metodo?.nombre || "Método";
+          const cartera = s.metodo?.cartera?.nombre
+            ? ` (${s.metodo.cartera.nombre})`
+            : "";
+          const montoTxt = formatMontoByMoneda(s.montoNum, monedaPago);
 
           if (!s.requiereConversion) {
-            return `- ${nombre}${cartera}: ${montoTxt}`
+            return `- ${nombre}${cartera}: ${montoTxt}`;
           }
 
-          const convertidoTxt = formatMontoByMoneda(s.montoDescontarMetodo, s.metodoMoneda)
-          return `- ${nombre}${cartera}: ${montoTxt} -> descontado ${convertidoTxt}`
+          const convertidoTxt = formatMontoByMoneda(
+            s.montoDescontarMetodo,
+            s.metodoMoneda,
+          );
+          return `- ${nombre}${cartera}: ${montoTxt} -> descontado ${convertidoTxt}`;
         }),
-      ].join('\n')
+      ].join("\n");
 
       const { data: liquidacion, error: liqError } = await supabase
-        .from('comisiones_liquidaciones')
+        .from("comisiones_liquidaciones")
         .insert({
           empleado_id: id,
           fecha_inicio: fechaInicioRango,
@@ -1274,34 +1653,42 @@ export default function VerPersonalPage() {
           cantidad_citas: pendientes.length,
           porcentaje_rpm: 100 - (empleado?.comision_plan_porcentaje ?? 40),
           porcentaje_profesional: empleado?.comision_plan_porcentaje ?? 40,
-          estado: 'liquidado',
+          estado: "liquidado",
           pagado_at: new Date().toISOString(),
           notas: notasFinales,
           moneda_pago: monedaPago,
           monto_pago: montoPagoNum,
-          tasa_bcv: requiereConversion ? tasaBCV : null,
+          tasa_bcv:
+            requiereConversion || requiereTasaPorDescuentoDeuda
+              ? tasaBCV
+              : null,
           monto_equivalente_usd: montoEquivalenteUsd,
           monto_equivalente_bs: montoEquivalenteBs,
           metodo_pago_id: null,
           metodo_pago_v2_id: splitsValidos[0]?.metodoPagoId || null,
           referencia: referencia.trim() || null,
         })
-        .select('id')
-        .single()
+        .select("id")
+        .single();
 
       if (liqError || !liquidacion) {
-        throw new Error(liqError?.message || 'No se pudo crear la liquidación.')
+        throw new Error(
+          liqError?.message || "No se pudo crear la liquidación.",
+        );
       }
 
       const { data: pagoEmpleado, error: pagoEmpleadoError } = await supabase
-        .from('pagos_empleados')
+        .from("pagos_empleados")
         .insert({
           empleado_id: id,
           fecha: fechaFacturacion,
-          tipo: 'liquidacion_manual',
+          tipo: "liquidacion_manual",
           moneda_pago: monedaPago,
           monto_pago: montoPagoNum,
-          tasa_bcv: requiereConversion ? tasaBCV : null,
+          tasa_bcv:
+            requiereConversion || requiereTasaPorDescuentoDeuda
+              ? tasaBCV
+              : null,
           monto_equivalente_usd: montoEquivalenteUsd,
           monto_equivalente_bs: montoEquivalenteBs,
           metodo_pago_id: null,
@@ -1310,64 +1697,94 @@ export default function VerPersonalPage() {
           liquidacion_id: liquidacion.id,
           notas: notasFinales,
         })
-        .select('id')
-        .single()
+        .select("id")
+        .single();
 
       if (pagoEmpleadoError || !pagoEmpleado) {
-        throw new Error(pagoEmpleadoError?.message || 'No se pudo crear el pago al empleado.')
+        throw new Error(
+          pagoEmpleadoError?.message || "No se pudo crear el pago al empleado.",
+        );
+      }
+
+      if (descuentoDeudaUsd > 0) {
+        const { error: descuentoError } = await supabase.rpc(
+          "registrar_descuento_deuda_comision",
+          {
+            p_empleado_id: id,
+            p_comision_ids: pendientes.map((c) => c.id),
+            p_monto_usd: descuentoDeudaUsd,
+            p_monto_bs: descuentoDeudaEnMonedaPago,
+            p_tasa_bcv: tasaBCV,
+            p_liquidacion_id: liquidacion.id,
+            p_pago_empleado_id: pagoEmpleado.id,
+            p_modo: "descuento_y_liquidacion",
+            p_referencia: referencia.trim() || null,
+            p_notas: `Descuento de deuda aplicado desde liquidación de comisiones ${liquidacion.id}`,
+          },
+        );
+
+        if (descuentoError) {
+          throw new Error(
+            descuentoError.message ||
+              "No se pudo aplicar el descuento de deuda del empleado.",
+          );
+        }
       }
 
       const detalleRows = pendientes.map((c) => ({
         pago_empleado_id: pagoEmpleado.id,
         comision_id: c.id,
-        monto_usd: Number(c.monto_profesional_usd ?? c.profesional ?? 0),
-        monto_bs: Number(c.monto_profesional_bs ?? 0),
-      }))
+        monto_usd: getComisionMontoByMoneda(c, "USD"),
+        monto_bs: getComisionMontoByMoneda(c, "BS"),
+      }));
 
       const { error: detalleError } = await supabase
-        .from('pagos_empleados_detalle')
-        .insert(detalleRows)
+        .from("pagos_empleados_detalle")
+        .insert(detalleRows);
 
       if (detalleError) {
-        throw new Error(detalleError.message || 'No se pudo crear el detalle de la liquidación.')
+        throw new Error(
+          detalleError.message ||
+            "No se pudo crear el detalle de la liquidación.",
+        );
       }
 
-      const egresoIds: string[] = []
+      const egresoIds: string[] = [];
 
       for (let i = 0; i < splitsValidos.length; i++) {
-        const split = splitsValidos[i]
-        const concepto = `Liquidación comisión - ${empleado?.nombre || 'Profesional'} - ${fechaFacturacion} - Parte ${i + 1}/${splitsValidos.length}`
+        const split = splitsValidos[i];
+        const concepto = `Liquidación comisión - ${empleado?.nombre || "Profesional"} - ${fechaFacturacion} - Parte ${i + 1}/${splitsValidos.length}`;
 
-        const monedaMetodo = split.metodoMoneda
+        const monedaMetodo = split.metodoMoneda;
         const montoContraMetodo = split.requiereConversion
           ? Number(split.montoDescontarMetodo || 0)
-          : split.montoNum
+          : split.montoNum;
 
         const montoSplitUsd =
-          monedaMetodo === 'USD'
+          monedaMetodo === "USD"
             ? r2(montoContraMetodo)
             : tasaBCV && tasaBCV > 0
               ? r2(montoContraMetodo / tasaBCV)
-              : 0
+              : 0;
 
         const montoSplitBs =
-          monedaMetodo === 'BS'
+          monedaMetodo === "BS"
             ? r2(montoContraMetodo)
             : tasaBCV && tasaBCV > 0
               ? r2(montoContraMetodo * tasaBCV)
-              : 0
+              : 0;
 
         const { data: egreso, error: egresoError } = await supabase
-          .from('egresos')
+          .from("egresos")
           .insert({
             fecha: fechaFacturacion,
-            categoria: 'nomina',
+            categoria: "nomina",
             concepto,
             proveedor: empleado?.nombre || null,
             monto: montoContraMetodo,
             metodo_pago_id: null,
             metodo_pago_v2_id: split.metodoPagoId,
-            estado: 'pagado',
+            estado: "pagado",
             notas:
               `Liquidación parcial ${i + 1} de ${splitsValidos.length}\n` +
               `Liquidación total: ${formatMontoByMoneda(montoPagoNum, monedaPago)}\n` +
@@ -1381,44 +1798,51 @@ export default function VerPersonalPage() {
             empleado_id: id,
             referencia: referencia.trim() || null,
           })
-          .select('id')
-          .single()
+          .select("id")
+          .single();
 
         if (egresoError || !egreso) {
-          throw new Error(egresoError?.message || 'No se pudo crear uno de los egresos en finanzas.')
+          throw new Error(
+            egresoError?.message ||
+              "No se pudo crear uno de los egresos en finanzas.",
+          );
         }
 
-        egresoIds.push(egreso.id)
+        egresoIds.push(egreso.id);
       }
 
       const { error: liqUpdateError } = await supabase
-        .from('comisiones_liquidaciones')
+        .from("comisiones_liquidaciones")
         .update({
           pago_empleado_id: pagoEmpleado.id,
           egreso_id: egresoIds[0] || null,
         })
-        .eq('id', liquidacion.id)
+        .eq("id", liquidacion.id);
 
       if (liqUpdateError) {
-        throw new Error(liqUpdateError.message || 'No se pudo enlazar la liquidación.')
+        throw new Error(
+          liqUpdateError.message || "No se pudo enlazar la liquidación.",
+        );
       }
 
       const { error: updError } = await supabase
-        .from('comisiones_detalle')
+        .from("comisiones_detalle")
         .update({
-          estado: 'liquidado',
+          estado: "liquidado",
           liquidacion_id: liquidacion.id,
           pagado: true,
           fecha_pago: fechaFacturacion,
           pago_empleado_id: pagoEmpleado.id,
         })
         .in(
-          'id',
-          pendientes.map((c) => c.id)
-        )
+          "id",
+          pendientes.map((c) => c.id),
+        );
 
       if (updError) {
-        throw new Error(updError.message || 'No se pudieron actualizar las comisiones.')
+        throw new Error(
+          updError.message || "No se pudieron actualizar las comisiones.",
+        );
       }
 
       alert(
@@ -1426,21 +1850,25 @@ export default function VerPersonalPage() {
           `Moneda: ${monedaPago}\n` +
           `Monto: ${formatMontoByMoneda(montoPagoNum, monedaPago)}\n` +
           `Registros liquidados: ${pendientes.length}\n` +
-          `Métodos usados: ${splitsValidos.length}`
-      )
+          `Métodos usados: ${splitsValidos.length}`,
+      );
 
-      setSelectedComisionIds([])
-      setSplitsPago([{ id: crypto.randomUUID(), metodoPagoId: '', monto: '' }])
-      setReferencia('')
-      setNotasLiquidacion('')
-      setTasaBCV(null)
-      setTasaBCVAuto(null)
-      await loadAll()
+      setSelectedComisionIds([]);
+      setSplitsPago([{ id: crypto.randomUUID(), metodoPagoId: "", monto: "" }]);
+      setReferencia("");
+      setNotasLiquidacion("");
+      setTasaBCV(null);
+      setTasaBCVAuto(null);
+      setAplicarDescuentoDeuda(false);
+      setDescuentoDeudaUsdInput("");
+      setModoDescuentoDeuda("descuento_y_pagar");
+      setDestinoDescuentoDeuda("ingreso_rpm");
+      await loadAll();
     } catch (err: any) {
-      console.error(err)
-      alert(err?.message || 'Error al liquidar el saldo disponible.')
+      console.error(err);
+      alert(err?.message || "Error al liquidar el saldo disponible.");
     } finally {
-      setFacturando(false)
+      setFacturando(false);
     }
   }
 
@@ -1453,7 +1881,7 @@ export default function VerPersonalPage() {
           <p className="text-sm text-white/55">Cargando...</p>
         </Card>
       </div>
-    )
+    );
   }
 
   if (!empleado) {
@@ -1462,10 +1890,12 @@ export default function VerPersonalPage() {
         <p className="text-sm text-white/55">Personal</p>
         <h1 className="text-2xl font-semibold text-white">Perfil</h1>
         <Card className="p-6">
-          <p className="text-sm text-rose-400">{errorMsg || 'No encontrado.'}</p>
+          <p className="text-sm text-rose-400">
+            {errorMsg || "No encontrado."}
+          </p>
         </Card>
       </div>
-    )
+    );
   }
 
   return (
@@ -1477,13 +1907,17 @@ export default function VerPersonalPage() {
             {empleado.nombre}
           </h1>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="text-sm text-white/55 capitalize">{empleado.rol}</span>
+            <span className="text-sm text-white/55 capitalize">
+              {empleado.rol}
+            </span>
             {empleado.especialidad && (
-              <span className="text-sm text-white/35">· {empleado.especialidad}</span>
+              <span className="text-sm text-white/35">
+                · {empleado.especialidad}
+              </span>
             )}
             <span
               className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${estadoBadge(
-                empleado.estado
+                empleado.estado,
               )}`}
             >
               {empleado.estado}
@@ -1506,8 +1940,16 @@ export default function VerPersonalPage() {
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-6">
-        <StatCard title="Clientes" value={clientes.length} color="text-sky-400" />
-        <StatCard title="Actividad hoy" value={stats.hoyTotal} color="text-violet-400" />
+        <StatCard
+          title="Clientes"
+          value={clientes.length}
+          color="text-sky-400"
+        />
+        <StatCard
+          title="Actividad hoy"
+          value={stats.hoyTotal}
+          color="text-violet-400"
+        />
         <StatCard
           title="Disponible USD"
           value={formatMoney(stats.comisionPendienteUsd)}
@@ -1520,7 +1962,9 @@ export default function VerPersonalPage() {
         />
         <StatCard
           title="Debe"
-          value={formatMoney(estadoCuentaEmpleado?.saldo_pendiente_neto_usd || 0)}
+          value={formatMoney(
+            estadoCuentaEmpleado?.saldo_pendiente_neto_usd || 0,
+          )}
           color="text-rose-300"
         />
         <StatCard
@@ -1531,17 +1975,21 @@ export default function VerPersonalPage() {
       </div>
 
       <div className="flex gap-1 rounded-2xl border border-white/10 bg-white/[0.02] p-1">
-        {([
-          { key: 'info', label: 'Información' },
-          { key: 'agenda', label: `Agenda (${agendaFiltrada.length})` },
-          { key: 'comisiones', label: 'Comisiones' },
-        ] as { key: Tab; label: string }[]).map((t) => (
+        {(
+          [
+            { key: "info", label: "Información" },
+            { key: "agenda", label: `Agenda (${agendaFiltrada.length})` },
+            { key: "comisiones", label: "Comisiones" },
+          ] as { key: Tab; label: string }[]
+        ).map((t) => (
           <button
             key={t.key}
             type="button"
             onClick={() => setTab(t.key)}
             className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-medium transition ${
-              tab === t.key ? 'bg-white/[0.08] text-white' : 'text-white/45 hover:text-white/70'
+              tab === t.key
+                ? "bg-white/[0.08] text-white"
+                : "text-white/45 hover:text-white/70"
             }`}
           >
             {t.label}
@@ -1549,22 +1997,28 @@ export default function VerPersonalPage() {
         ))}
       </div>
 
-      {tab === 'info' && (
+      {tab === "info" && (
         <div className="grid gap-6 xl:grid-cols-3">
           <div className="space-y-6 xl:col-span-2">
             <Section title="Información" description="Datos de contacto.">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <p className="text-xs text-white/45">Email</p>
-                  <p className="mt-1 text-sm text-white">{empleado.email || '—'}</p>
+                  <p className="mt-1 text-sm text-white">
+                    {empleado.email || "—"}
+                  </p>
                 </div>
                 <div>
                   <p className="text-xs text-white/45">Teléfono</p>
-                  <p className="mt-1 text-sm text-white">{empleado.telefono || '—'}</p>
+                  <p className="mt-1 text-sm text-white">
+                    {empleado.telefono || "—"}
+                  </p>
                 </div>
                 <div>
                   <p className="text-xs text-white/45">Rol</p>
-                  <p className="mt-1 text-sm capitalize text-white">{empleado.rol}</p>
+                  <p className="mt-1 text-sm capitalize text-white">
+                    {empleado.rol}
+                  </p>
                 </div>
                 <div>
                   <p className="text-xs text-white/45">Miembro desde</p>
@@ -1575,30 +2029,41 @@ export default function VerPersonalPage() {
               </div>
             </Section>
 
-            <Section title="Estado de cuenta" description="Deuda, crédito y consumos registrados al empleado.">
+            <Section
+              title="Estado de cuenta"
+              description="Deuda, crédito y consumos registrados al empleado."
+            >
               <div className="grid gap-3 sm:grid-cols-4">
                 <Card className="border-rose-400/20 bg-rose-400/5 p-4">
                   <p className="text-xs text-white/45">Deuda total</p>
                   <p className="mt-1 text-lg font-bold text-rose-300">
-                    {formatMoney(estadoCuentaEmpleado?.total_pendiente_usd || 0)}
+                    {formatMoney(
+                      estadoCuentaEmpleado?.total_pendiente_usd || 0,
+                    )}
                   </p>
                 </Card>
                 <Card className="border-cyan-400/20 bg-cyan-400/5 p-4">
                   <p className="text-xs text-white/45">Crédito disponible</p>
                   <p className="mt-1 text-lg font-bold text-cyan-300">
-                    {formatMoney(estadoCuentaEmpleado?.credito_disponible_usd || 0)}
+                    {formatMoney(
+                      estadoCuentaEmpleado?.credito_disponible_usd || 0,
+                    )}
                   </p>
                 </Card>
                 <Card className="border-amber-400/20 bg-amber-400/5 p-3">
                   <p className="text-xs text-white/45">Neto pendiente</p>
                   <p className="mt-1 text-lg font-bold text-amber-300">
-                    {formatMoney(estadoCuentaEmpleado?.saldo_pendiente_neto_usd || 0)}
+                    {formatMoney(
+                      estadoCuentaEmpleado?.saldo_pendiente_neto_usd || 0,
+                    )}
                   </p>
                 </Card>
                 <Card className="border-emerald-400/20 bg-emerald-400/5 p-3">
                   <p className="text-xs text-white/45">Saldo a favor neto</p>
                   <p className="mt-1 text-base font-bold text-emerald-300">
-                    {formatMoney(estadoCuentaEmpleado?.saldo_favor_neto_usd || 0)}
+                    {formatMoney(
+                      estadoCuentaEmpleado?.saldo_favor_neto_usd || 0,
+                    )}
                   </p>
                 </Card>
               </div>
@@ -1625,23 +2090,33 @@ export default function VerPersonalPage() {
               </div>
 
               {cuentasPendientesEmpleado.length === 0 ? (
-                <p className="mt-4 text-sm text-white/45">Sin deudas pendientes.</p>
+                <p className="mt-4 text-sm text-white/45">
+                  Sin deudas pendientes.
+                </p>
               ) : (
                 <div className="mt-4 space-y-2">
                   {cuentasPendientesEmpleado.map((cuenta) => (
-                    <div key={cuenta.id} className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
+                    <div
+                      key={cuenta.id}
+                      className="rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3"
+                    >
                       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                         <div>
-                          <p className="font-medium text-white">{cuenta.concepto}</p>
+                          <p className="font-medium text-white">
+                            {cuenta.concepto}
+                          </p>
                           <p className="text-xs text-white/45">
                             {formatDate(cuenta.fecha_venta)} · {cuenta.estado}
                           </p>
                         </div>
                         <div className="text-right">
                           <p className="text-xs text-white/35">Saldo</p>
-                          <p className="font-semibold text-rose-300">{formatMoney(cuenta.saldo_usd)}</p>
+                          <p className="font-semibold text-rose-300">
+                            {formatMoney(cuenta.saldo_usd)}
+                          </p>
                           <p className="text-xs text-white/35">
-                            Pagado {formatMoney(cuenta.monto_pagado_usd)} de {formatMoney(cuenta.monto_total_usd)}
+                            Pagado {formatMoney(cuenta.monto_pagado_usd)} de{" "}
+                            {formatMoney(cuenta.monto_total_usd)}
                           </p>
                         </div>
                       </div>
@@ -1667,11 +2142,13 @@ export default function VerPersonalPage() {
                     >
                       <div>
                         <p className="font-medium text-white">{c.nombre}</p>
-                        {c.telefono && <p className="text-xs text-white/45">{c.telefono}</p>}
+                        {c.telefono && (
+                          <p className="text-xs text-white/45">{c.telefono}</p>
+                        )}
                       </div>
                       <span
                         className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${estadoBadge(
-                          c.estado
+                          c.estado,
                         )}`}
                       >
                         {c.estado}
@@ -1684,51 +2161,91 @@ export default function VerPersonalPage() {
           </div>
 
           <div className="space-y-4">
-            <Section title="Saldo disponible" description="Comisiones listas para liquidar.">
+            <Section
+              title="Saldo disponible"
+              description="Comisiones listas para liquidar."
+            >
               <div className="grid grid-cols-1 gap-3">
                 <Card className="border-emerald-400/20 bg-emerald-400/5 p-3">
-                  <p className="text-xs text-white/45">Profesional disponible USD</p>
+                  <p className="text-xs text-white/45">
+                    Profesional disponible USD
+                  </p>
                   <p className="mt-1 text-xl font-bold text-emerald-400">
                     {formatMoney(resumenDisponible.profesionalUsd)}
                   </p>
                 </Card>
                 <Card className="border-amber-400/20 bg-amber-400/5 p-3">
-                  <p className="text-xs text-white/45">Profesional disponible Bs</p>
+                  <p className="text-xs text-white/45">
+                    Profesional disponible Bs
+                  </p>
                   <p className="mt-1 text-xl font-bold text-amber-300">
                     {formatBs(resumenDisponible.profesionalBs)}
                   </p>
                 </Card>
               </div>
 
+              {deudaEmpleadoUsd > 0 && resumenDisponible.profesionalUsd > 0 && (
+                <Card className="mt-3 border-rose-400/20 bg-rose-400/5 p-3">
+                  <p className="text-xs text-white/45">Deuda del empleado</p>
+                  <p className="mt-1 text-lg font-bold text-rose-300">
+                    {formatMoney(deudaEmpleadoUsd)}
+                  </p>
+                  <p className="mt-1 text-xs text-white/40">
+                    Puedes descontarla directamente de las comisiones antes de
+                    pagarle.
+                  </p>
+                </Card>
+              )}
+
               <button
                 type="button"
-                onClick={() => setTab('comisiones')}
+                onClick={() => setTab("comisiones")}
                 className="mt-3 w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm font-medium text-white/70 transition hover:bg-white/[0.06]"
               >
                 Ver liquidación →
               </button>
+
+              {deudaEmpleadoUsd > 0 && resumenDisponible.profesionalUsd > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTab("comisiones");
+                    setAplicarDescuentoDeuda(true);
+                    setSelectedComisionIds((prev) =>
+                      prev.length > 0
+                        ? prev
+                        : comisionesPendientesMoneda.map((c) => c.id),
+                    );
+                  }}
+                  className="mt-2 w-full rounded-2xl border border-rose-400/25 bg-rose-400/10 px-4 py-2.5 text-sm font-semibold text-rose-300 transition hover:bg-rose-400/15"
+                >
+                  Descontar deuda con comisión →
+                </button>
+              )}
             </Section>
           </div>
         </div>
       )}
 
-      {tab === 'agenda' && (
+      {tab === "agenda" && (
         <div className="space-y-4">
           <div className="flex flex-wrap gap-3">
             <div className="flex gap-1 rounded-2xl border border-white/10 bg-white/[0.02] p-1">
-              {([
-                { key: 'hoy', label: 'Hoy' },
-                { key: 'proximos', label: 'Próximos' },
-                { key: 'todos', label: 'Todos' },
-              ] as { key: typeof agendaFiltro; label: string }[]).map((f) => (
+              {(
+                [
+                  { key: "hoy", label: "Hoy" },
+                  { key: "proximos", label: "Próximos" },
+                  { key: "todos", label: "Todos" },
+                ] as { key: typeof agendaFiltro; label: string }[]
+              ).map((f) => (
                 <button
                   key={f.key}
                   type="button"
                   onClick={() => setAgendaFiltro(f.key)}
                   className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
                     agendaFiltro === f.key
-                      ? 'bg-white/[0.08] text-white'
-                      : 'text-white/45 hover:text-white/70'
+                      ? "bg-white/[0.08] text-white"
+                      : "text-white/45 hover:text-white/70"
                   }`}
                 >
                   {f.label}
@@ -1737,19 +2254,21 @@ export default function VerPersonalPage() {
             </div>
 
             <div className="flex gap-1 rounded-2xl border border-white/10 bg-white/[0.02] p-1">
-              {([
-                { key: 'todos', label: 'Todos' },
-                { key: 'entrenamientos', label: 'Entrenamientos' },
-                { key: 'citas', label: 'Citas' },
-              ] as { key: typeof agendaTipo; label: string }[]).map((f) => (
+              {(
+                [
+                  { key: "todos", label: "Todos" },
+                  { key: "entrenamientos", label: "Entrenamientos" },
+                  { key: "citas", label: "Citas" },
+                ] as { key: typeof agendaTipo; label: string }[]
+              ).map((f) => (
                 <button
                   key={f.key}
                   type="button"
                   onClick={() => setAgendaTipo(f.key)}
                   className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
                     agendaTipo === f.key
-                      ? 'bg-white/[0.08] text-white'
-                      : 'text-white/45 hover:text-white/70'
+                      ? "bg-white/[0.08] text-white"
+                      : "text-white/45 hover:text-white/70"
                   }`}
                 >
                   {f.label}
@@ -1769,7 +2288,11 @@ export default function VerPersonalPage() {
                 {[...new Set(agenda.map((a) => a.nombre))]
                   .sort()
                   .map((nombre) => (
-                    <option key={nombre} value={nombre} className="bg-[#11131a] text-white">
+                    <option
+                      key={nombre}
+                      value={nombre}
+                      className="bg-[#11131a] text-white"
+                    >
                       {nombre}
                     </option>
                   ))}
@@ -1780,7 +2303,9 @@ export default function VerPersonalPage() {
           {agendaAgrupadaPorCliente.length === 0 ? (
             <Card className="p-8 text-center">
               <p className="text-sm text-white/45">
-                {agendaFiltro === 'hoy' ? 'Sin actividad para hoy.' : 'Sin registros.'}
+                {agendaFiltro === "hoy"
+                  ? "Sin actividad para hoy."
+                  : "Sin registros."}
               </p>
             </Card>
           ) : (
@@ -1790,7 +2315,9 @@ export default function VerPersonalPage() {
                   <div className="border-b border-white/10 bg-white/[0.03] px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <p className="font-semibold text-white">{group.cliente}</p>
+                        <p className="font-semibold text-white">
+                          {group.cliente}
+                        </p>
                         <p className="text-xs text-white/45">
                           {group.items.length} bloque(s) en agenda
                         </p>
@@ -1806,38 +2333,43 @@ export default function VerPersonalPage() {
                       <div
                         key={item.id}
                         className={`rounded-2xl border px-4 py-3 ${
-                          item.tipo === 'entrenamiento'
-                            ? 'border-violet-400/15 bg-violet-400/5'
-                            : 'border-sky-400/15 bg-sky-400/5'
+                          item.tipo === "entrenamiento"
+                            ? "border-violet-400/15 bg-violet-400/5"
+                            : "border-sky-400/15 bg-sky-400/5"
                         }`}
                       >
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                           <div className="flex items-start gap-3">
                             <div
                               className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-xs font-bold ${
-                                item.tipo === 'entrenamiento'
-                                  ? 'bg-violet-500/20 text-violet-300'
-                                  : 'bg-sky-500/20 text-sky-300'
+                                item.tipo === "entrenamiento"
+                                  ? "bg-violet-500/20 text-violet-300"
+                                  : "bg-sky-500/20 text-sky-300"
                               }`}
                             >
-                              {item.tipo === 'entrenamiento' ? 'E' : 'C'}
+                              {item.tipo === "entrenamiento" ? "E" : "C"}
                             </div>
 
                             <div>
-                              <p className="font-medium text-white">{item.subtitulo}</p>
+                              <p className="font-medium text-white">
+                                {item.subtitulo}
+                              </p>
                               <p className="text-xs text-white/45">
-                                {formatDateLong(item.fecha)} · {item.hora_inicio.slice(0, 5)} –{' '}
+                                {formatDateLong(item.fecha)} ·{" "}
+                                {item.hora_inicio.slice(0, 5)} –{" "}
                                 {item.hora_fin.slice(0, 5)}
                               </p>
                               {item.notas && (
-                                <p className="mt-1 text-xs text-white/35">{item.notas}</p>
+                                <p className="mt-1 text-xs text-white/35">
+                                  {item.notas}
+                                </p>
                               )}
                             </div>
                           </div>
 
                           <span
                             className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${citaBadge(
-                              item.estado
+                              item.estado,
                             )}`}
                           >
                             {item.estado}
@@ -1853,7 +2385,7 @@ export default function VerPersonalPage() {
         </div>
       )}
 
-      {tab === 'comisiones' && (
+      {tab === "comisiones" && (
         <div className="space-y-4">
           <Section
             title="Liquidación de comisiones"
@@ -1862,8 +2394,12 @@ export default function VerPersonalPage() {
             <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-3">
               <Card className="p-3">
                 <p className="text-xs text-white/45">Base USD</p>
-                <p className="mt-1 font-semibold text-white">{formatMoney(resumenDisponible.baseUsd)}</p>
-                <p className="text-xs text-white/35">{formatBs(resumenDisponible.baseBs)}</p>
+                <p className="mt-1 font-semibold text-white">
+                  {formatMoney(resumenDisponible.baseUsd)}
+                </p>
+                <p className="text-xs text-white/35">
+                  {formatBs(resumenDisponible.baseBs)}
+                </p>
               </Card>
 
               <Card className="border-emerald-400/20 bg-emerald-400/5 p-3">
@@ -1871,7 +2407,9 @@ export default function VerPersonalPage() {
                 <p className="mt-1 font-semibold text-emerald-400">
                   {formatMoney(resumenDisponible.profesionalUsd)}
                 </p>
-                <p className="text-xs text-white/35">{formatBs(resumenDisponible.profesionalBs)}</p>
+                <p className="text-xs text-white/35">
+                  {formatBs(resumenDisponible.profesionalBs)}
+                </p>
               </Card>
 
               <Card className="border-violet-400/20 bg-violet-400/5 p-3">
@@ -1879,14 +2417,18 @@ export default function VerPersonalPage() {
                 <p className="mt-1 font-semibold text-violet-400">
                   {formatMoney(resumenDisponible.rpmUsd)}
                 </p>
-                <p className="text-xs text-white/35">{formatBs(resumenDisponible.rpmBs)}</p>
+                <p className="text-xs text-white/35">
+                  {formatBs(resumenDisponible.rpmBs)}
+                </p>
               </Card>
             </div>
 
             <Card className="mb-3 border-white/10 bg-white/[0.02] p-3">
               <div className="grid gap-3 md:grid-cols-3">
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">Moneda</label>
+                  <label className="mb-2 block text-sm font-medium text-white/75">
+                    Moneda
+                  </label>
                   <select
                     value={monedaPago}
                     onChange={(e) => setMonedaPago(e.target.value as Moneda)}
@@ -1903,14 +2445,20 @@ export default function VerPersonalPage() {
 
                 {requiereTasa && (
                   <div>
-                    <label className="mb-2 block text-sm font-medium text-white/75">Tasa BCV</label>
+                    <label className="mb-2 block text-sm font-medium text-white/75">
+                      Tasa BCV
+                    </label>
                     <div className="space-y-2">
                       <input
                         type="number"
                         step="0.0001"
                         min="0"
-                        value={tasaBCV ?? ''}
-                        onChange={(e) => setTasaBCV(e.target.value ? Number(e.target.value) : null)}
+                        value={tasaBCV ?? ""}
+                        onChange={(e) =>
+                          setTasaBCV(
+                            e.target.value ? Number(e.target.value) : null,
+                          )
+                        }
                         className={inputCls()}
                         placeholder="Ej: 36.52"
                       />
@@ -1922,7 +2470,9 @@ export default function VerPersonalPage() {
                           disabled={cargandoTasa}
                           className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-white/75 hover:bg-white/[0.06] disabled:opacity-60"
                         >
-                          {cargandoTasa ? 'Cargando tasa...' : 'Recargar tasa automática'}
+                          {cargandoTasa
+                            ? "Cargando tasa..."
+                            : "Recargar tasa automática"}
                         </button>
 
                         {tasaBCVAuto && (
@@ -1933,14 +2483,17 @@ export default function VerPersonalPage() {
                       </div>
 
                       <p className="text-xs text-amber-300">
-                        Solo se usa cuando el método está en una moneda distinta a la liquidación.
+                        Solo se usa cuando el método está en una moneda distinta
+                        a la liquidación.
                       </p>
                     </div>
                   </div>
                 )}
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">Seleccionadas</label>
+                  <label className="mb-2 block text-sm font-medium text-white/75">
+                    Seleccionadas
+                  </label>
                   <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white">
                     {resumenSeleccionado.pendientes} comisión(es)
                   </div>
@@ -1964,7 +2517,9 @@ export default function VerPersonalPage() {
                   onClick={selectAllCurrentCurrency}
                   className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-white/70 hover:bg-white/[0.06]"
                 >
-                  {allCurrentCurrencySelected ? 'Quitar selección' : 'Seleccionar todas'}
+                  {allCurrentCurrencySelected
+                    ? "Quitar selección"
+                    : "Seleccionar todas"}
                 </button>
               </div>
 
@@ -1975,10 +2530,10 @@ export default function VerPersonalPage() {
               ) : (
                 <div className="grid gap-2">
                   {comisionesPendientesMoneda.map((c) => {
-                    const checked = selectedComisionIds.includes(c.id)
-                    const monto = getComisionMontoByMoneda(c, monedaPago)
-                    const concepto = getComisionConcepto(c)
-                    const subtitulo = getComisionSubtitulo(c)
+                    const checked = selectedComisionIds.includes(c.id);
+                    const monto = getComisionMontoByMoneda(c, monedaPago);
+                    const concepto = getComisionConcepto(c);
+                    const subtitulo = getComisionSubtitulo(c);
 
                     return (
                       <button
@@ -1988,8 +2543,8 @@ export default function VerPersonalPage() {
                         aria-pressed={checked}
                         className={`group w-full rounded-2xl border p-3 text-left transition ${
                           checked
-                            ? 'border-emerald-400/40 bg-emerald-400/[0.10] shadow-[0_0_0_1px_rgba(52,211,153,0.08)]'
-                            : 'border-white/10 bg-white/[0.025] hover:border-white/15 hover:bg-white/[0.045]'
+                            ? "border-emerald-400/40 bg-emerald-400/[0.10] shadow-[0_0_0_1px_rgba(52,211,153,0.08)]"
+                            : "border-white/10 bg-white/[0.025] hover:border-white/15 hover:bg-white/[0.045]"
                         }`}
                       >
                         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -1998,17 +2553,19 @@ export default function VerPersonalPage() {
                               {/* ── Tipo badge ── */}
                               <span
                                 className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                                  c.tipo === 'plan'
-                                    ? 'bg-violet-500/10 text-violet-300'
-                                    : 'bg-sky-500/10 text-sky-300'
+                                  c.tipo === "plan"
+                                    ? "bg-violet-500/10 text-violet-300"
+                                    : "bg-sky-500/10 text-sky-300"
                                 }`}
                               >
-                                {c.tipo || 'comisión'}
+                                {c.tipo || "comisión"}
                               </span>
 
                               {/* ── Fecha de la cita (si existe) o de la comisión ── */}
                               <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-white/55">
-                                {c.cita_fecha ? formatDate(c.cita_fecha) : formatDate(c.fecha)}
+                                {c.cita_fecha
+                                  ? formatDate(c.cita_fecha)
+                                  : formatDate(c.fecha)}
                               </span>
 
                               {/* ── Hora de la cita ── */}
@@ -2037,17 +2594,28 @@ export default function VerPersonalPage() {
 
                             <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
                               <span className="rounded-full bg-white/[0.04] px-2 py-0.5 text-white/55">
-                                USD {formatMoney(c.monto_profesional_usd ?? c.profesional)}
+                                USD{" "}
+                                {formatMoney(
+                                  c.monto_profesional_usd ?? c.profesional,
+                                )}
                               </span>
                               <span className="rounded-full bg-white/[0.04] px-2 py-0.5 text-white/55">
                                 Bs {formatBs(c.monto_profesional_bs)}
                               </span>
+                              {Number(c.descuento_deuda_usd || 0) > 0 && (
+                                <span className="rounded-full bg-rose-400/10 px-2 py-0.5 text-rose-300">
+                                  Deuda descontada{" "}
+                                  {formatMoney(c.descuento_deuda_usd)}
+                                </span>
+                              )}
                             </div>
                           </div>
 
                           <div className="flex items-center justify-between gap-2 md:min-w-[150px] md:text-right">
                             <div>
-                              <p className="text-xs text-white/35">Monto a liquidar</p>
+                              <p className="text-xs text-white/35">
+                                Monto a liquidar
+                              </p>
                               <p className="text-base font-bold text-emerald-300">
                                 {formatMontoByMoneda(monto, monedaPago)}
                               </p>
@@ -2055,164 +2623,405 @@ export default function VerPersonalPage() {
                             <span
                               className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-bold transition ${
                                 checked
-                                  ? 'border-emerald-400/40 bg-emerald-400/20 text-emerald-200'
-                                  : 'border-white/10 bg-white/[0.03] text-white/25 group-hover:text-white/50'
+                                  ? "border-emerald-400/40 bg-emerald-400/20 text-emerald-200"
+                                  : "border-white/10 bg-white/[0.03] text-white/25 group-hover:text-white/50"
                               }`}
                             >
-                              {checked ? '✓' : '+'}
+                              {checked ? "✓" : "+"}
                             </span>
                           </div>
                         </div>
                       </button>
-                    )
+                    );
                   })}
                 </div>
               )}
             </Card>
 
             <Card className="mb-3 border-amber-400/20 bg-amber-400/5 p-3">
-              <p className="text-sm font-medium text-amber-300">Métodos de pago / carteras</p>
+              <p className="text-sm font-medium text-amber-300">
+                {soloDescontarDeudaActivo
+                  ? "Descuento interno de deuda"
+                  : "Métodos de pago / carteras"}
+              </p>
               <p className="mt-1 text-xs text-white/45">
-                Puedes pagar con una cartera o dividir. Si eliges Bs, calcula equivalente BCV.
+                {soloDescontarDeudaActivo
+                  ? "No se pagará comisión ahora. Solo se descuenta la deuda desde el saldo de comisión seleccionado."
+                  : "Puedes pagar con una cartera o dividir. Si eliges Bs, calcula equivalente BCV."}
               </p>
 
               <div className="mt-3 grid gap-2 md:grid-cols-3">
                 <Card className="p-3">
-                  <p className="text-xs text-white/45">Monto seleccionado</p>
+                  <p className="text-xs text-white/45">Neto seleccionado</p>
                   <p className="mt-1 text-base font-semibold text-white">
                     {formatMontoByMoneda(montoFacturar, monedaPago)}
                   </p>
+                  {descuentoDeudaUsd > 0 && (
+                    <p className="text-xs text-rose-300">
+                      - deuda {formatMoney(descuentoDeudaUsd)}
+                    </p>
+                  )}
                 </Card>
 
                 <Card className="border-violet-400/20 bg-violet-400/5 p-3">
-                  <p className="text-xs text-white/45">Asignado en métodos</p>
+                  <p className="text-xs text-white/45">
+                    {soloDescontarDeudaActivo
+                      ? "Pago al empleado ahora"
+                      : "Asignado en métodos"}
+                  </p>
                   <p className="mt-1 text-base font-semibold text-violet-300">
-                    {formatMontoByMoneda(totalSplits, monedaPago)}
+                    {soloDescontarDeudaActivo
+                      ? formatMoney(0)
+                      : formatMontoByMoneda(totalSplits, monedaPago)}
                   </p>
                 </Card>
 
                 <Card className="border-emerald-400/20 bg-emerald-400/5 p-3">
-                  <p className="text-xs text-white/45">Restante por asignar</p>
+                  <p className="text-xs text-white/45">
+                    {soloDescontarDeudaActivo
+                      ? "Comisión queda pendiente"
+                      : "Restante neto por asignar"}
+                  </p>
                   <p
                     className={`mt-1 text-base font-semibold ${
-                      restantePorAsignar === 0 ? 'text-emerald-400' : 'text-amber-300'
+                      restantePorAsignar === 0
+                        ? "text-emerald-400"
+                        : "text-amber-300"
                     }`}
                   >
-                    {formatMontoByMoneda(restantePorAsignar, monedaPago)}
+                    {soloDescontarDeudaActivo
+                      ? formatMontoByMoneda(montoNetoAPagar, monedaPago)
+                      : formatMontoByMoneda(restantePorAsignar, monedaPago)}
                   </p>
                 </Card>
               </div>
 
-              <div className="mt-3 space-y-2">
-                {splitsConMetodo.map((split, index) => {
-                  const metodo = split.metodo
-                  const saldo = split.saldo
-                  const monedaMetodo = split.metodoMoneda
-                  const montoContraMetodo = split.requiereConversion
-                    ? split.montoDescontar
-                    : split.montoLiquidacion
+              {deudaEmpleadoUsd > 0 && (
+                <Card className="mt-3 border-rose-400/20 bg-rose-400/5 p-3">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-rose-300">
+                        Descontar deuda del empleado
+                      </p>
+                      <p className="mt-1 text-xs text-white/45">
+                        Deuda pendiente: {formatMoney(deudaEmpleadoUsd)}.
+                        Selecciona comisiones, activa el descuento y el sistema
+                        bajará esa deuda del neto a pagar.
+                      </p>
+                    </div>
 
-                  return (
-                    <div
-                      key={split.id}
-                      className="grid gap-2 rounded-2xl border border-white/10 bg-white/[0.02] p-3 md:grid-cols-[1.3fr_0.8fr_auto_auto]"
-                    >
+                    <label className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-white/75">
+                      <input
+                        type="checkbox"
+                        checked={aplicarDescuentoDeuda}
+                        disabled={resumenSeleccionado.pendientes === 0}
+                        onChange={(e) =>
+                          setAplicarDescuentoDeuda(e.target.checked)
+                        }
+                      />
+                      Aplicar descuento
+                    </label>
+                  </div>
+
+                  {aplicarDescuentoDeuda &&
+                    resumenSeleccionado.pendientes > 0 && (
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setModoDescuentoDeuda("solo_descuento")
+                          }
+                          className={`rounded-2xl border p-3 text-left text-xs transition ${
+                            modoDescuentoDeuda === "solo_descuento"
+                              ? "border-rose-400/30 bg-rose-400/10 text-rose-200"
+                              : "border-white/10 bg-white/[0.02] text-white/55 hover:bg-white/[0.05]"
+                          }`}
+                        >
+                          <span className="block text-sm font-semibold text-white">
+                            Solo descontar deuda
+                          </span>
+                          No se paga al empleado ahora. Solo baja la deuda y
+                          queda comisión pendiente.
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setModoDescuentoDeuda("descuento_y_pagar")
+                          }
+                          className={`rounded-2xl border p-3 text-left text-xs transition ${
+                            modoDescuentoDeuda === "descuento_y_pagar"
+                              ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+                              : "border-white/10 bg-white/[0.02] text-white/55 hover:bg-white/[0.05]"
+                          }`}
+                        >
+                          <span className="block text-sm font-semibold text-white">
+                            Descontar y pagar neto
+                          </span>
+                          Baja la deuda y abre el pago del neto restante.
+                        </button>
+                      </div>
+                    )}
+
+                  {resumenSeleccionado.pendientes === 0 && (
+                    <p className="mt-3 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+                      Primero selecciona una o varias comisiones pendientes
+                      arriba. Luego podrás descontar la deuda del empleado
+                      contra esa liquidación.
+                    </p>
+                  )}
+
+                  {aplicarDescuentoDeuda &&
+                    resumenSeleccionado.pendientes > 0 && (
+                      <div className="mt-3 grid gap-3 md:grid-cols-4">
+                        <div>
+                          <label className="mb-2 block text-xs text-white/45">
+                            Monto a descontar USD
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            max={Math.min(
+                              deudaEmpleadoUsd,
+                              resumenSeleccionado.profesionalUsd,
+                            )}
+                            value={descuentoDeudaUsdInput}
+                            onChange={(e) =>
+                              setDescuentoDeudaUsdInput(e.target.value)
+                            }
+                            className={inputCls()}
+                            placeholder={`Máx. ${formatMoney(Math.min(deudaEmpleadoUsd, resumenSeleccionado.profesionalUsd))}`}
+                          />
+                        </div>
+
+                        <Card className="border-white/10 bg-white/[0.03] p-3">
+                          <p className="text-xs text-white/45">
+                            Descuento aplicado
+                          </p>
+                          <p className="mt-1 font-semibold text-rose-300">
+                            {formatMoney(descuentoDeudaUsd)}
+                          </p>
+                          {monedaPago === "BS" && (
+                            <p className="text-xs text-white/35">
+                              {formatBs(descuentoDeudaEnMonedaPago)}
+                            </p>
+                          )}
+                        </Card>
+
+                        <Card className="border-emerald-400/20 bg-emerald-400/5 p-3">
+                          <p className="text-xs text-white/45">Neto a pagar</p>
+                          <p className="mt-1 font-semibold text-emerald-300">
+                            {formatMontoByMoneda(montoNetoAPagar, monedaPago)}
+                          </p>
+                        </Card>
+
+                        <Card className="border-cyan-400/20 bg-cyan-400/5 p-3">
+                          <p className="text-xs text-white/45">
+                            Deuda restante
+                          </p>
+                          <p className="mt-1 font-semibold text-cyan-300">
+                            {formatMoney(
+                              Math.max(deudaEmpleadoUsd - descuentoDeudaUsd, 0),
+                            )}
+                          </p>
+                        </Card>
+                      </div>
+                    )}
+                </Card>
+              )}
+
+              {soloDescontarDeudaActivo &&
+                resumenSeleccionado.pendientes > 0 && (
+                  <Card className="mt-3 border-rose-400/20 bg-rose-400/[0.06] p-3">
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <div>
+                        <p className="text-xs text-white/45">
+                          Se descontará desde
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-white">
+                          Comisión seleccionada en {monedaPago}
+                        </p>
+                        <p className="mt-1 text-xs text-white/40">
+                          Cambia USD/Bs arriba en el selector de moneda.
+                        </p>
+                      </div>
                       <div>
                         <label className="mb-2 block text-xs text-white/45">
-                          Método #{index + 1}
+                          Destino interno
                         </label>
                         <select
-                          value={split.metodoPagoId}
-                          onChange={(e) => updateSplit(split.id, { metodoPagoId: e.target.value })}
-                          className={inputCls()}
-                        >
-                          <option value="" className="bg-[#11131a] text-white">
-                            Seleccionar método
-                          </option>
-                          {metodosPago.map((m) => {
-                            const saldoMetodo = getMetodoSaldo(m)
-                            const monedaM = getMetodoMoneda(m)
-
-                            return (
-                              <option key={m.id} value={m.id} className="bg-[#11131a] text-white">
-                                {m.nombre}
-                                {m.cartera?.nombre ? ` · ${m.cartera.nombre}` : ''}
-                                {` · ${monedaM}`}
-                                {saldoMetodo > 0
-                                  ? ` · Saldo ${formatMontoByMoneda(saldoMetodo, monedaM)}`
-                                  : ''}
-                              </option>
+                          value={destinoDescuentoDeuda}
+                          onChange={(e) =>
+                            setDestinoDescuentoDeuda(
+                              e.target.value as "ingreso_rpm" | "ajuste_nomina",
                             )
-                          })}
-                        </select>
-
-                        {metodo && (
-                          <div className="mt-2 space-y-1 text-xs text-white/40">
-                            <p>
-                              Cartera: {metodo.cartera?.nombre || '—'} · Moneda método: {monedaMetodo} ·
-                              Saldo: {formatMontoByMoneda(saldo, monedaMetodo)}
-                            </p>
-
-                            {split.requiereConversion && (
-                              <p className="text-amber-300">
-                                Para cubrir {formatMontoByMoneda(split.montoLiquidacion, monedaPago)} en{' '}
-                                {monedaPago}, se descontarán{' '}
-                                {montoContraMetodo !== null
-                                  ? formatMontoByMoneda(montoContraMetodo, monedaMetodo)
-                                  : '—'}{' '}
-                                de esta cartera.
-                              </p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      <div>
-                        <label className="mb-2 block text-xs text-white/45">
-                          Monto en {monedaPago}
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={split.monto}
-                          onChange={(e) => updateSplit(split.id, { monto: e.target.value })}
+                          }
                           className={inputCls()}
-                          placeholder="0.00"
-                        />
-                      </div>
-
-                      <div className="flex items-end">
-                        <button
-                          type="button"
-                          onClick={() => fillRemainingOnSplit(split.id)}
-                          className="h-[44px] rounded-xl border border-white/10 bg-white/[0.03] px-3 text-xs font-medium text-white/70 hover:bg-white/[0.06]"
                         >
-                          Completar
-                        </button>
+                          <option
+                            value="ingreso_rpm"
+                            className="bg-[#11131a] text-white"
+                          >
+                            Ingreso RPM / retención interna
+                          </option>
+                          <option
+                            value="ajuste_nomina"
+                            className="bg-[#11131a] text-white"
+                          >
+                            Ajuste de nómina
+                          </option>
+                        </select>
                       </div>
-
-                      <div className="flex items-end">
-                        <button
-                          type="button"
-                          onClick={() => removeSplit(split.id)}
-                          className="h-[44px] rounded-xl border border-rose-400/20 bg-rose-400/10 px-3 text-xs font-medium text-rose-300 hover:bg-rose-400/15"
-                        >
-                          Quitar
-                        </button>
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                        <p className="text-xs text-white/45">
+                          Métodos desactivados
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-rose-200">
+                          No se paga comisión en este paso
+                        </p>
                       </div>
                     </div>
-                  )
-                })}
-              </div>
+                  </Card>
+                )}
 
-              <button
-                type="button"
-                onClick={addSplit}
-                className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-white/70 transition hover:bg-white/[0.06]"
-              >
-                + Agregar otro método
-              </button>
+              {!soloDescontarDeudaActivo && (
+                <>
+                  <div className="mt-3 space-y-2">
+                    {splitsConMetodo.map((split, index) => {
+                      const metodo = split.metodo;
+                      const saldo = split.saldo;
+                      const monedaMetodo = split.metodoMoneda;
+                      const montoContraMetodo = split.requiereConversion
+                        ? split.montoDescontar
+                        : split.montoLiquidacion;
+
+                      return (
+                        <div
+                          key={split.id}
+                          className="grid gap-2 rounded-2xl border border-white/10 bg-white/[0.02] p-3 md:grid-cols-[1.3fr_0.8fr_auto_auto]"
+                        >
+                          <div>
+                            <label className="mb-2 block text-xs text-white/45">
+                              Método #{index + 1}
+                            </label>
+                            <select
+                              value={split.metodoPagoId}
+                              onChange={(e) =>
+                                updateSplit(split.id, {
+                                  metodoPagoId: e.target.value,
+                                })
+                              }
+                              className={inputCls()}
+                            >
+                              <option
+                                value=""
+                                className="bg-[#11131a] text-white"
+                              >
+                                Seleccionar método
+                              </option>
+                              {metodosPago.map((m) => {
+                                const saldoMetodo = getMetodoSaldo(m);
+                                const monedaM = getMetodoMoneda(m);
+
+                                return (
+                                  <option
+                                    key={m.id}
+                                    value={m.id}
+                                    className="bg-[#11131a] text-white"
+                                  >
+                                    {m.nombre}
+                                    {m.cartera?.nombre
+                                      ? ` · ${m.cartera.nombre}`
+                                      : ""}
+                                    {` · ${monedaM}`}
+                                    {saldoMetodo > 0
+                                      ? ` · Saldo ${formatMontoByMoneda(saldoMetodo, monedaM)}`
+                                      : ""}
+                                  </option>
+                                );
+                              })}
+                            </select>
+
+                            {metodo && (
+                              <div className="mt-2 space-y-1 text-xs text-white/40">
+                                <p>
+                                  Cartera: {metodo.cartera?.nombre || "—"} ·
+                                  Moneda método: {monedaMetodo} · Saldo:{" "}
+                                  {formatMontoByMoneda(saldo, monedaMetodo)}
+                                </p>
+
+                                {split.requiereConversion && (
+                                  <p className="text-amber-300">
+                                    Para cubrir{" "}
+                                    {formatMontoByMoneda(
+                                      split.montoLiquidacion,
+                                      monedaPago,
+                                    )}{" "}
+                                    en {monedaPago}, se descontarán{" "}
+                                    {montoContraMetodo !== null
+                                      ? formatMontoByMoneda(
+                                          montoContraMetodo,
+                                          monedaMetodo,
+                                        )
+                                      : "—"}{" "}
+                                    de esta cartera.
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          <div>
+                            <label className="mb-2 block text-xs text-white/45">
+                              Monto en {monedaPago}
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={split.monto}
+                              onChange={(e) =>
+                                updateSplit(split.id, { monto: e.target.value })
+                              }
+                              className={inputCls()}
+                              placeholder="0.00"
+                            />
+                          </div>
+
+                          <div className="flex items-end">
+                            <button
+                              type="button"
+                              onClick={() => fillRemainingOnSplit(split.id)}
+                              className="h-[44px] rounded-xl border border-white/10 bg-white/[0.03] px-3 text-xs font-medium text-white/70 hover:bg-white/[0.06]"
+                            >
+                              Completar
+                            </button>
+                          </div>
+
+                          <div className="flex items-end">
+                            <button
+                              type="button"
+                              onClick={() => removeSplit(split.id)}
+                              className="h-[44px] rounded-xl border border-rose-400/20 bg-rose-400/10 px-3 text-xs font-medium text-rose-300 hover:bg-rose-400/15"
+                            >
+                              Quitar
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={addSplit}
+                    className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-white/70 transition hover:bg-white/[0.06]"
+                  >
+                    + Agregar otro método
+                  </button>
+                </>
+              )}
 
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <div>
@@ -2229,7 +3038,9 @@ export default function VerPersonalPage() {
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-white/75">Notas</label>
+                  <label className="mb-2 block text-sm font-medium text-white/75">
+                    Notas
+                  </label>
                   <input
                     type="text"
                     value={notasLiquidacion}
@@ -2240,23 +3051,41 @@ export default function VerPersonalPage() {
                 </div>
               </div>
 
-              {resumenSeleccionado.pendientes > 0 && (
-                <button
-                  type="button"
-                  onClick={liquidarSaldoDisponible}
-                  disabled={facturando}
-                  className="mt-3 w-full rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-400/20 disabled:opacity-60"
-                >
-                  {facturando
-                    ? 'Liquidando saldo...'
-                    : `✓ Liquidar ${resumenSeleccionado.pendientes} comisión(es) en ${monedaPago}`}
-                </button>
-              )}
+              {resumenSeleccionado.pendientes > 0 &&
+                aplicarDescuentoDeuda &&
+                modoDescuentoDeuda === "solo_descuento" && (
+                  <button
+                    type="button"
+                    onClick={descontarDeudaSinPagarComision}
+                    disabled={facturando || descuentoDeudaUsd <= 0}
+                    className="mt-3 w-full rounded-2xl border border-rose-400/30 bg-rose-400/10 px-4 py-2.5 text-sm font-semibold text-rose-300 transition hover:bg-rose-400/20 disabled:opacity-60"
+                  >
+                    {facturando
+                      ? "Descontando deuda..."
+                      : `✓ Solo descontar ${formatMoney(descuentoDeudaUsd)} de deuda · no pagar comisión`}
+                  </button>
+                )}
+
+              {resumenSeleccionado.pendientes > 0 &&
+                (!aplicarDescuentoDeuda ||
+                  modoDescuentoDeuda === "descuento_y_pagar") && (
+                  <button
+                    type="button"
+                    onClick={liquidarSaldoDisponible}
+                    disabled={facturando}
+                    className="mt-3 w-full rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-2.5 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-400/20 disabled:opacity-60"
+                  >
+                    {facturando
+                      ? "Liquidando saldo..."
+                      : `✓ Liquidar ${resumenSeleccionado.pendientes} comisión(es) · neto ${formatMontoByMoneda(montoNetoAPagar, monedaPago)}`}
+                  </button>
+                )}
 
               {comisionesLiquidadaHoyQuincena.length > 0 && (
                 <p className="mt-3 text-xs text-white/35">
-                  ✓ {comisionesLiquidadaHoyQuincena.length} registro(s) ya liquidados dentro de esta
-                  quincena calendario, pero puedes seguir liquidando nuevos ingresos.
+                  ✓ {comisionesLiquidadaHoyQuincena.length} registro(s) ya
+                  liquidados dentro de esta quincena calendario, pero puedes
+                  seguir liquidando nuevos ingresos.
                 </p>
               )}
             </Card>
@@ -2268,22 +3097,26 @@ export default function VerPersonalPage() {
           >
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <Card className="p-3">
-                <p className="text-xs text-white/45">Pendiente dentro de quincena</p>
+                <p className="text-xs text-white/45">
+                  Pendiente dentro de quincena
+                </p>
                 <p className="mt-1 font-semibold text-white">
                   {
                     comisiones.filter(
                       (c) =>
                         isPendienteEstado(c.estado) &&
                         c.fecha >= quincenaActual.inicio &&
-                        c.fecha <= quincenaActual.fin
+                        c.fecha <= quincenaActual.fin,
                     ).length
-                  }{' '}
+                  }{" "}
                   registros
                 </p>
               </Card>
 
               <Card className="p-3">
-                <p className="text-xs text-white/45">Liquidado dentro de quincena</p>
+                <p className="text-xs text-white/45">
+                  Liquidado dentro de quincena
+                </p>
                 <p className="mt-1 font-semibold text-white">
                   {comisionesLiquidadaHoyQuincena.length} registros
                 </p>
@@ -2292,14 +3125,18 @@ export default function VerPersonalPage() {
               <Card className="p-3">
                 <p className="text-xs text-white/45">Rango</p>
                 <p className="mt-1 font-semibold text-white">
-                  {formatDate(quincenaActual.inicio)} – {formatDate(quincenaActual.fin)}
+                  {formatDate(quincenaActual.inicio)} –{" "}
+                  {formatDate(quincenaActual.fin)}
                 </p>
               </Card>
             </div>
           </Section>
 
           {liquidaciones.length > 0 && (
-            <Section title="Historial de liquidaciones" description="Pagos realizados al profesional.">
+            <Section
+              title="Historial de liquidaciones"
+              description="Pagos realizados al profesional."
+            >
               <div className="space-y-3">
                 {liquidaciones.map((liq) => (
                   <div
@@ -2309,13 +3146,15 @@ export default function VerPersonalPage() {
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                       <div>
                         <p className="font-medium text-white">
-                          {formatDate(liq.fecha_inicio)} – {formatDate(liq.fecha_fin)}
+                          {formatDate(liq.fecha_inicio)} –{" "}
+                          {formatDate(liq.fecha_fin)}
                         </p>
                         <p className="text-xs text-white/45">
-                          {liq.cantidad_citas} registros · Base USD: {formatMoney(liq.total_base)}
+                          {liq.cantidad_citas} registros · Base USD:{" "}
+                          {formatMoney(liq.total_base)}
                         </p>
                         <p className="mt-1 text-xs text-white/35">
-                          Moneda: {liq.moneda_pago || '—'}
+                          Moneda: {liq.moneda_pago || "—"}
                         </p>
                       </div>
 
@@ -2323,7 +3162,7 @@ export default function VerPersonalPage() {
                         <div>
                           <p className="text-xs text-white/35">Liquidado</p>
                           <p className="font-semibold text-emerald-400">
-                            {liq.moneda_pago === 'BS'
+                            {liq.moneda_pago === "BS"
                               ? formatBs(liq.monto_pago)
                               : formatMoney(liq.monto_pago)}
                           </p>
@@ -2341,14 +3180,18 @@ export default function VerPersonalPage() {
                           <span
                             className={`inline-flex rounded-xl border px-3 py-1.5 text-xs font-medium ${
                               isFacturadaEstado(liq.estado)
-                                ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
-                                : 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+                                ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
+                                : "border-amber-400/20 bg-amber-400/10 text-amber-300"
                             }`}
                           >
-                            {isFacturadaEstado(liq.estado) ? '✓ Liquidado' : liq.estado}
+                            {isFacturadaEstado(liq.estado)
+                              ? "✓ Liquidado"
+                              : liq.estado}
                           </span>
                           <p className="mt-1 text-xs text-white/35">
-                            {liq.pagado_at ? `Fecha: ${new Date(liq.pagado_at).toLocaleString()}` : '—'}
+                            {liq.pagado_at
+                              ? `Fecha: ${new Date(liq.pagado_at).toLocaleString()}`
+                              : "—"}
                           </p>
                         </div>
                       </div>
@@ -2368,5 +3211,5 @@ export default function VerPersonalPage() {
         Volver al listado
       </Link>
     </div>
-  )
+  );
 }
