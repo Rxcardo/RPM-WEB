@@ -626,14 +626,25 @@ function IngresosPageContent() {
   const montoAbonoDeudaNumero = useMemo(() => r2(Number(montoAbonoDeuda || 0)), [montoAbonoDeuda])
   const montoManualUSDNumero = useMemo(() => r2(Number(montoManualUSD || 0)), [montoManualUSD])
 
+  const esRecargaSaldoCredito = tipoIngreso === 'saldo' && destinoSaldo === 'credito'
+
   // Monto real que debe cobrar el bloque de pago rápido.
   // En productos usa el total del producto. En abono a deuda usa el monto a abonar.
-  // En recarga de saldo usa un monto manual, porque no existe producto que defina totalUSD.
+  // En recarga de saldo libre:
+  // - si cobra en USD, el operador escribe el monto USD.
+  // - si cobra en Bs, el operador escribe el monto REAL en bolívares y aquí se convierte a USD.
   const montoObjetivoPagoRapidoUsd = useMemo(() => {
     if (tipoIngreso === 'saldo' && destinoSaldo === 'deuda') return montoAbonoDeudaNumero
-    if (tipoIngreso === 'saldo') return montoManualUSDNumero
+    if (esRecargaSaldoCredito) {
+      if (tipoPago === 'unico' && monedaPagoUnico === 'BS') {
+        const bsReal = Number(montoPagoUnicoBs || 0)
+        if (!tasaPagoUnico || tasaPagoUnico <= 0 || bsReal <= 0) return 0
+        return r2(bsReal / tasaPagoUnico)
+      }
+      return montoManualUSDNumero
+    }
     return totalUSD
-  }, [tipoIngreso, destinoSaldo, montoAbonoDeudaNumero, montoManualUSDNumero, totalUSD])
+  }, [tipoIngreso, destinoSaldo, esRecargaSaldoCredito, tipoPago, monedaPagoUnico, montoAbonoDeudaNumero, montoManualUSDNumero, montoPagoUnicoBs, tasaPagoUnico, totalUSD])
 
   const creditoDisponibleUsd = useMemo(() => r2(Number(estadoCuentaCliente?.credito_disponible_usd || 0)), [estadoCuentaCliente])
 
@@ -1021,15 +1032,18 @@ function IngresosPageContent() {
   function validarPagoRapido(): string | null {
     if (tipoPago === 'unico') {
       if (!metodoPagoUnicoId) return 'Selecciona el método de pago.'
-      if (!montoObjetivoPagoRapidoUsd || montoObjetivoPagoRapidoUsd <= 0) {
-        return tipoIngreso === 'saldo' && destinoSaldo === 'credito'
-          ? 'Indica el monto a recargar. Debe ser mayor a 0.'
-          : 'El monto del pago debe ser mayor a 0.'
-      }
       if (monedaPagoUnico === 'BS' && (!tasaPagoUnico || tasaPagoUnico <= 0))
         return 'Selecciona una tasa válida para el pago en bolívares.'
       if (monedaPagoUnico === 'BS' && Number(montoPagoUnicoBs || 0) <= 0)
         return 'El monto en bolívares debe ser mayor a 0.'
+      if (monedaPagoUnico === 'USD' && (!montoObjetivoPagoRapidoUsd || montoObjetivoPagoRapidoUsd <= 0)) {
+        return esRecargaSaldoCredito
+          ? 'Indica el monto a recargar en USD. Debe ser mayor a 0.'
+          : 'El monto del pago debe ser mayor a 0.'
+      }
+      if (monedaPagoUnico === 'BS' && totalPagoUnicoRealUsd <= 0) {
+        return 'No se pudo convertir el monto en bolívares a USD. Revisa la tasa y el monto pagado.'
+      }
       return null
     }
     if (!resumenPagosMixtoRapido.p1Valido) return 'Completa el Pago 1: método, monto y tasa si aplica.'
@@ -2132,22 +2146,31 @@ ${notas.trim()}` : ''}`,
                             ))}
                           </select>
                         </div>
-                        {tipoIngreso === 'saldo' && destinoSaldo !== 'deuda' && (
+                        {tipoIngreso === 'saldo' && destinoSaldo !== 'deuda' && monedaPagoUnico === 'USD' && (
                           <div>
-                            <label className={labelCls}>Monto a recargar (USD)</label>
+                            <label className={labelCls}>Monto recibido en USD</label>
                             <input type="number" min={0} step="0.01"
                               value={montoManualUSD}
                               onChange={(e) => setMontoManualUSD(e.target.value)}
-                              className={inputCls} placeholder="Ingresa el monto..." />
-                            <p className="mt-1 text-xs text-white/40">Este monto se usará para validar el pago único y calcular Bs si aplica.</p>
+                              className={inputCls} placeholder="Ej: 50.00" />
+                            <p className="mt-1 text-xs text-white/40">Se guardará como saldo a favor por este monto en dólares.</p>
                           </div>
                         )}
                         {monedaPagoUnico === 'BS' && (
-                          <PagoBsSelector fecha={fecha}
-                            montoUsd={montoObjetivoPagoRapidoUsd}
-                            montoBs={montoPagoUnicoBs}
-                            onChangeTasa={setTasaPagoUnico}
-                            onChangeMontoBs={setMontoPagoUnicoBs} />
+                          <div className="space-y-2">
+                            <PagoBsSelector fecha={fecha}
+                              montoUsd={montoObjetivoPagoRapidoUsd}
+                              montoBs={montoPagoUnicoBs}
+                              onChangeTasa={setTasaPagoUnico}
+                              onChangeMontoBs={setMontoPagoUnicoBs} />
+                            {esRecargaSaldoCredito && montoPagoUnicoBs && tasaPagoUnico && tasaPagoUnico > 0 && (
+                              <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.06] p-3">
+                                <p className="text-xs text-emerald-200">
+                                  Recarga en Bs: se registrarán {formatearMoneda(Number(montoPagoUnicoBs || 0), 'BS')} como pago real y {formatearMoneda(totalPagoUnicoRealUsd, 'USD')} como saldo equivalente.
+                                </p>
+                              </div>
+                            )}
+                          </div>
                         )}
                         <div>
                           <label className={labelCls}>Referencia</label>

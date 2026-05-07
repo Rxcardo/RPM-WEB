@@ -1,6 +1,8 @@
 import type { ReactNode } from "react"
+
 import AdminSidebar from "@/components/layout/AdminSidebar"
 import AdminHeader from "@/components/layout/AdminHeader"
+import FloatingCurrencyCalculator from "@/components/FloatingCurrencyCalculator"
 
 export default function AdminLayout({
   children,
@@ -30,6 +32,9 @@ export default function AdminLayout({
           </div>
         </main>
       </div>
+
+      {/* CALCULADORA FLOTANTE GLOBAL */}
+      <FloatingCurrencyCalculator />
     </div>
   )
 }
