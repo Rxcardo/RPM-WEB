@@ -4,6 +4,8 @@ export const dynamic = "force-dynamic";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/supabase/client";
 import Card from "@/components/ui/Card";
 import Section from "@/components/ui/Section";
@@ -81,6 +83,17 @@ type ComisionDetalle = {
   descuento_deuda_bs?: number | null;
   monto_profesional_neto_usd?: number | null;
   monto_profesional_neto_bs?: number | null;
+  descuento_deuda_registros?: Array<{
+    id?: string;
+    estado?: string | null;
+    modo?: string | null;
+    liquidacion_id?: string | null;
+    pago_empleado_id?: string | null;
+    created_at?: string | null;
+    notas?: string | null;
+    monto_descuento_usd?: number | null;
+    monto_descuento_bs?: number | null;
+  }>;
 };
 
 type Liquidacion = {
@@ -164,6 +177,7 @@ type TipoCambioRow = {
 
 type Moneda = "USD" | "BS";
 type Tab = "info" | "agenda" | "comisiones";
+type PeriodoComision = "pendientes" | "quincena" | "mes" | "liquidacion" | "personalizado";
 
 function getTodayLocal() {
   const now = new Date();
@@ -214,6 +228,14 @@ function formatMontoByMoneda(v: number | null | undefined, moneda: Moneda) {
   return moneda === "USD" ? formatMoney(v) : formatBs(v);
 }
 
+function monedaLabel(moneda: Moneda) {
+  return moneda === "USD" ? "USD" : "bolívares";
+}
+
+function monedaAbbr(moneda: Moneda) {
+  return moneda === "USD" ? "USD" : "Bs";
+}
+
 function formatDate(v: string | null) {
   if (!v) return "—";
   try {
@@ -235,6 +257,102 @@ function formatDateLong(v: string | null) {
     return v;
   }
 }
+
+function shortDate(value: string | null | undefined) {
+  if (!value) return "—";
+  try {
+    return new Date(`${String(value).slice(0, 10)}T12:00:00`).toLocaleDateString("es-ES", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    });
+  } catch {
+    return String(value);
+  }
+}
+
+function sanitizeFilePart(value: string) {
+  return String(value || "")
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "")
+    .replace(/\s+/g, "_")
+    .slice(0, 80);
+}
+
+function firstDayOfCurrentMonthISO() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function lastDayOfCurrentMonthISO() {
+  const now = new Date();
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+}
+
+async function fetchImageAsBase64(src: string) {
+  const res = await fetch(src);
+  const blob = await res.blob();
+
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function drawCommissionHeader(args: {
+  doc: jsPDF;
+  logoSrc: string;
+  numero: string;
+  empleado: Empleado;
+  fechaPago: string;
+}) {
+  const { doc, logoSrc, numero, empleado, fechaPago } = args;
+
+  try {
+    const base64 = await fetchImageAsBase64(logoSrc);
+    doc.addImage(base64, "PNG", 18, 10, 34, 34);
+  } catch {}
+
+  doc.setDrawColor(40);
+  doc.setLineWidth(0.25);
+  doc.rect(105, 13, 82, 28);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(75);
+  doc.text("Número:", 113, 22);
+  doc.text("Fecha pago:", 151, 22);
+  doc.text("Nombre:", 113, 31);
+  doc.text("Rol:", 113, 38);
+
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(20);
+  doc.text(numero, 128, 22);
+  doc.text(shortDate(fechaPago), 171, 22, { align: "center" });
+  doc.text(String(empleado.nombre || "—").toUpperCase(), 128, 31);
+  doc.text(String(empleado.rol || "—").toUpperCase(), 128, 38);
+
+  doc.setDrawColor(30);
+  doc.setLineWidth(0.35);
+  doc.line(15, 52, 195, 52);
+}
+
+function drawCommissionFooter(doc: jsPDF) {
+  const pageHeight = doc.internal.pageSize.getHeight();
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(6.5);
+  doc.setTextColor(55);
+  doc.text(
+    "Naguanagua, complejo Bicentenario Asociación de Tenis de Carabobo ATEC, VALENCIA - ESTADO CARABOBO - Teléfonos: 0412-2405745",
+    105,
+    pageHeight - 8,
+    { align: "center" },
+  );
+}
+
 
 function estadoBadge(e: string) {
   switch ((e || "").toLowerCase()) {
@@ -382,6 +500,29 @@ function getComisionMontoByMoneda(c: ComisionDetalle, moneda: Moneda) {
 
   return r2(Math.max(bruto - descuento, 0));
 }
+function getComisionPagoEstadoPDF(c: ComisionDetalle, liquidacionId?: string | null, pagoEmpleadoId?: string | null) {
+  const descuentoUsd = getComisionDescuentoDeudaByMoneda(c, "USD");
+  const enlazadaLiquidacion =
+    (!!liquidacionId && c.liquidacion_id === liquidacionId) ||
+    (!!pagoEmpleadoId && c.pago_empleado_id === pagoEmpleadoId);
+
+  const descuentoLigado = (c.descuento_deuda_registros || []).some((d) =>
+    (!!liquidacionId && d?.liquidacion_id === liquidacionId) ||
+    (!!pagoEmpleadoId && d?.pago_empleado_id === pagoEmpleadoId),
+  );
+
+  if (isFacturadaEstado(c.estado) || enlazadaLiquidacion) return "LIQUIDADO";
+  if (descuentoUsd > 0 || descuentoLigado) return "PENDIENTE NETO";
+  return normalizeEstado(c.estado).toUpperCase() || "PENDIENTE";
+}
+
+function comisionTieneDescuentoLigadoALiquidacion(c: ComisionDetalle, liq: Liquidacion | null) {
+  if (!liq) return false;
+  return (c.descuento_deuda_registros || []).some((d) =>
+    (!!liq.id && d?.liquidacion_id === liq.id) ||
+    (!!liq.pago_empleado_id && d?.pago_empleado_id === liq.pago_empleado_id),
+  );
+}
 
 function convertirMonto(
   monto: number,
@@ -424,7 +565,7 @@ function normalizeComisionDetalle(
     citasMap?: Map<string, any>;
     serviciosMap?: Map<string, any>;
     clientesPlanesMap?: Map<string, any>;
-    descuentosMap?: Map<string, { usd: number; bs: number }>;
+    descuentosMap?: Map<string, { usd: number; bs: number; registros: any[] }>;
   },
 ): ComisionDetalle {
   const get = (v: any) => {
@@ -501,6 +642,7 @@ function normalizeComisionDetalle(
     cita_hora_inicio: cita?.hora_inicio ?? null,
     descuento_deuda_usd: r2(Number(descuentoAplicado?.usd || 0)),
     descuento_deuda_bs: r2(Number(descuentoAplicado?.bs || 0)),
+    descuento_deuda_registros: descuentoAplicado?.registros || [],
     monto_profesional_neto_usd: r2(
       Math.max(
         Number(row?.monto_profesional_usd ?? row?.profesional ?? 0) -
@@ -635,6 +777,11 @@ export default function VerPersonalPage() {
   const [agendaClienteFiltro, setAgendaClienteFiltro] = useState("todos");
 
   const [monedaPago, setMonedaPago] = useState<Moneda>("USD");
+  const [fechaPagoComision, setFechaPagoComision] = useState("");
+  const [periodoComision, setPeriodoComision] = useState<PeriodoComision>("pendientes");
+  const [fechaInicioComision, setFechaInicioComision] = useState("");
+  const [fechaFinComision, setFechaFinComision] = useState("");
+  const [liquidacionImprimirId, setLiquidacionImprimirId] = useState("");
   const [referencia, setReferencia] = useState("");
   const [notasLiquidacion, setNotasLiquidacion] = useState("");
   const [tasaBCV, setTasaBCV] = useState<number | null>(null);
@@ -664,6 +811,14 @@ export default function VerPersonalPage() {
       mounted ? getCurrentQuincenaRange() : { label: "", inicio: "", fin: "" },
     [mounted],
   );
+
+
+  useEffect(() => {
+    if (!mounted) return;
+    setFechaPagoComision((prev) => prev || getTodayLocal());
+    setFechaInicioComision((prev) => prev || quincenaActual.inicio);
+    setFechaFinComision((prev) => prev || quincenaActual.fin);
+  }, [mounted, quincenaActual.inicio, quincenaActual.fin]);
 
   useEffect(() => {
     if (!mounted || !id) return;
@@ -709,14 +864,16 @@ export default function VerPersonalPage() {
     let serviciosMap = new Map<string, any>();
     let clientesPlanesMap = new Map<string, any>();
     let clientesMap = new Map<string, any>();
-    let descuentosMap = new Map<string, { usd: number; bs: number }>();
+    let descuentosMap = new Map<string, { usd: number; bs: number; registros: any[] }>();
 
     if (comisionIds.length > 0) {
+      // IMPORTANTE: usamos select("*") para no depender de una lista rígida de columnas.
+      // Así quedan disponibles liquidacion_id / pago_empleado_id / created_at / modo si existen,
+      // y el PDF puede conectar descuentos de deuda con liquidaciones históricas.
       const { data, error: descuentosError } = await supabase
         .from("comisiones_descuentos_deuda")
-        .select("comision_id, monto_descuento_usd, monto_descuento_bs, estado")
-        .in("comision_id", comisionIds)
-        .eq("estado", "aplicado");
+        .select("*")
+        .in("comision_id", comisionIds);
 
       if (descuentosError) {
         console.error("Error cargando descuentos de deuda:", descuentosError);
@@ -725,10 +882,16 @@ export default function VerPersonalPage() {
       for (const d of (data || []) as any[]) {
         const key = String(d.comision_id || "");
         if (!key) continue;
-        const prev = descuentosMap.get(key) || { usd: 0, bs: 0 };
+
+        const estado = normalizeEstado(d.estado);
+        const esDescuentoValido = !["anulado", "anulada", "cancelado", "cancelada", "revertido", "revertida"].includes(estado);
+        if (!esDescuentoValido) continue;
+
+        const prev = descuentosMap.get(key) || { usd: 0, bs: 0, registros: [] };
         descuentosMap.set(key, {
           usd: r2(prev.usd + Number(d.monto_descuento_usd || 0)),
           bs: r2(prev.bs + Number(d.monto_descuento_bs || 0)),
+          registros: [...prev.registros, d],
         });
       }
     }
@@ -1235,6 +1398,20 @@ export default function VerPersonalPage() {
     return r2(Math.max(montoFacturar - descuentoDeudaEnMonedaPago, 0));
   }, [montoFacturar, descuentoDeudaEnMonedaPago]);
 
+  const resumenSeleccionadoEquivalente = useMemo(() => {
+    if (monedaPago === "USD") {
+      return { principal: resumenSeleccionado.profesionalUsd, referencia: resumenSeleccionado.profesionalBs };
+    }
+    return { principal: resumenSeleccionado.profesionalBs, referencia: resumenSeleccionado.profesionalUsd };
+  }, [monedaPago, resumenSeleccionado]);
+
+  const montoNetoAPagarEquivalente = useMemo(() => {
+    if (monedaPago === "USD") {
+      return { usd: montoNetoAPagar, bs: tasaBCV && tasaBCV > 0 ? r2(montoNetoAPagar * tasaBCV) : resumenSeleccionado.profesionalBs };
+    }
+    return { usd: tasaBCV && tasaBCV > 0 ? r2(montoNetoAPagar / tasaBCV) : resumenSeleccionado.profesionalUsd, bs: montoNetoAPagar };
+  }, [monedaPago, montoNetoAPagar, tasaBCV, resumenSeleccionado]);
+
   const restantePorAsignar = useMemo(
     () => r2(montoNetoAPagar - totalSplits),
     [montoNetoAPagar, totalSplits],
@@ -1303,6 +1480,299 @@ export default function VerPersonalPage() {
       return;
     }
     setSelectedComisionIds(comisionesPendientesMoneda.map((c) => c.id));
+  }
+
+
+  const liquidacionImprimir = useMemo(() => {
+    if (!liquidacionImprimirId) return null;
+    return liquidaciones.find((liq) => liq.id === liquidacionImprimirId) || null;
+  }, [liquidaciones, liquidacionImprimirId]);
+
+  function aplicarPeriodoComision(value: PeriodoComision) {
+    setPeriodoComision(value);
+
+    if (value !== "liquidacion") {
+      setLiquidacionImprimirId("");
+    }
+
+    // MODO PRINCIPAL: imprime exactamente las comisiones pendientes visibles
+    // en las tarjetas de esta pantalla, sin obligar a escoger rango de fecha.
+    if (value === "pendientes") {
+      setFechaInicioComision("");
+      setFechaFinComision("");
+      return;
+    }
+
+    if (value === "quincena") {
+      setFechaInicioComision(quincenaActual.inicio);
+      setFechaFinComision(quincenaActual.fin);
+      return;
+    }
+
+    if (value === "mes") {
+      setFechaInicioComision(firstDayOfCurrentMonthISO());
+      setFechaFinComision(lastDayOfCurrentMonthISO());
+      return;
+    }
+  }
+
+  function seleccionarLiquidacionParaImprimir(liquidacionId: string) {
+    setLiquidacionImprimirId(liquidacionId);
+    setPeriodoComision(liquidacionId ? "liquidacion" : "pendientes");
+
+    const liq = liquidaciones.find((item) => item.id === liquidacionId);
+    if (!liq) return;
+
+    setFechaInicioComision(liq.fecha_inicio || "");
+    setFechaFinComision(liq.fecha_fin || "");
+    setFechaPagoComision((liq.pagado_at || "").slice(0, 10) || getTodayLocal());
+    setReferencia(liq.referencia || "");
+    if (liq.moneda_pago === "USD" || liq.moneda_pago === "BS") {
+      setMonedaPago(liq.moneda_pago as Moneda);
+    }
+  }
+
+  const comisionesParaImprimir = useMemo(() => {
+    if (liquidacionImprimirId) {
+      const liq = liquidaciones.find((item) => item.id === liquidacionImprimirId) || null;
+
+      return comisiones
+        .filter((c) => {
+          const perteneceALiquidacion =
+            c.liquidacion_id === liquidacionImprimirId ||
+            (!!liq?.pago_empleado_id && c.pago_empleado_id === liq.pago_empleado_id);
+
+          // MODO LIQUIDACIÓN HISTÓRICA:
+          // Aquí SOLO se imprime lo que realmente quedó liquidado/pagado en esa liquidación.
+          // No mezclamos comisiones pendientes del mismo rango, aunque tengan deuda descontada.
+          return perteneceALiquidacion && isFacturadaEstado(c.estado);
+        })
+        .sort((a, b) => {
+          const fa = `${a.cita_fecha || a.fecha} ${a.cita_hora_inicio || ""}`;
+          const fb = `${b.cita_fecha || b.fecha} ${b.cita_hora_inicio || ""}`;
+          return fa.localeCompare(fb);
+        });
+    }
+
+    const base = selectedComisionIds.length > 0 ? comisionesSeleccionadas : comisionesPendientesMoneda;
+
+    return base
+      .filter((c) => {
+        const fecha = c.cita_fecha || c.fecha;
+        if (!isPendienteEstado(c.estado)) return false;
+
+        // Si el usuario elige "Pendientes visibles", NO se filtra por fecha.
+        // Esto evita que una comisión vieja pendiente, como la del 2026-04-20,
+        // desaparezca solo porque el rango actual no la incluye.
+        if (periodoComision === "pendientes") return true;
+
+        if (fechaInicioComision && fecha < fechaInicioComision) return false;
+        if (fechaFinComision && fecha > fechaFinComision) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const fa = `${a.cita_fecha || a.fecha} ${a.cita_hora_inicio || ""}`;
+        const fb = `${b.cita_fecha || b.fecha} ${b.cita_hora_inicio || ""}`;
+        return fa.localeCompare(fb);
+      });
+  }, [comisiones, comisionesSeleccionadas, comisionesPendientesMoneda, selectedComisionIds.length, fechaInicioComision, fechaFinComision, periodoComision, liquidacionImprimirId, liquidaciones]);
+
+  async function exportComisionPDF() {
+    if (!empleado) return;
+
+    const rows = comisionesParaImprimir;
+    if (rows.length === 0) {
+      alert(liquidacionImprimirId ? "Esta liquidación no tiene comisiones enlazadas para imprimir." : "No hay comisiones dentro del filtro seleccionado para imprimir.");
+      return;
+    }
+
+    const logoSrc = "/logo-imprimir.png";
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const numero = liquidacionImprimir ? `LIQ-${liquidacionImprimir.id.slice(0, 8).toUpperCase()}` : `COM-${new Date().getTime().toString().slice(-6)}`;
+    const fechaPago = (liquidacionImprimir?.pagado_at || "").slice(0, 10) || rows.find((c) => c.fecha_pago)?.fecha_pago || fechaPagoComision || getTodayLocal();
+    const fechasRows = rows.map((c) => c.cita_fecha || c.fecha).filter(Boolean).sort();
+    const fechaInicioPdf = liquidacionImprimir?.fecha_inicio || (periodoComision === "pendientes" ? fechasRows[0] : fechaInicioComision) || fechasRows[0] || getTodayLocal();
+    const fechaFinPdf = liquidacionImprimir?.fecha_fin || (periodoComision === "pendientes" ? fechasRows[fechasRows.length - 1] : fechaFinComision) || fechasRows[fechasRows.length - 1] || getTodayLocal();
+    const rangoTxt = `${shortDate(fechaInicioPdf)} AL ${shortDate(fechaFinPdf)}`;
+    const monedaPdf = (liquidacionImprimir?.moneda_pago === "BS" || liquidacionImprimir?.moneda_pago === "USD") ? liquidacionImprimir.moneda_pago : monedaPago;
+    const referenciaPdf = liquidacionImprimir?.referencia || referencia.trim() || "—";
+
+    await drawCommissionHeader({ doc, logoSrc, numero, empleado, fechaPago });
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(20);
+    doc.text(`SERVICIOS FACTURADOS DESDE EL ${rangoTxt}`, 15, 58);
+
+    const serviciosBody = rows.map((c, index) => {
+      const fecha = c.cita_fecha || c.fecha;
+      const hora = c.cita_hora_inicio ? String(c.cita_hora_inicio).slice(0, 5) : "—";
+      const paciente = String(c.cliente_nombre || c.pago_cliente_nombre || "—").toUpperCase();
+      const tipoSesion = String(c.servicio_nombre || getComisionConcepto(c) || c.tipo || "COMISIÓN").toUpperCase();
+      const honorarios = getComisionBrutoByMoneda(c, "USD");
+      const descuento = getComisionDescuentoDeudaByMoneda(c, "USD");
+      const neto = getComisionMontoByMoneda(c, "USD");
+
+      const estadoPago = getComisionPagoEstadoPDF(c, liquidacionImprimir?.id || null, liquidacionImprimir?.pago_empleado_id || null);
+
+      return [
+        index + 1,
+        shortDate(fecha),
+        hora,
+        paciente,
+        tipoSesion,
+        estadoPago,
+        `$ ${honorarios.toFixed(2)}`,
+        descuento > 0 ? `$ ${descuento.toFixed(2)}` : "$ 0.00",
+        `$ ${neto.toFixed(2)}`,
+      ];
+    });
+
+    autoTable(doc, {
+      startY: 62,
+      margin: { left: 15, right: 15, bottom: 28 },
+      head: [["", "FECHA", "HORA", "PACIENTE/CLIENTE", "TIPO DE SESIÓN", "ESTADO", "BRUTO", "DEUDA", "NETO"]],
+      body: serviciosBody,
+      theme: "grid",
+      styles: {
+        font: "helvetica",
+        fontSize: 7.3,
+        cellPadding: 1.6,
+        lineColor: [160, 160, 160],
+        lineWidth: 0.18,
+        textColor: [25, 35, 45],
+        valign: "middle",
+      },
+      headStyles: { fillColor: [245, 245, 245], textColor: [45, 45, 45], fontStyle: "bold" },
+      columnStyles: {
+        0: { cellWidth: 8, halign: "center" },
+        1: { cellWidth: 18, halign: "center" },
+        2: { cellWidth: 13, halign: "center" },
+        3: { cellWidth: 36 },
+        4: { cellWidth: 38 },
+        5: { cellWidth: 20, halign: "center", fontStyle: "bold" },
+        6: { cellWidth: 16, halign: "right" },
+        7: { cellWidth: 15, halign: "right", textColor: [190, 55, 75] },
+        8: { cellWidth: 16, halign: "right", fontStyle: "bold", textColor: [20, 130, 95] },
+      },
+    });
+
+    let cursorY = ((doc as any).lastAutoTable?.finalY || 62) + 7;
+    const totalBrutoUsd = r2(rows.reduce((acc, c) => acc + getComisionBrutoByMoneda(c, "USD"), 0));
+    const totalDeduccionesUsd = r2(rows.reduce((acc, c) => acc + getComisionDescuentoDeudaByMoneda(c, "USD"), 0));
+    const totalNetoUsd = r2(rows.reduce((acc, c) => acc + getComisionMontoByMoneda(c, "USD"), 0));
+    const totalNetoPendienteUsd = r2(rows.reduce((acc, c) => {
+      const estadoPdf = getComisionPagoEstadoPDF(c, liquidacionImprimir?.id || null, liquidacionImprimir?.pago_empleado_id || null);
+      return estadoPdf === "PENDIENTE NETO" ? acc + getComisionMontoByMoneda(c, "USD") : acc;
+    }, 0));
+    const esLiquidacionHistorica = !!liquidacionImprimirId;
+    const totalPagadoLiquidacionUsd = esLiquidacionHistorica
+      ? r2(Number(liquidacionImprimir?.monto_equivalente_usd ?? liquidacionImprimir?.monto_pago ?? totalNetoUsd))
+      : 0;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.text("Total Facturado:", 145, cursorY, { align: "right" });
+    doc.text(`$ ${totalBrutoUsd.toFixed(2)}`, 188, cursorY, { align: "right" });
+    cursorY += 8;
+
+    doc.setDrawColor(30);
+    doc.line(15, cursorY, 195, cursorY);
+    cursorY += 6;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text(`DEDUCCIONES Y PERCEPCIONES ADICIONALES DESDE EL ${rangoTxt}`, 15, cursorY);
+    cursorY += 4;
+
+    const deduccionesBody: any[] = [];
+    for (const c of rows) {
+      const descuento = getComisionDescuentoDeudaByMoneda(c, "USD");
+      if (descuento <= 0) continue;
+      deduccionesBody.push([
+        "DEDUCCIÓN",
+        `DEUDA / CONSUMO DESCONTADO · ${String(c.cliente_nombre || c.pago_cliente_nombre || getComisionConcepto(c) || "COMISIÓN").toUpperCase()} · NETO PENDIENTE $ ${getComisionMontoByMoneda(c, "USD").toFixed(2)}`,
+        `$ ${descuento.toFixed(2)}`,
+      ]);
+    }
+
+    autoTable(doc, {
+      startY: cursorY,
+      margin: { left: 15, right: 15, bottom: 28 },
+      head: [["TIPO", "DESCRIPCIÓN", "MONTO"]],
+      body: deduccionesBody.length ? deduccionesBody : [["—", "SIN DEDUCCIONES REGISTRADAS", "$ 0.00"]],
+      theme: "plain",
+      styles: { font: "helvetica", fontSize: 8, cellPadding: 2, textColor: [35, 35, 35] },
+      headStyles: { textColor: [70, 70, 70], fontStyle: "bold", halign: "center" },
+      columnStyles: { 0: { cellWidth: 40 }, 1: { cellWidth: 100 }, 2: { cellWidth: 40, halign: "right" } },
+    });
+
+    cursorY = ((doc as any).lastAutoTable?.finalY || cursorY) + 8;
+
+    if (cursorY > 225) {
+      doc.addPage();
+      await drawCommissionHeader({ doc, logoSrc, numero, empleado, fechaPago });
+      cursorY = 62;
+    }
+
+    doc.setDrawColor(30);
+    doc.line(15, cursorY, 195, cursorY);
+    cursorY += 8;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text("FORMA DE PAGO Y TOTALES:", 15, cursorY);
+    cursorY += 8;
+
+    const formaPagoRows = esLiquidacionHistorica
+      ? [
+          ["Fecha de pago", shortDate(fechaPago)],
+          ["Tipo", "TRANSFERENCIA / EFECTIVO / MÉTODO REGISTRADO"],
+          ["Referencia", referenciaPdf],
+          ["Moneda liquidación", monedaPdf],
+          ["TOTAL FACTURADO", `$ ${totalBrutoUsd.toFixed(2)}`],
+          ["Total Deducciones y Percepciones", `$ ${totalDeduccionesUsd.toFixed(2)}`],
+          ["Total Neto generado", `$ ${totalNetoUsd.toFixed(2)}`],
+          ["Total pagado/liquidado", `$ ${totalPagadoLiquidacionUsd.toFixed(2)}`],
+          ["TOTAL RECIBO", `$ ${totalPagadoLiquidacionUsd.toFixed(2)}`],
+        ]
+      : [
+          ["Fecha de emisión", shortDate(getTodayLocal())],
+          ["Estado", "PENDIENTE - NO PAGADO AL EMPLEADO"],
+          ["Moneda referencia", monedaPdf],
+          ["TOTAL FACTURADO", `$ ${totalBrutoUsd.toFixed(2)}`],
+          ["Total Deducciones y Percepciones", `$ ${totalDeduccionesUsd.toFixed(2)}`],
+          ["TOTAL PENDIENTE NETO", `$ ${totalNetoUsd.toFixed(2)}`],
+        ];
+
+    autoTable(doc, {
+      startY: cursorY,
+      margin: { left: 105, right: 15, bottom: 28 },
+      body: formaPagoRows,
+      theme: "plain",
+      styles: { font: "helvetica", fontSize: 8.5, cellPadding: 1.8, textColor: [25, 25, 25] },
+      columnStyles: { 0: { fontStyle: "bold", halign: "right", cellWidth: 48 }, 1: { halign: "right", cellWidth: 42 } },
+    });
+
+    cursorY = ((doc as any).lastAutoTable?.finalY || cursorY) + 12;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text("RECIBÍ CONFORME:", 15, cursorY);
+    doc.line(48, cursorY + 15, 112, cursorY + 15);
+    doc.setFont("helvetica", "bold");
+    doc.text(String(empleado.nombre || "").toUpperCase(), 80, cursorY + 20, { align: "center" });
+
+    const totalPages = (doc as any).internal.getNumberOfPages?.() || 1;
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      drawCommissionFooter(doc);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(6.5);
+      doc.setTextColor(75);
+      doc.text(`Página ${i} de ${totalPages}`, 190, doc.internal.pageSize.getHeight() - 4, { align: "right" });
+    }
+
+    doc.save(`RPM_Comision_${sanitizeFilePart(empleado.nombre)}_${sanitizeFilePart(fechaInicioPdf)}_${sanitizeFilePart(fechaFinPdf)}.pdf`);
   }
 
   function addSplit() {
@@ -1562,7 +2032,7 @@ export default function VerPersonalPage() {
           ? r2(montoPagoNum * tasaBCV)
           : r2(resumenSeleccionado.profesionalBs);
 
-    const fechaFacturacion = getTodayLocal();
+    const fechaFacturacion = fechaPagoComision || getTodayLocal();
     const fechaInicioRango = [...pendientes].map((c) => c.fecha).sort()[0];
     const fechaFinRango = [...pendientes]
       .map((c) => c.fecha)
@@ -2424,7 +2894,7 @@ export default function VerPersonalPage() {
             </div>
 
             <Card className="mb-3 border-white/10 bg-white/[0.02] p-3">
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-4">
                 <div>
                   <label className="mb-2 block text-sm font-medium text-white/75">
                     Moneda
@@ -2441,6 +2911,18 @@ export default function VerPersonalPage() {
                       BS
                     </option>
                   </select>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-white/75">
+                    Fecha de pago
+                  </label>
+                  <input
+                    type="date"
+                    value={fechaPagoComision}
+                    onChange={(e) => setFechaPagoComision(e.target.value)}
+                    className={inputCls()}
+                  />
                 </div>
 
                 {requiereTasa && (
@@ -2498,6 +2980,90 @@ export default function VerPersonalPage() {
                     {resumenSeleccionado.pendientes} comisión(es)
                   </div>
                 </div>
+              </div>
+            </Card>
+
+            <Card className="mb-3 border-indigo-400/20 bg-indigo-400/5 p-3">
+              <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-indigo-300">Filtro de impresión de comisión</p>
+                  <p className="text-xs text-white/45">
+                    Puedes imprimir pendientes por rango o una liquidación vieja ya pagada. Ahora NO se mezclan pendientes con liquidados.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={exportComisionPDF}
+                  className="rounded-2xl border border-sky-400/30 bg-sky-400/10 px-4 py-3 text-sm font-semibold text-sky-300 transition hover:bg-sky-400/20"
+                >
+                  📄 Imprimir comisión
+                </button>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-4">
+                <div>
+                  <label className="mb-2 block text-xs text-white/45">Período</label>
+                  <select
+                    value={periodoComision}
+                    onChange={(e) => aplicarPeriodoComision(e.target.value as PeriodoComision)}
+                    className={inputCls()}
+                  >
+                    <option value="pendientes" className="bg-[#11131a] text-white">Pendientes visibles</option>
+                    <option value="quincena" className="bg-[#11131a] text-white">Quincena actual</option>
+                    <option value="mes" className="bg-[#11131a] text-white">Mes completo</option>
+                    <option value="liquidacion" className="bg-[#11131a] text-white">Liquidación ya pagada</option>
+                    <option value="personalizado" className="bg-[#11131a] text-white">Personalizado</option>
+                  </select>
+                </div>
+                {periodoComision === "liquidacion" && (
+                  <div className="md:col-span-3">
+                    <label className="mb-2 block text-xs text-white/45">Liquidación anterior</label>
+                    <select
+                      value={liquidacionImprimirId}
+                      onChange={(e) => seleccionarLiquidacionParaImprimir(e.target.value)}
+                      className={inputCls()}
+                    >
+                      <option value="" className="bg-[#11131a] text-white">Selecciona una liquidación ya pagada</option>
+                      {liquidaciones.map((liq) => (
+                        <option key={liq.id} value={liq.id} className="bg-[#11131a] text-white">
+                          {formatDate(liq.fecha_inicio)} – {formatDate(liq.fecha_fin)} · {liq.cantidad_citas} reg. · {liq.moneda_pago === "BS" ? formatBs(liq.monto_pago) : formatMoney(liq.monto_pago)} · pago {liq.pagado_at ? new Date(liq.pagado_at).toLocaleDateString("es") : "—"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div>
+                  <label className="mb-2 block text-xs text-white/45">Desde</label>
+                  <input
+                    type="date"
+                    value={fechaInicioComision}
+                    onChange={(e) => {
+                      setPeriodoComision("personalizado");
+                      setFechaInicioComision(e.target.value);
+                    }}
+                    className={inputCls()}
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-xs text-white/45">Hasta</label>
+                  <input
+                    type="date"
+                    value={fechaFinComision}
+                    onChange={(e) => {
+                      setPeriodoComision("personalizado");
+                      setFechaFinComision(e.target.value);
+                    }}
+                    className={inputCls()}
+                  />
+                </div>
+                <Card className="border-white/10 bg-white/[0.03] p-3">
+                  <p className="text-xs text-white/45">Registros a imprimir</p>
+                  <p className="mt-1 text-lg font-bold text-white">{comisionesParaImprimir.length}</p>
+                  <p className="text-xs text-white/35">
+                    {liquidacionImprimirId ? "Solo liquidado/pagado" : selectedComisionIds.length > 0 ? "Pendientes seleccionadas" : "Pendientes del rango"}
+                  </p>
+                </Card>
               </div>
             </Card>
 
@@ -2647,14 +3213,19 @@ export default function VerPersonalPage() {
               <p className="mt-1 text-xs text-white/45">
                 {soloDescontarDeudaActivo
                   ? "No se pagará comisión ahora. Solo se descuenta la deuda desde el saldo de comisión seleccionado."
-                  : "Puedes pagar con una cartera o dividir. Si eliges Bs, calcula equivalente BCV."}
+                  : monedaPago === "BS"
+                    ? "Estás liquidando en bolívares: el monto que escribas aquí es Bs reales. El sistema solo guarda el equivalente USD como referencia."
+                    : "Estás liquidando en USD. Si el método elegido es Bs, se calcula el descuento equivalente con BCV."}
               </p>
 
               <div className="mt-3 grid gap-2 md:grid-cols-3">
                 <Card className="p-3">
-                  <p className="text-xs text-white/45">Neto seleccionado</p>
+                  <p className="text-xs text-white/45">Neto seleccionado en {monedaAbbr(monedaPago)}</p>
                   <p className="mt-1 text-base font-semibold text-white">
                     {formatMontoByMoneda(montoFacturar, monedaPago)}
+                  </p>
+                  <p className="text-xs text-white/35">
+                    Ref. {monedaPago === "BS" ? formatMoney(resumenSeleccionadoEquivalente.referencia) : formatBs(resumenSeleccionadoEquivalente.referencia)}
                   </p>
                   {descuentoDeudaUsd > 0 && (
                     <p className="text-xs text-rose-300">
@@ -2667,7 +3238,7 @@ export default function VerPersonalPage() {
                   <p className="text-xs text-white/45">
                     {soloDescontarDeudaActivo
                       ? "Pago al empleado ahora"
-                      : "Asignado en métodos"}
+                      : `Asignado en ${monedaAbbr(monedaPago)}`}
                   </p>
                   <p className="mt-1 text-base font-semibold text-violet-300">
                     {soloDescontarDeudaActivo
@@ -2680,7 +3251,7 @@ export default function VerPersonalPage() {
                   <p className="text-xs text-white/45">
                     {soloDescontarDeudaActivo
                       ? "Comisión queda pendiente"
-                      : "Restante neto por asignar"}
+                      : `Restante en ${monedaAbbr(monedaPago)}`}
                   </p>
                   <p
                     className={`mt-1 text-base font-semibold ${
@@ -2974,7 +3545,7 @@ export default function VerPersonalPage() {
 
                           <div>
                             <label className="mb-2 block text-xs text-white/45">
-                              Monto en {monedaPago}
+                              Monto pagado en {monedaAbbr(monedaPago)}
                             </label>
                             <input
                               type="number"
@@ -2985,7 +3556,7 @@ export default function VerPersonalPage() {
                                 updateSplit(split.id, { monto: e.target.value })
                               }
                               className={inputCls()}
-                              placeholder="0.00"
+                              placeholder={monedaPago === "BS" ? "Ej: 5951.86" : "0.00"}
                             />
                           </div>
 
@@ -3077,7 +3648,7 @@ export default function VerPersonalPage() {
                   >
                     {facturando
                       ? "Liquidando saldo..."
-                      : `✓ Liquidar ${resumenSeleccionado.pendientes} comisión(es) · neto ${formatMontoByMoneda(montoNetoAPagar, monedaPago)}`}
+                      : `✓ Liquidar ${resumenSeleccionado.pendientes} comisión(es) · neto en ${monedaAbbr(monedaPago)} ${formatMontoByMoneda(montoNetoAPagar, monedaPago)}`}
                   </button>
                 )}
 
