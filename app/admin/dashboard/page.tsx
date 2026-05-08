@@ -1172,7 +1172,7 @@ export default function DashboardPage() {
             ) : (
               <div className="space-y-2">
                 <div className="grid gap-2">
-                  {bloquesSesionesPlan.slice(0, 5).map((bloque) => {
+                  {bloquesSesionesPlan.map((bloque) => {
                     const activo = bloqueActivoSesiones?.key === bloque.key;
                     return (
                       <button key={bloque.key} type="button" onClick={() => setBloqueSesionSeleccionado(bloque.key)} className={`rounded-xl border px-3 py-2 text-left transition ${activo ? "border-amber-400/25 bg-amber-400/10" : "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"}`}>
@@ -1191,8 +1191,7 @@ export default function DashboardPage() {
                 {bloqueActivoSesiones && (
                   <div className="space-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-2">
                     <p className="px-1 text-[11px] font-medium uppercase tracking-wider text-white/30">{bloqueActivoSesiones.label}</p>
-                    {bloqueActivoSesiones.sesiones.slice(0, 4).map((row) => renderSesionPlanCard(row, { compact: true }))}
-                    {bloqueActivoSesiones.sesiones.length > 4 && <p className="px-1 pt-1 text-[11px] text-white/30">+{bloqueActivoSesiones.sesiones.length - 4} más en este bloque. Abre "ver" para revisar todos.</p>}
+                    {bloqueActivoSesiones.sesiones.map((row) => renderSesionPlanCard(row, { compact: true }))}
                   </div>
                 )}
               </div>
