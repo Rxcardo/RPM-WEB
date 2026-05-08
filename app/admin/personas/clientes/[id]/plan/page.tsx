@@ -534,17 +534,23 @@ export default function ClientePlanPage() {
         monto_rpm_usd: comisionEquivalentes.monto_rpm_usd,   monto_rpm_bs: comisionEquivalentes.monto_rpm_bs,
         monto_profesional_usd: comisionEquivalentes.monto_profesional_usd, monto_profesional_bs: comisionEquivalentes.monto_profesional_bs,
       })
-      if (error) console.error('❌ Error comisión:', error.message)
-    } catch (err) { console.error('❌', err) }
+      if (error) throw new Error(`Comisión: ${error.message}`)
+    } catch (err: any) { throw new Error(err?.message || 'Error al registrar la comisión del plan.') }
   }
 
   // ─── Helpers de plan ─────────────────────────────────────────────────
 
   async function cancelarPlanAnterior(planId: string, detalle: string) {
-    await supabase.from('clientes_planes').update({ estado: 'cancelado' }).eq('id', planId)
-    await supabase.from('entrenamientos').update({ estado: 'cancelado' }).eq('cliente_plan_id', planId).eq('estado', 'programado')
-    const { data: eventoExistente } = await supabase.from('clientes_planes_eventos').select('id').eq('cliente_plan_id', planId).eq('cliente_id', id).eq('tipo', 'cancelado').eq('detalle', detalle).limit(1).maybeSingle()
-    if (!eventoExistente?.id) await supabase.from('clientes_planes_eventos').insert({ cliente_plan_id: planId, cliente_id: id, tipo: 'cancelado', detalle })
+    // Cancelación operativa para reemplazo/renovación.
+    // Importante: NO revierte finanzas aquí, porque el plan anterior puede tener pagos válidos.
+    const { error } = await supabase.rpc('cancelar_plan_cliente_seguro', {
+      p_cliente_plan_id: planId,
+      p_usuario_id: null,
+      p_revertir_finanzas: false,
+      p_motivo: detalle,
+    })
+
+    if (error) throw new Error(`Cancelar plan anterior: ${error.message}`)
   }
 
   function buildEntrenamientoKey(fecha: string, hi: string, hf: string, empId: string) { return `${fecha}__${hi}__${hf}__${empId}` }
@@ -609,7 +615,7 @@ export default function ClientePlanPage() {
     })
     if (cxcPayload) {
       const { error: cxcErr } = await supabase.from('cuentas_por_cobrar').insert(cxcPayload)
-      if (cxcErr) console.warn('No se pudo crear cuenta por cobrar:', cxcErr.message)
+      if (cxcErr) throw new Error(`Cuenta por cobrar: ${cxcErr.message}`)
     }
   }
 
@@ -705,168 +711,26 @@ export default function ClientePlanPage() {
     finally { setSaving(false); renewingRef.current = false }
   }
 
-  // ─── Cancelar / limpiar efecto económico ────────────────────────────────
+  // ─── Cancelar / reversar efecto económico ─────────────────────────────
 
-  async function getCuentasPorCobrarPlan(clientePlanId: string) {
-    const clienteNombre = cliente?.nombre || ''
-    const planNombre = planActivo?.planes?.nombre || ''
+  async function cancelarPlanActivoSeguro() {
+    if (!planActivo) throw new Error('No hay plan activo para cancelar.')
 
-    const filtros = [
-      `origen_id.eq.${clientePlanId}`,
-      `concepto.ilike.%${planNombre}%`,
-      `concepto.ilike.%${clienteNombre}%`,
-    ].filter(Boolean).join(',')
+    const { data, error } = await supabase.rpc('cancelar_plan_cliente_seguro', {
+      p_cliente_plan_id: planActivo.id,
+      p_usuario_id: null,
+      p_revertir_finanzas: true,
+      p_motivo: motivoCancelacion,
+    })
 
-    const { data, error } = await supabase
-      .from('cuentas_por_cobrar')
-      .select('id, concepto, estado, saldo_usd, monto_total_usd')
-      .eq('cliente_id', id)
-      .or(filtros)
+    if (error) throw new Error(`Cancelar plan: ${error.message}`)
 
-    if (error) throw new Error(`Buscar deuda del plan: ${error.message}`)
-    return (data || []) as Array<{ id: string; concepto: string | null; estado: string | null; saldo_usd: number | null; monto_total_usd: number | null }>
-  }
-
-  async function getPagosPlan(clientePlanId: string) {
-    const { data, error } = await supabase
-      .from('pagos')
-      .select('id, concepto, estado, monto, monto_usd, monto_bs')
-      .eq('cliente_id', id)
-      .eq('cliente_plan_id', clientePlanId)
-
-    if (error) throw new Error(`Buscar pagos del plan: ${error.message}`)
-    return (data || []) as Array<{ id: string; concepto: string | null; estado: string | null; monto?: number | null; monto_usd?: number | null; monto_bs?: number | null }>
-  }
-
-  async function eliminarEfectoEconomicoPlan(clientePlanId: string) {
-    const cuentas = await getCuentasPorCobrarPlan(clientePlanId)
-    const pagos = await getPagosPlan(clientePlanId)
-
-    const cuentaIds = cuentas.map((c) => c.id).filter(Boolean)
-    const pagoIds = pagos.map((p) => p.id).filter(Boolean)
-
-    // IMPORTANTE RPM:
-    // Cancelar un plan significa que fue un error operativo.
-    // Por eso SIEMPRE se limpia todo el efecto económico del plan:
-    // pagos completos, abonos, deudas, créditos, movimientos y comisiones.
-    // El orden evita errores por llaves foráneas.
-
-    // 1) Primero eliminar comisiones del plan, sin importar si están pendientes o liquidadas.
-    // Si el plan fue creado por error, esa comisión no debe quedar viva en Pedro ni en nadie.
-    const { error: comisionError } = await supabase
-      .from('comisiones_detalle')
-      .delete()
-      .eq('cliente_plan_id', clientePlanId)
-      .eq('tipo', 'plan')
-
-    if (comisionError) throw new Error(`Eliminar comisiones del plan: ${comisionError.message}`)
-
-    // 2) Eliminar aplicaciones de crédito asociadas a pagos/cuentas del plan.
-    // Estas tablas pueden variar; si alguna columna no existe, no rompe la cancelación.
-    if (cuentaIds.length) {
-      const { error } = await supabase
-        .from('clientes_credito_aplicaciones')
-        .delete()
-        .in('cuenta_cobrar_id', cuentaIds)
-      if (error) console.warn('No se pudieron eliminar aplicaciones de crédito por cuenta:', error.message)
-    }
-
-    if (pagoIds.length) {
-      const { error } = await supabase
-        .from('clientes_credito_aplicaciones')
-        .delete()
-        .in('pago_id', pagoIds)
-      if (error) console.warn('No se pudieron eliminar aplicaciones de crédito por pago:', error.message)
-    }
-
-    // 3) Eliminar abonos de cobranza asociados a las cuentas del plan.
-    if (cuentaIds.length) {
-      const { error } = await supabase
-        .from('abonos_cobranza')
-        .delete()
-        .in('cuenta_cobrar_id', cuentaIds)
-      if (error) console.warn('No se pudieron eliminar abonos de cobranza:', error.message)
-    }
-
-    // 4) Eliminar movimientos de cartera asociados a pagos/cuentas del plan.
-    if (pagoIds.length) {
-      const { error } = await supabase
-        .from('movimientos_cartera')
-        .delete()
-        .in('pago_id', pagoIds)
-      if (error) console.warn('No se pudieron eliminar movimientos de cartera por pago:', error.message)
-    }
-
-    if (cuentaIds.length) {
-      const { error } = await supabase
-        .from('movimientos_cartera')
-        .delete()
-        .in('cuenta_cobrar_id', cuentaIds)
-      if (error) console.warn('No se pudieron eliminar movimientos de cartera por cuenta:', error.message)
-    }
-
-    // 5) Eliminar movimientos de inventario dependientes.
-    if (cuentaIds.length) {
-      const { error } = await supabase
-        .from('movimientos_inventario')
-        .delete()
-        .in('cuenta_cobrar_id', cuentaIds)
-      if (error) console.warn('No se pudieron eliminar movimientos por cuenta por cobrar:', error.message)
-    }
-
-    if (pagoIds.length) {
-      const { error } = await supabase
-        .from('movimientos_inventario')
-        .delete()
-        .in('pago_id', pagoIds)
-      if (error) console.warn('No se pudieron eliminar movimientos por pago:', error.message)
-    }
-
-    // 6) Eliminar créditos generados por este plan.
-    const { data: creditosPlan } = await supabase
-      .from('clientes_credito')
-      .select('id')
-      .eq('cliente_id', id)
-      .eq('origen_id', clientePlanId)
-
-    const creditoIds = ((creditosPlan || []) as Array<{ id: string }>).map((c) => c.id).filter(Boolean)
-
-    if (creditoIds.length) {
-      const { error: appsCreditoErr } = await supabase
-        .from('clientes_credito_aplicaciones')
-        .delete()
-        .in('credito_id', creditoIds)
-      if (appsCreditoErr) console.warn('No se pudieron eliminar aplicaciones de créditos del plan:', appsCreditoErr.message)
-
-      const { error: creditosErr } = await supabase
-        .from('clientes_credito')
-        .delete()
-        .in('id', creditoIds)
-      if (creditosErr) throw new Error(`Eliminar créditos del plan: ${creditosErr.message}`)
-    }
-
-    // 7) Eliminar pagos reales/parciales/mixtos del plan.
-    if (pagoIds.length) {
-      const { error } = await supabase
-        .from('pagos')
-        .delete()
-        .in('id', pagoIds)
-      if (error) throw new Error(`Eliminar pagos del plan: ${error.message}`)
-    }
-
-    // 8) Eliminar deudas/cuentas por cobrar del plan.
-    if (cuentaIds.length) {
-      const { error } = await supabase
-        .from('cuentas_por_cobrar')
-        .delete()
-        .in('id', cuentaIds)
-      if (error) throw new Error(`Eliminar deuda del plan: ${error.message}`)
-    }
-
-    return {
-      cuentasEliminadas: cuentaIds.length,
-      pagosEliminados: pagoIds.length,
-      creditosEliminados: creditoIds.length,
+    return (data || {}) as {
+      ok?: boolean
+      pagos_reversados?: number
+      deudas_canceladas?: number
+      comisiones_canceladas?: number
+      entrenamientos_cancelados?: number
     }
   }
 
@@ -882,41 +746,10 @@ export default function ClientePlanPage() {
     setSaving(true)
 
     try {
-      await supabase
-        .from('clientes_planes')
-        .update({ estado: 'cancelado' })
-        .eq('id', planActivo.id)
-
-      await supabase
-        .from('entrenamientos')
-        .update({ estado: 'cancelado' })
-        .eq('cliente_plan_id', planActivo.id)
-        .eq('estado', 'programado')
-
-      const detalle = `${motivoCancelacion} | limpieza_total:true`
-      const { data: eventoExistente } = await supabase
-        .from('clientes_planes_eventos')
-        .select('id')
-        .eq('cliente_plan_id', planActivo.id)
-        .eq('cliente_id', id)
-        .eq('tipo', 'cancelado')
-        .eq('detalle', detalle)
-        .limit(1)
-        .maybeSingle()
-
-      if (!eventoExistente?.id) {
-        await supabase.from('clientes_planes_eventos').insert({
-          cliente_plan_id: planActivo.id,
-          cliente_id: id,
-          tipo: 'cancelado',
-          detalle,
-        })
-      }
-
-      const resumenLimpieza = await eliminarEfectoEconomicoPlan(planActivo.id)
+      const resumen = await cancelarPlanActivoSeguro()
 
       setSuccessMsg(
-        `Plan cancelado y limpiado completamente. Se eliminaron ${resumenLimpieza.pagosEliminados} pago(s), ${resumenLimpieza.cuentasEliminadas} deuda(s), ${resumenLimpieza.creditosEliminados} crédito(s) y todas las comisiones del plan.`
+        `Plan cancelado correctamente. Finanzas revertidas por RPC: ${resumen.pagos_reversados || 0} pago(s), ${resumen.deudas_canceladas || 0} deuda(s), ${resumen.comisiones_canceladas || 0} comisión(es) y ${resumen.entrenamientos_cancelados || 0} entrenamiento(s) cancelado(s).`
       )
       resetForm()
       setModo(null)
@@ -1364,8 +1197,8 @@ export default function ClientePlanPage() {
                   </div>
                 </Field>
                 <Card className="border-rose-400/20 bg-rose-400/5 p-4">
-                  <p className="text-sm font-medium text-rose-300">Cancelación con limpieza total</p>
-                  <p className="mt-1 text-xs text-white/50">Al cancelar un plan se eliminarán automáticamente pagos, abonos, deudas, créditos, movimientos y comisiones asociadas. Úsalo solo cuando el plan fue creado por error.</p>
+                  <p className="text-sm font-medium text-rose-300">Cancelación segura por RPC</p>
+                  <p className="mt-1 text-xs text-white/50">Al cancelar un plan se ejecutará una RPC transaccional: cancela el plan, cancela entrenamientos y revierte pagos/deudas/comisiones sin hacer deletes manuales desde el frontend.</p>
                 </Card>
                 {errorMsg && <Card className="p-4"><p className="text-sm text-rose-400">{errorMsg}</p></Card>}
                 <div className="flex gap-3">
