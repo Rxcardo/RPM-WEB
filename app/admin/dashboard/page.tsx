@@ -20,6 +20,7 @@ type EntrenamientoPlanRow = { id: string; cliente_plan_id: string | null; client
 type EmpleadoAsistenciaRow = { id: string; empleado_id: string; fecha: string; estado: "asistio" | "no_asistio" | "permiso" | "reposo" | "vacaciones"; observaciones: string | null; created_at?: string | null; updated_at?: string | null; created_by?: string | null; updated_by?: string | null; empleados?: { nombre: string; rol?: string | null } | { nombre: string; rol?: string | null }[] | null; actualizado_por?: { id: string; nombre: string | null } | { id: string; nombre: string | null }[] | null };
 type AlertType = "error" | "success" | "warning" | "info";
 type ReprogramacionDraft = { fecha: string; hora_inicio: string; hora_fin: string; motivo: string };
+type AlertaSistema = { id: string; tipo: "sesiones" | "personal"; mensaje: string; sub: string };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -264,11 +265,9 @@ function Divider() {
   return <div className="h-px w-full bg-white/[0.06]" />;
 }
 
-// Floating panel that slides in from the right on click
 function SlidePanel({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
   return (
     <>
-      {/* backdrop */}
       {open && (
         <div
           className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm"
@@ -295,7 +294,6 @@ function SlidePanel({ open, onClose, title, children }: { open: boolean; onClose
   );
 }
 
-// Big metric tile — replaces StatCard
 function MetricTile({ label, value, sub, accent, onClick, active }: { label: string; value: string | number; sub?: string; accent?: string; onClick?: () => void; active?: boolean }) {
   const Wrapper = onClick ? "button" : "div";
   return (
@@ -314,7 +312,6 @@ function MetricTile({ label, value, sub, accent, onClick, active }: { label: str
   );
 }
 
-// Compact row item for lists
 function RowItem({ left, right, dot, onClick, muted }: { left: React.ReactNode; right?: React.ReactNode; dot?: string; onClick?: () => void; muted?: boolean }) {
   const Wrapper = onClick ? "button" : "div";
   return (
@@ -328,6 +325,41 @@ function RowItem({ left, right, dot, onClick, muted }: { left: React.ReactNode; 
       <div className="min-w-0 flex-1">{left}</div>
       {right && <div className="shrink-0">{right}</div>}
     </Wrapper>
+  );
+}
+
+// ─── Alerta Sistema Component ─────────────────────────────────────────────────
+
+function AlertaSistemaCard({ alerta, onDescartar }: { alerta: AlertaSistema; onDescartar: (id: string) => void }) {
+  const esSesiones = alerta.tipo === "sesiones";
+  return (
+    <div
+      className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 transition-all ${
+        esSesiones
+          ? "border-amber-400/25 bg-amber-400/[0.07]"
+          : "border-fuchsia-400/25 bg-fuchsia-400/[0.07]"
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 text-base leading-none">
+          {esSesiones ? "⚠️" : "👥"}
+        </span>
+        <div>
+          <p className={`text-sm font-semibold ${esSesiones ? "text-amber-300" : "text-fuchsia-300"}`}>
+            {alerta.mensaje}
+          </p>
+          <p className="mt-0.5 text-[11px] text-white/40">{alerta.sub}</p>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => onDescartar(alerta.id)}
+        className="shrink-0 rounded-lg p-1 text-white/30 transition hover:bg-white/[0.06] hover:text-white/70"
+        aria-label="Descartar alerta"
+      >
+        ✕
+      </button>
+    </div>
   );
 }
 
@@ -350,6 +382,9 @@ export default function DashboardPage() {
   const [estadosCuentaClientes, setEstadosCuentaClientes] = useState<EstadoCuentaCliente[]>([]);
   const [cuentasPorCobrar, setCuentasPorCobrar] = useState<CuentaPorCobrar[]>([]);
   const [empleadoActualId, setEmpleadoActualId] = useState<string>("");
+
+  // Alertas sistema descartadas
+  const [alertasSistemaDescartadas, setAlertasSistemaDescartadas] = useState<Set<string>>(new Set());
 
   // Panels
   const [panelOpen, setPanelOpen] = useState<"citas" | "sesiones" | "personal" | "planes" | "saldos" | "ingresos" | null>(null);
@@ -489,6 +524,72 @@ export default function DashboardPage() {
     return { clientesActivos, clientesNuevosMes, citasHoy, programadasHoy, completadasMes, ingresosMes, pagosHoy, personalActivo, planesActivos, totalSesionesDisponibles, sesionesPlanPendientes, clientesDeudores };
   }, [clientes, citas, pagos, empleados, clientesPlanes, entrenamientosPlan, cuentasPorCobrar, today, hoy, asistenciaFilterFecha]);
 
+  // ─── Alertas del sistema ───────────────────────────────────────────────────
+
+  const alertasSistema = useMemo((): AlertaSistema[] => {
+    const alertas: AlertaSistema[] = [];
+
+    // ── Sesiones de plan: menos del 50% en "asistio" ──
+    const sesionesDelDia = entrenamientosPlan.filter((row) => {
+      if (row.fecha !== asistenciaFilterFecha) return false;
+      if ((row.estado || "").toLowerCase() === "cancelado") return false;
+      const cp = firstOrNull(row.clientes_planes);
+      if (!cp || (cp.estado || "").toLowerCase() === "cancelado") return false;
+      return true;
+    });
+
+    if (sesionesDelDia.length > 0) {
+      const asistidas = sesionesDelDia.filter(
+        (r) => (r.asistencia_estado || "").toLowerCase() === "asistio"
+      ).length;
+      const pct = asistidas / sesionesDelDia.length;
+      if (pct < 0.5) {
+        alertas.push({
+          id: `sesiones-${asistenciaFilterFecha}`,
+          tipo: "sesiones",
+          mensaje: `Solo ${asistidas} de ${sesionesDelDia.length} sesiones tienen asistencia confirmada`,
+          sub: `Menos del 50% marcado como "Asistió" — ${formatDate(asistenciaFilterFecha)}`,
+        });
+      }
+    }
+
+    // ── Personal activo: menos del 50% con estado "asistio" ──
+    const personalActivo = empleados.filter(
+      (e) => e.estado?.toLowerCase() === "activo" && (e.rol || "").toLowerCase() !== "admin"
+    );
+
+    if (personalActivo.length > 0) {
+      const marcados = personalActivo.filter((emp) => {
+        const reg = empleadosAsistencia.find(
+          (r) => r.empleado_id === emp.id && r.fecha === asistenciaFilterFecha
+        );
+        return (reg?.estado || "").toLowerCase() === "asistio";
+      }).length;
+      const pct = marcados / personalActivo.length;
+      if (pct < 0.5) {
+        alertas.push({
+          id: `personal-${asistenciaFilterFecha}`,
+          tipo: "personal",
+          mensaje: `Solo ${marcados} de ${personalActivo.length} empleados tienen asistencia registrada`,
+          sub: `Menos del 50% marcado como "Asistió" — ${formatDate(asistenciaFilterFecha)}`,
+        });
+      }
+    }
+
+    return alertas;
+  }, [entrenamientosPlan, empleados, empleadosAsistencia, asistenciaFilterFecha]);
+
+  // Filtrar las ya descartadas — pero si la condición se resuelve (pasan del 50%),
+  // el id cambia en el siguiente re-render y vuelven a aparecer si era necesario.
+  const alertasVisibles = useMemo(
+    () => alertasSistema.filter((a) => !alertasSistemaDescartadas.has(a.id)),
+    [alertasSistema, alertasSistemaDescartadas]
+  );
+
+  function descartarAlerta(id: string) {
+    setAlertasSistemaDescartadas((prev) => new Set([...prev, id]));
+  }
+
   // ─ Filtered lists ─
 
   const citasHoyFiltradas = useMemo(() => citas.filter((cita) => {
@@ -507,11 +608,8 @@ export default function DashboardPage() {
   const sesionesPlanHoyFiltradas = useMemo(() => {
     const q = normalizeSearch(filtroSesionesPlan);
 
-    // Sin búsqueda: se muestran solo las sesiones del día seleccionado.
     if (!q) return sesionesPlanBaseDia;
 
-    // Con búsqueda: se ignora la fecha exacta y se busca la sesión pendiente más cercana
-    // de cada cliente con plan activo vigente. Esto cubre el caso: vino hoy, pero su sesión era mañana.
     const candidatas = entrenamientosPlan
       .filter((row) => {
         if ((row.estado || "").toLowerCase() === "cancelado") return false;
@@ -700,20 +798,9 @@ export default function DashboardPage() {
     const horaFin = reagendarForm.hora_fin.trim();
     const motivo = reagendarForm.motivo.trim();
 
-    if (!fecha) {
-      setErrorReagenda("Selecciona la nueva fecha.");
-      return;
-    }
-
-    if (!horaInicio || !horaFin) {
-      setErrorReagenda("Selecciona hora inicio y hora fin.");
-      return;
-    }
-
-    if (dateTimeMs(fecha, horaFin) <= dateTimeMs(fecha, horaInicio)) {
-      setErrorReagenda("La hora fin debe ser mayor a la hora inicio.");
-      return;
-    }
+    if (!fecha) { setErrorReagenda("Selecciona la nueva fecha."); return; }
+    if (!horaInicio || !horaFin) { setErrorReagenda("Selecciona hora inicio y hora fin."); return; }
+    if (dateTimeMs(fecha, horaFin) <= dateTimeMs(fecha, horaInicio)) { setErrorReagenda("La hora fin debe ser mayor a la hora inicio."); return; }
 
     const cp = firstOrNull(sesionReagendar.clientes_planes);
     const asistenciaActual = (sesionReagendar.asistencia_estado || "pendiente").toLowerCase();
@@ -764,10 +851,7 @@ export default function DashboardPage() {
         clientes: firstOrNull(row?.clientes),
         empleados: firstOrNull(row?.empleados),
         clientes_planes: firstOrNull(row?.clientes_planes)
-          ? {
-              ...firstOrNull(row?.clientes_planes),
-              planes: firstOrNull(firstOrNull(row?.clientes_planes)?.planes),
-            }
+          ? { ...firstOrNull(row?.clientes_planes), planes: firstOrNull(firstOrNull(row?.clientes_planes)?.planes) }
           : null,
       };
 
@@ -809,8 +893,6 @@ export default function DashboardPage() {
     } catch (err: any) { showAlert("error", "Error", err?.message); }
     finally { setLoadingPagosDetalle(false); }
   }
-
-
 
   function renderSesionPlanCard(row: EntrenamientoPlanRow, options?: { compact?: boolean; searchResult?: boolean }) {
     const cliente = firstOrNull(row.clientes);
@@ -938,24 +1020,14 @@ export default function DashboardPage() {
           </p>
         </div>
 
-        {/* Quick actions */}
         <div className="flex flex-wrap gap-2">
-          <Link
-            href="/admin/operaciones/agenda/nueva"
-            className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/80 transition hover:bg-white/[0.08]"
-          >
+          <Link href="/admin/operaciones/agenda/nueva" className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/80 transition hover:bg-white/[0.08]">
             + Nueva cita
           </Link>
-          <Link
-            href="/admin/personas/clientes/nuevo"
-            className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/80 transition hover:bg-white/[0.08]"
-          >
+          <Link href="/admin/personas/clientes/nuevo" className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/80 transition hover:bg-white/[0.08]">
             + Cliente
           </Link>
-          <Link
-            href="/admin/reportes"
-            className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/80 transition hover:bg-white/[0.08]"
-          >
+          <Link href="/admin/reportes" className="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-white/80 transition hover:bg-white/[0.08]">
             Reportes
           </Link>
         </div>
@@ -963,51 +1035,12 @@ export default function DashboardPage() {
 
       {/* ── Metrics grid ── */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <MetricTile
-          label="Clientes activos"
-          value={stats.clientesActivos}
-          sub={`+${stats.clientesNuevosMes} este mes`}
-          accent="text-sky-400"
-        />
-        <MetricTile
-          label="Planes activos"
-          value={stats.planesActivos}
-          sub={`${stats.totalSesionesDisponibles} sesiones disp.`}
-          accent="text-violet-400"
-          onClick={() => setPanelOpen("planes")}
-          active={panelOpen === "planes"}
-        />
-        <MetricTile
-          label="Citas hoy"
-          value={stats.citasHoy}
-          sub={`${stats.programadasHoy} programadas`}
-          accent="text-amber-400"
-          onClick={() => setPanelOpen("citas")}
-          active={panelOpen === "citas"}
-        />
-        <MetricTile
-          label="Ingresos del mes"
-          value={money(stats.ingresosMes)}
-          sub={`Hoy ${money(stats.pagosHoy)}`}
-          accent="text-emerald-400"
-          onClick={() => { setPanelOpen("ingresos"); void loadPagosDetalle(); }}
-          active={panelOpen === "ingresos"}
-        />
-        <MetricTile
-          label="Personal activo"
-          value={stats.personalActivo}
-          sub="Ver asistencia →"
-          onClick={() => setPanelOpen("personal")}
-          active={panelOpen === "personal"}
-        />
-        <MetricTile
-          label="Sesiones pendientes"
-          value={stats.sesionesPlanPendientes}
-          sub="Del día de hoy"
-          accent={stats.sesionesPlanPendientes > 0 ? "text-amber-400" : "text-white/60"}
-          onClick={() => setPanelOpen("sesiones")}
-          active={panelOpen === "sesiones"}
-        />
+        <MetricTile label="Clientes activos" value={stats.clientesActivos} sub={`+${stats.clientesNuevosMes} este mes`} accent="text-sky-400" />
+        <MetricTile label="Planes activos" value={stats.planesActivos} sub={`${stats.totalSesionesDisponibles} sesiones disp.`} accent="text-violet-400" onClick={() => setPanelOpen("planes")} active={panelOpen === "planes"} />
+        <MetricTile label="Citas hoy" value={stats.citasHoy} sub={`${stats.programadasHoy} programadas`} accent="text-amber-400" onClick={() => setPanelOpen("citas")} active={panelOpen === "citas"} />
+        <MetricTile label="Ingresos del mes" value={money(stats.ingresosMes)} sub={`Hoy ${money(stats.pagosHoy)}`} accent="text-emerald-400" onClick={() => { setPanelOpen("ingresos"); void loadPagosDetalle(); }} active={panelOpen === "ingresos"} />
+        <MetricTile label="Personal activo" value={stats.personalActivo} sub="Ver asistencia →" onClick={() => setPanelOpen("personal")} active={panelOpen === "personal"} />
+        <MetricTile label="Sesiones pendientes" value={stats.sesionesPlanPendientes} sub="Del día de hoy" accent={stats.sesionesPlanPendientes > 0 ? "text-amber-400" : "text-white/60"} onClick={() => setPanelOpen("sesiones")} active={panelOpen === "sesiones"} />
       </div>
 
       {/* ── Date filter bar ── */}
@@ -1016,19 +1049,39 @@ export default function DashboardPage() {
         <input
           type="date"
           value={asistenciaFilterFecha}
-          onChange={(e) => { setAsistenciaFilterFecha(e.target.value); setCitasHoyPage(1); setSesionesPlanPage(1); setEmpleadosAsistenciaPage(1); }}
+          onChange={(e) => {
+            setAsistenciaFilterFecha(e.target.value);
+            setCitasHoyPage(1);
+            setSesionesPlanPage(1);
+            setEmpleadosAsistenciaPage(1);
+            // Limpiar descartadas de la fecha anterior para que la nueva fecha arranque fresca
+            setAlertasSistemaDescartadas(new Set());
+          }}
           className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white outline-none focus:border-white/20"
         />
         {asistenciaFilterFecha !== hoy && (
           <button
             type="button"
-            onClick={() => setAsistenciaFilterFecha(hoy)}
+            onClick={() => { setAsistenciaFilterFecha(hoy); setAlertasSistemaDescartadas(new Set()); }}
             className="text-xs text-white/40 underline underline-offset-2 transition hover:text-white/70"
           >
             Volver a hoy
           </button>
         )}
       </div>
+
+      {/* ── Alertas del sistema ── */}
+      {alertasVisibles.length > 0 && (
+        <div className="space-y-2">
+          {alertasVisibles.map((alerta) => (
+            <AlertaSistemaCard
+              key={alerta.id}
+              alerta={alerta}
+              onDescartar={descartarAlerta}
+            />
+          ))}
+        </div>
+      )}
 
       {/* ── Three columns ── */}
       <div className="grid gap-5 lg:grid-cols-3">
@@ -1045,9 +1098,7 @@ export default function DashboardPage() {
                 placeholder="Buscar…"
                 className="w-full rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-xs text-white outline-none placeholder:text-white/25 focus:border-white/15"
               />
-              <GhostBtn onClick={() => setPanelOpen("citas")}>
-                {citasHoyFiltradas.length} ver
-              </GhostBtn>
+              <GhostBtn onClick={() => setPanelOpen("citas")}>{citasHoyFiltradas.length} ver</GhostBtn>
             </div>
 
             {citasHoyFiltradas.length === 0 ? (
@@ -1141,7 +1192,7 @@ export default function DashboardPage() {
                   <div className="space-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-2">
                     <p className="px-1 text-[11px] font-medium uppercase tracking-wider text-white/30">{bloqueActivoSesiones.label}</p>
                     {bloqueActivoSesiones.sesiones.slice(0, 4).map((row) => renderSesionPlanCard(row, { compact: true }))}
-                    {bloqueActivoSesiones.sesiones.length > 4 && <p className="px-1 pt-1 text-[11px] text-white/30">+{bloqueActivoSesiones.sesiones.length - 4} más en este bloque. Abre “ver” para revisar todos.</p>}
+                    {bloqueActivoSesiones.sesiones.length > 4 && <p className="px-1 pt-1 text-[11px] text-white/30">+{bloqueActivoSesiones.sesiones.length - 4} más en este bloque. Abre "ver" para revisar todos.</p>}
                   </div>
                 )}
               </div>
@@ -1219,16 +1270,11 @@ export default function DashboardPage() {
         <div>
           <div className="mb-3 flex items-center justify-between">
             <SectionLabel>Saldos pendientes</SectionLabel>
-            <GhostBtn onClick={() => setPanelOpen("saldos")}>
-              Ver todos · {clientesConSaldoPendiente.length}
-            </GhostBtn>
+            <GhostBtn onClick={() => setPanelOpen("saldos")}>Ver todos · {clientesConSaldoPendiente.length}</GhostBtn>
           </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {clientesConSaldoPendiente.slice(0, 4).map((row) => (
-              <div
-                key={row.cliente_id}
-                className="flex items-center justify-between gap-3 rounded-2xl border border-rose-400/10 bg-rose-400/[0.04] px-4 py-3"
-              >
+              <div key={row.cliente_id} className="flex items-center justify-between gap-3 rounded-2xl border border-rose-400/10 bg-rose-400/[0.04] px-4 py-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-white">{row.cliente_nombre}</p>
                   <p className="truncate text-[11px] text-white/40">{row.razones[0]?.concepto}</p>
@@ -1482,6 +1528,7 @@ export default function DashboardPage() {
         </div>
       </SlidePanel>
 
+      {/* ── Modal Reagendar ── */}
       {sesionReagendar ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0f1117] p-5 shadow-2xl">
@@ -1492,21 +1539,13 @@ export default function DashboardPage() {
                   {firstOrNull(sesionReagendar.clientes)?.nombre || "Cliente"} · {firstOrNull(firstOrNull(sesionReagendar.clientes_planes)?.planes)?.nombre || "Sesión del plan"}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={cerrarReagendarSesion}
-                className="rounded-full border border-white/10 px-3 py-1 text-sm text-white/60 transition hover:bg-white/[0.06]"
-              >
-                ×
-              </button>
+              <button type="button" onClick={cerrarReagendarSesion} className="rounded-full border border-white/10 px-3 py-1 text-sm text-white/60 transition hover:bg-white/[0.06]">×</button>
             </div>
 
             <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm text-white/65">
               <p>Actual: {formatDate(sesionReagendar.fecha)} · {formatTime(sesionReagendar.hora_inicio)} - {formatTime(sesionReagendar.hora_fin)}</p>
               {firstOrNull(sesionReagendar.clientes_planes)?.fecha_fin ? (
-                <p className="mt-1 text-xs text-white/40">
-                  Vencimiento del plan: {firstOrNull(sesionReagendar.clientes_planes)?.fecha_fin}
-                </p>
+                <p className="mt-1 text-xs text-white/40">Vencimiento del plan: {firstOrNull(sesionReagendar.clientes_planes)?.fecha_fin}</p>
               ) : null}
               {(sesionReagendar.asistencia_estado || "").toLowerCase() === "no_asistio_aviso" ? (
                 <p className="mt-1 text-xs text-violet-300">Si eliges una fecha mayor al vencimiento, el plan se extenderá automáticamente.</p>
@@ -1516,12 +1555,7 @@ export default function DashboardPage() {
             <div className="mt-4 space-y-3">
               <label className="block">
                 <span className="text-xs font-medium uppercase tracking-wide text-white/45">Nueva fecha</span>
-                <input
-                  type="date"
-                  value={reagendarForm.fecha}
-                  onChange={(e) => setReagendarForm((prev) => ({ ...prev, fecha: e.target.value }))}
-                  className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-violet-400/40"
-                />
+                <input type="date" value={reagendarForm.fecha} onChange={(e) => setReagendarForm((prev) => ({ ...prev, fecha: e.target.value }))} className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-violet-400/40" />
               </label>
 
               <div className="grid grid-cols-2 gap-3">
@@ -1538,27 +1572,15 @@ export default function DashboardPage() {
                     className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-violet-400/40"
                   />
                 </label>
-
                 <label className="block">
                   <span className="text-xs font-medium uppercase tracking-wide text-white/45">Hora fin</span>
-                  <input
-                    type="time"
-                    value={reagendarForm.hora_fin}
-                    onChange={(e) => setReagendarForm((prev) => ({ ...prev, hora_fin: e.target.value }))}
-                    className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-violet-400/40"
-                  />
+                  <input type="time" value={reagendarForm.hora_fin} onChange={(e) => setReagendarForm((prev) => ({ ...prev, hora_fin: e.target.value }))} className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-violet-400/40" />
                 </label>
               </div>
 
               <label className="block">
                 <span className="text-xs font-medium uppercase tracking-wide text-white/45">Motivo opcional</span>
-                <textarea
-                  value={reagendarForm.motivo}
-                  onChange={(e) => setReagendarForm((prev) => ({ ...prev, motivo: e.target.value }))}
-                  rows={3}
-                  placeholder="Ej: cliente vino hoy y se usa la sesión más cercana"
-                  className="mt-1 w-full resize-none rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-violet-400/40"
-                />
+                <textarea value={reagendarForm.motivo} onChange={(e) => setReagendarForm((prev) => ({ ...prev, motivo: e.target.value }))} rows={3} placeholder="Ej: cliente vino hoy y se usa la sesión más cercana" className="mt-1 w-full resize-none rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-violet-400/40" />
               </label>
             </div>
 
@@ -1567,27 +1589,16 @@ export default function DashboardPage() {
             ) : null}
 
             <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={cerrarReagendarSesion}
-                disabled={guardandoReagenda}
-                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-white/75 transition hover:bg-white/[0.06] disabled:opacity-50"
-              >
+              <button type="button" onClick={cerrarReagendarSesion} disabled={guardandoReagenda} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-white/75 transition hover:bg-white/[0.06] disabled:opacity-50">
                 Cancelar
               </button>
-              <button
-                type="button"
-                onClick={guardarReagendaSesion}
-                disabled={guardandoReagenda}
-                className="rounded-2xl border border-violet-400/20 bg-violet-400/15 px-4 py-2 text-sm font-semibold text-violet-100 transition hover:bg-violet-400/20 disabled:opacity-50"
-              >
+              <button type="button" onClick={guardarReagendaSesion} disabled={guardandoReagenda} className="rounded-2xl border border-violet-400/20 bg-violet-400/15 px-4 py-2 text-sm font-semibold text-violet-100 transition hover:bg-violet-400/20 disabled:opacity-50">
                 {guardandoReagenda ? "Guardando..." : "Guardar cambio"}
               </button>
             </div>
           </div>
         </div>
       ) : null}
-
 
     </div>
   );
