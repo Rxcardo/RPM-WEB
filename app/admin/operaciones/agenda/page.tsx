@@ -7,8 +7,9 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabase/client'
 import Card from '@/components/ui/Card'
 import Section from '@/components/ui/Section'
-import StatCard from '@/components/ui/StatCard'
 import ActionCard from '@/components/ui/ActionCard'
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 type CitaRow = {
   id: string
@@ -58,10 +59,20 @@ type CitaRow = {
   } | null
 }
 
+type EstadoFiltro = 'todos' | 'programada' | 'confirmada' | 'completada' | 'cancelada' | 'reprogramada' | 'no_asistio'
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const ITEMS_POR_PAGINA = 15
+
 function formatDate(value: string | null | undefined) {
   if (!value) return '—'
   try {
-    return new Date(`${value}T00:00:00`).toLocaleDateString()
+    return new Date(`${value}T00:00:00`).toLocaleDateString('es-VE', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    })
   } catch {
     return value
   }
@@ -76,7 +87,12 @@ function formatDateTime(fecha: string | null | undefined, hora?: string | null) 
 function formatAuditDate(value: string | null | undefined) {
   if (!value) return '—'
   try {
-    return new Date(value).toLocaleString()
+    return new Date(value).toLocaleString('es-VE', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
   } catch {
     return value
   }
@@ -85,19 +101,14 @@ function formatAuditDate(value: string | null | undefined) {
 function getAuditLines(cita: CitaRow) {
   const creador = cita.creado_por?.nombre || 'Sin registro'
   const editor = cita.editado_por?.nombre || 'Sin registro'
-
   const createdAt = formatAuditDate(cita.created_at)
   const updatedAt = formatAuditDate(cita.updated_at)
-
   const wasEdited =
     !!cita.updated_at &&
     cita.updated_at !== cita.created_at &&
     !!cita.updated_by
 
-  if (!wasEdited) {
-    return [`Creó: ${creador} · ${createdAt}`]
-  }
-
+  if (!wasEdited) return [`Creó: ${creador} · ${createdAt}`]
   return [
     `Creó: ${creador} · ${createdAt}`,
     `Editó: ${editor} · ${updatedAt}`,
@@ -106,49 +117,31 @@ function getAuditLines(cita: CitaRow) {
 
 function estadoBadge(estado: string) {
   switch ((estado || '').toLowerCase()) {
-    case 'programada':
-      return 'border-sky-400/20 bg-sky-400/10 text-sky-300'
-    case 'confirmada':
-      return 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300'
-    case 'completada':
-      return 'border-violet-400/20 bg-violet-400/10 text-violet-300'
-    case 'cancelada':
-      return 'border-rose-400/20 bg-rose-400/10 text-rose-300'
-    case 'reprogramada':
-      return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
+    case 'programada':    return 'border-sky-400/25 bg-sky-400/10 text-sky-300'
+    case 'confirmada':    return 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300'
+    case 'completada':    return 'border-violet-400/25 bg-violet-400/10 text-violet-300'
+    case 'cancelada':     return 'border-rose-400/25 bg-rose-400/10 text-rose-300'
+    case 'reprogramada':  return 'border-amber-400/25 bg-amber-400/10 text-amber-300'
     case 'no_asistio':
-    case 'no asistio':
-      return 'border-orange-400/20 bg-orange-400/10 text-orange-300'
-    default:
-      return 'border-white/10 bg-white/[0.05] text-white/70'
+    case 'no asistio':   return 'border-orange-400/25 bg-orange-400/10 text-orange-300'
+    default:              return 'border-white/10 bg-white/[0.05] text-white/70'
   }
 }
 
 function tipoCitaBadge(cita: CitaRow) {
-  if (cita.cliente_plan_id) {
-    return 'border-violet-400/20 bg-violet-400/10 text-violet-300'
-  }
-
+  if (cita.cliente_plan_id) return 'border-violet-400/25 bg-violet-400/10 text-violet-300'
   const notas = (cita.notas || '').toLowerCase()
   const servicio = (cita.servicios?.nombre || '').toLowerCase()
-
-  if (notas.includes('recovery') || servicio.includes('recovery')) {
-    return 'border-amber-400/20 bg-amber-400/10 text-amber-300'
-  }
-
+  if (notas.includes('recovery') || servicio.includes('recovery'))
+    return 'border-amber-400/25 bg-amber-400/10 text-amber-300'
   return 'border-white/10 bg-white/[0.05] text-white/70'
 }
 
 function getTipoCita(cita: CitaRow) {
   if (cita.cliente_plan_id) return 'Plan'
-
   const notas = (cita.notas || '').toLowerCase()
   const servicio = (cita.servicios?.nombre || '').toLowerCase()
-
-  if (notas.includes('recovery') || servicio.includes('recovery')) {
-    return 'Recovery'
-  }
-
+  if (notas.includes('recovery') || servicio.includes('recovery')) return 'Recovery'
   return 'Independiente'
 }
 
@@ -157,6 +150,8 @@ function getPlanDisponible(cita: CitaRow) {
   const usadas = Number(cita.clientes_planes?.sesiones_usadas || 0)
   return Math.max(total - usadas, 0)
 }
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
 
 function ActionButton({
   children,
@@ -171,35 +166,74 @@ function ActionButton({
 }) {
   const toneCls =
     tone === 'confirm'
-      ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/15'
+      ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20'
       : tone === 'complete'
-        ? 'border-violet-400/20 bg-violet-400/10 text-violet-300 hover:bg-violet-400/15'
+        ? 'border-violet-400/20 bg-violet-400/10 text-violet-300 hover:bg-violet-400/20'
         : tone === 'cancel'
-          ? 'border-rose-400/20 bg-rose-400/10 text-rose-300 hover:bg-rose-400/15'
-          : 'border-white/10 bg-white/[0.03] text-white/80 hover:bg-white/[0.06]'
+          ? 'border-rose-400/20 bg-rose-400/10 text-rose-300 hover:bg-rose-400/20'
+          : 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.07]'
 
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`
-        rounded-xl border px-3 py-1.5 text-xs font-medium transition
-        disabled:cursor-not-allowed disabled:opacity-40
-        ${toneCls}
-      `}
+      className={`rounded-lg border px-3 py-1.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-35 ${toneCls}`}
     >
       {children}
     </button>
   )
 }
 
+// Tab de estado con conteo
+function EstadoTab({
+  label,
+  count,
+  active,
+  color,
+  onClick,
+}: {
+  label: string
+  count: number
+  active: boolean
+  color: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`
+        group flex flex-col items-start gap-1 rounded-2xl border px-5 py-4 text-left
+        transition-all duration-200 cursor-pointer
+        ${active
+          ? 'border-white/20 bg-white/[0.08] shadow-lg shadow-black/20'
+          : 'border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/10'
+        }
+      `}
+    >
+      <span className={`text-2xl font-bold tracking-tight ${active ? color : 'text-white/80'}`}>
+        {count}
+      </span>
+      <span className={`text-xs font-medium ${active ? 'text-white/80' : 'text-white/40'}`}>
+        {label}
+      </span>
+      {active && (
+        <span className={`mt-0.5 h-0.5 w-6 rounded-full ${color.replace('text-', 'bg-')}`} />
+      )}
+    </button>
+  )
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
 export default function AgendaPage() {
   const [loading, setLoading] = useState(true)
   const [citas, setCitas] = useState<CitaRow[]>([])
   const [search, setSearch] = useState('')
-  const [estadoFiltro, setEstadoFiltro] = useState('todos')
+  const [estadoFiltro, setEstadoFiltro] = useState<EstadoFiltro>('todos')
   const [fechaFiltro, setFechaFiltro] = useState('')
+  const [pagina, setPagina] = useState(1)
   const [error, setError] = useState('')
   const [actionError, setActionError] = useState('')
   const [updatingId, setUpdatingId] = useState<string | null>(null)
@@ -211,11 +245,13 @@ export default function AgendaPage() {
     void loadEmpleadoActual()
   }, [])
 
+  // Reset página al cambiar filtros
+  useEffect(() => { setPagina(1) }, [search, estadoFiltro, fechaFiltro])
+
   async function resolveEmpleadoActualId(): Promise<string> {
     try {
       const { data: authData, error: authError } = await supabase.auth.getUser()
       if (authError) return ''
-
       const authUserId = authData.user?.id
       if (!authUserId) return ''
 
@@ -225,9 +261,7 @@ export default function AgendaPage() {
         .eq('auth_user_id', authUserId)
         .maybeSingle()
 
-      if (!errorPorAuth && empleadoPorAuth?.id) {
-        return String(empleadoPorAuth.id)
-      }
+      if (!errorPorAuth && empleadoPorAuth?.id) return String(empleadoPorAuth.id)
 
       const { data: empleadoPorId, error: errorPorId } = await supabase
         .from('empleados')
@@ -235,9 +269,7 @@ export default function AgendaPage() {
         .eq('id', authUserId)
         .maybeSingle()
 
-      if (!errorPorId && empleadoPorId?.id) {
-        return String(empleadoPorId.id)
-      }
+      if (!errorPorId && empleadoPorId?.id) return String(empleadoPorId.id)
 
       return ''
     } catch {
@@ -253,7 +285,6 @@ export default function AgendaPage() {
   async function loadAgenda() {
     setLoading(true)
     setError('')
-
     try {
       const { data, error: err } = await supabase
         .from('citas')
@@ -282,11 +313,10 @@ export default function AgendaPage() {
             planes:plan_id ( id, nombre )
           )
         `)
-        .order('fecha', { ascending: true })
-        .order('hora_inicio', { ascending: true })
+        .order('fecha', { ascending: false })
+        .order('hora_inicio', { ascending: false })
 
       if (err) throw new Error(err.message)
-
       setCitas((data || []) as unknown as CitaRow[])
     } catch (err: any) {
       console.error(err)
@@ -302,7 +332,6 @@ export default function AgendaPage() {
     nuevoEstado: 'confirmada' | 'completada' | 'cancelada'
   ) {
     setActionError('')
-
     const estadoActual = (cita.estado || '').toLowerCase()
     if (estadoActual === nuevoEstado) return
 
@@ -313,9 +342,7 @@ export default function AgendaPage() {
           ? `¿Seguro que deseas cancelar la cita de ${cita.clientes?.nombre || 'este cliente'}?\n\nSi la cita ya estaba completada y consumió una sesión del plan, esa sesión se devolverá automáticamente.`
           : `¿Seguro que deseas cancelar la cita de ${cita.clientes?.nombre || 'este cliente'}?\n\nEsta cita no está ligada a un plan, así que no tocará sesiones.`
       )
-    ) {
-      return
-    }
+    ) return
 
     if (
       nuevoEstado === 'completada' &&
@@ -324,32 +351,22 @@ export default function AgendaPage() {
           ? `¿Seguro que deseas completar esta cita?\n\nEsta cita está ligada a un plan y al completarla consumirá 1 sesión de ese plan.`
           : `¿Seguro que deseas completar esta cita?\n\nEsta cita no está ligada a un plan, así que no consumirá sesiones.`
       )
-    ) {
-      return
-    }
+    ) return
 
     setUpdatingId(cita.id)
-
     try {
       let auditorId = empleadoActualId || ''
-
       if (!auditorId) {
         auditorId = await resolveEmpleadoActualId()
         setEmpleadoActualId(auditorId)
       }
 
-      const payload = {
-        estado: nuevoEstado,
-        updated_by: auditorId || null,
-      }
-
       const { error: updateError } = await supabase
         .from('citas')
-        .update(payload)
+        .update({ estado: nuevoEstado, updated_by: auditorId || null })
         .eq('id', cita.id)
 
       if (updateError) throw new Error(updateError.message)
-
       await loadAgenda()
     } catch (err: any) {
       console.error(err)
@@ -359,28 +376,20 @@ export default function AgendaPage() {
     }
   }
 
-
   async function eliminarCitaCompleta(cita: CitaRow) {
     setActionError('')
-
     const nombreCliente = cita.clientes?.nombre || 'este cliente'
     const fechaCita = formatDateTime(cita.fecha, cita.hora_inicio)
 
     const ok = window.confirm(
       `⚠️ Vas a eliminar completamente la cita de ${nombreCliente} (${fechaCita}).\n\nEsto también eliminará pagos, comisiones, cuentas por cobrar y registros financieros relacionados.\n\n¿Seguro que deseas continuar?`
     )
-
     if (!ok) return
 
     setDeletingId(cita.id)
-
     try {
-      const { error } = await supabase.rpc('eliminar_cita_completa', {
-        p_cita_id: cita.id,
-      })
-
+      const { error } = await supabase.rpc('eliminar_cita_completa', { p_cita_id: cita.id })
       if (error) throw new Error(error.message)
-
       await loadAgenda()
     } catch (err: any) {
       console.error(err)
@@ -390,9 +399,23 @@ export default function AgendaPage() {
     }
   }
 
+  // ─── Stats ────────────────────────────────────────────────────────────────
+
+  const stats = useMemo(
+    () => ({
+      total: citas.length,
+      programadas: citas.filter((c) => c.estado?.toLowerCase() === 'programada').length,
+      confirmadas: citas.filter((c) => c.estado?.toLowerCase() === 'confirmada').length,
+      completadas: citas.filter((c) => c.estado?.toLowerCase() === 'completada').length,
+      canceladas: citas.filter((c) => c.estado?.toLowerCase() === 'cancelada').length,
+    }),
+    [citas]
+  )
+
+  // ─── Filtrado ─────────────────────────────────────────────────────────────
+
   const citasFiltradas = useMemo(() => {
     const q = search.trim().toLowerCase()
-
     return citas.filter((cita) => {
       const tipoCita = getTipoCita(cita).toLowerCase()
       const nombrePlan = (cita.clientes_planes?.planes?.nombre || '').toLowerCase()
@@ -420,29 +443,29 @@ export default function AgendaPage() {
     })
   }, [citas, search, estadoFiltro, fechaFiltro])
 
-  const stats = useMemo(
-    () => ({
-      total: citas.length,
-      programadas: citas.filter((c) => c.estado?.toLowerCase() === 'programada').length,
-      confirmadas: citas.filter((c) => c.estado?.toLowerCase() === 'confirmada').length,
-      completadas: citas.filter((c) => c.estado?.toLowerCase() === 'completada').length,
-      canceladas: citas.filter((c) => c.estado?.toLowerCase() === 'cancelada').length,
-    }),
-    [citas]
-  )
+  // ─── Paginación ───────────────────────────────────────────────────────────
+
+  const totalPaginas = Math.max(1, Math.ceil(citasFiltradas.length / ITEMS_POR_PAGINA))
+  const citasPagina = useMemo(() => {
+    const inicio = (pagina - 1) * ITEMS_POR_PAGINA
+    return citasFiltradas.slice(inicio, inicio + ITEMS_POR_PAGINA)
+  }, [citasFiltradas, pagina])
+
+  // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
+
+      {/* ── Header ── */}
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div>
-          <p className="text-sm text-white/55">Operaciones</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">Agenda</h1>
-          <p className="mt-2 text-sm text-white/55">
+          <p className="text-xs font-medium uppercase tracking-widest text-white/30">Operaciones</p>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-white">Agenda</h1>
+          <p className="mt-1.5 text-sm text-white/45">
             Gestión de citas, estados, clientes, personal y servicios.
           </p>
         </div>
-
-        <div className="w-full max-w-sm">
+        <div className="w-full max-w-xs">
           <ActionCard
             title="Nueva cita"
             description="Crear y registrar una nueva cita."
@@ -451,120 +474,222 @@ export default function AgendaPage() {
         </div>
       </div>
 
+      {/* ── Errores ── */}
       {error ? (
-        <Card className="p-4">
-          <p className="text-sm font-medium text-rose-400">Error al cargar</p>
-          <p className="mt-1 text-sm text-white/55">{error}</p>
-        </Card>
+        <div className="flex items-start gap-3 rounded-2xl border border-rose-400/20 bg-rose-400/[0.07] px-4 py-3">
+          <span className="mt-0.5 text-rose-400">⚠</span>
+          <div>
+            <p className="text-sm font-medium text-rose-300">Error al cargar</p>
+            <p className="mt-0.5 text-xs text-white/45">{error}</p>
+          </div>
+        </div>
       ) : null}
 
       {actionError ? (
-        <Card className="p-4">
-          <p className="text-sm font-medium text-rose-400">Error en acción</p>
-          <p className="mt-1 text-sm text-white/55">{actionError}</p>
-        </Card>
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/[0.07] px-4 py-3">
+          <span className="mt-0.5 text-amber-400">⚠</span>
+          <div>
+            <p className="text-sm font-medium text-amber-300">Error en acción</p>
+            <p className="mt-0.5 text-xs text-white/45">{actionError}</p>
+          </div>
+        </div>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard title="Total citas" value={stats.total} />
-        <StatCard title="Programadas" value={stats.programadas} color="text-sky-400" />
-        <StatCard title="Confirmadas" value={stats.confirmadas} color="text-emerald-400" />
-        <StatCard title="Completadas" value={stats.completadas} color="text-violet-400" />
-        <StatCard title="Canceladas" value={stats.canceladas} color="text-rose-400" />
+      {/* ── Tabs de estado (clickeables) ── */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+        <EstadoTab
+          label="Total citas"
+          count={stats.total}
+          active={estadoFiltro === 'todos'}
+          color="text-white"
+          onClick={() => setEstadoFiltro('todos')}
+        />
+        <EstadoTab
+          label="Programadas"
+          count={stats.programadas}
+          active={estadoFiltro === 'programada'}
+          color="text-sky-400"
+          onClick={() => setEstadoFiltro('programada')}
+        />
+        <EstadoTab
+          label="Confirmadas"
+          count={stats.confirmadas}
+          active={estadoFiltro === 'confirmada'}
+          color="text-emerald-400"
+          onClick={() => setEstadoFiltro('confirmada')}
+        />
+        <EstadoTab
+          label="Completadas"
+          count={stats.completadas}
+          active={estadoFiltro === 'completada'}
+          color="text-violet-400"
+          onClick={() => setEstadoFiltro('completada')}
+        />
+        <EstadoTab
+          label="Canceladas"
+          count={stats.canceladas}
+          active={estadoFiltro === 'cancelada'}
+          color="text-rose-400"
+          onClick={() => setEstadoFiltro('cancelada')}
+        />
       </div>
 
-      <Section
-        title="Filtros"
-        description="Busca por cliente, Fisioterapeuta, servicio, plan, tipo o filtra por fecha."
-      >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-          <div className="md:col-span-2">
-            <label className="mb-2 block text-sm font-medium text-white/75">Buscar</label>
+      {/* ── Barra de filtros mejorada ── */}
+      <div className="flex flex-col gap-3 rounded-2xl border border-white/[0.07] bg-white/[0.02] p-4 md:flex-row md:items-end">
+
+        {/* Buscador */}
+        <div className="flex-1">
+          <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-white/35">
+            Buscar
+          </label>
+          <div className="relative">
+            <svg
+              className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
+              />
+            </svg>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Cliente, fisioterapeuta, servicio, plan, tipo..."
               className="
-                w-full rounded-2xl border border-white/10 bg-white/[0.03]
-                px-4 py-3 text-sm text-white outline-none transition
-                placeholder:text-white/35 focus:border-white/20 focus:bg-white/[0.05]
+                w-full rounded-xl border border-white/10 bg-white/[0.04]
+                py-2.5 pl-10 pr-4 text-sm text-white outline-none transition
+                placeholder:text-white/25 focus:border-white/20 focus:bg-white/[0.07]
               "
             />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 transition hover:text-white/60"
+              >
+                ✕
+              </button>
+            )}
           </div>
+        </div>
 
-          <div>
-            <label className="mb-2 block text-sm font-medium text-white/75">Estado</label>
-            <select
-              value={estadoFiltro}
-              onChange={(e) => setEstadoFiltro(e.target.value)}
-              className="
-                w-full rounded-2xl border border-white/10 bg-white/[0.03]
-                px-4 py-3 text-sm text-white outline-none transition
-                focus:border-white/20 focus:bg-white/[0.05]
-              "
-            >
-              <option value="todos" className="bg-[#11131a] text-white">Todos</option>
-              <option value="programada" className="bg-[#11131a] text-white">Programadas</option>
-              <option value="confirmada" className="bg-[#11131a] text-white">Confirmadas</option>
-              <option value="completada" className="bg-[#11131a] text-white">Completadas</option>
-              <option value="cancelada" className="bg-[#11131a] text-white">Canceladas</option>
-              <option value="reprogramada" className="bg-[#11131a] text-white">Reprogramadas</option>
-              <option value="no_asistio" className="bg-[#11131a] text-white">No asistió</option>
-            </select>
-          </div>
+        {/* Filtro estado adicional */}
+        <div className="w-full md:w-48">
+          <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-white/35">
+            Estado
+          </label>
+          <select
+            value={estadoFiltro}
+            onChange={(e) => setEstadoFiltro(e.target.value as EstadoFiltro)}
+            className="
+              w-full rounded-xl border border-white/10 bg-white/[0.04]
+              px-3 py-2.5 text-sm text-white outline-none transition
+              focus:border-white/20 focus:bg-white/[0.07]
+            "
+          >
+            <option value="todos" className="bg-[#0e101a]">Todos los estados</option>
+            <option value="programada" className="bg-[#0e101a]">Programadas</option>
+            <option value="confirmada" className="bg-[#0e101a]">Confirmadas</option>
+            <option value="completada" className="bg-[#0e101a]">Completadas</option>
+            <option value="cancelada" className="bg-[#0e101a]">Canceladas</option>
+            <option value="reprogramada" className="bg-[#0e101a]">Reprogramadas</option>
+            <option value="no_asistio" className="bg-[#0e101a]">No asistió</option>
+          </select>
+        </div>
 
-          <div>
-            <label className="mb-2 block text-sm font-medium text-white/75">Fecha</label>
+        {/* Filtro fecha */}
+        <div className="w-full md:w-48">
+          <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-white/35">
+            Fecha
+          </label>
+          <div className="relative">
             <input
               type="date"
               value={fechaFiltro}
               onChange={(e) => setFechaFiltro(e.target.value)}
               className="
-                w-full rounded-2xl border border-white/10 bg-white/[0.03]
-                px-4 py-3 text-sm text-white outline-none transition
-                focus:border-white/20 focus:bg-white/[0.05]
+                w-full rounded-xl border border-white/10 bg-white/[0.04]
+                px-3 py-2.5 text-sm text-white outline-none transition
+                focus:border-white/20 focus:bg-white/[0.07]
               "
             />
+            {fechaFiltro && (
+              <button
+                type="button"
+                onClick={() => setFechaFiltro('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 transition hover:text-white/60"
+              >
+                ✕
+              </button>
+            )}
           </div>
         </div>
-      </Section>
+      </div>
 
-      <Section
-        title="Listado de citas"
-        description="Vista general de todas las citas registradas."
-        className="p-0"
-        contentClassName="overflow-hidden"
-      >
+      {/* ── Tabla ── */}
+      <div className="overflow-hidden rounded-2xl border border-white/[0.07]">
+
+        {/* Encabezado de sección */}
+        <div className="flex items-center justify-between border-b border-white/[0.07] bg-white/[0.02] px-5 py-3.5">
+          <div>
+            <span className="text-sm font-semibold text-white">Listado de citas</span>
+            {!loading && (
+              <span className="ml-2 rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-xs text-white/50">
+                {citasFiltradas.length} {citasFiltradas.length === 1 ? 'cita' : 'citas'}
+              </span>
+            )}
+          </div>
+          {totalPaginas > 1 && (
+            <span className="text-xs text-white/35">
+              Pág. {pagina} de {totalPaginas}
+            </span>
+          )}
+        </div>
+
         <div className="overflow-x-auto">
           <table className="min-w-full">
-            <thead className="border-b border-white/10 bg-white/[0.03]">
-              <tr className="text-left text-sm text-white/55">
-                <th className="px-4 py-4 font-medium">Fecha / Hora</th>
-                <th className="px-4 py-4 font-medium">Cliente</th>
-                <th className="px-4 py-4 font-medium">Fisioterapeuta</th>
-                <th className="px-4 py-4 font-medium">Servicio</th>
-                <th className="px-4 py-4 font-medium">Tipo</th>
-                <th className="px-4 py-4 font-medium">Estado</th>
-                <th className="px-4 py-4 font-medium">Notas</th>
-                <th className="px-4 py-4 font-medium">Acciones</th>
+            <thead>
+              <tr className="border-b border-white/[0.06] bg-white/[0.01] text-left">
+                {['Fecha / Hora', 'Cliente', 'Fisioterapeuta', 'Servicio', 'Tipo', 'Estado', 'Notas', 'Acciones'].map((col) => (
+                  <th key={col} className="px-5 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-white/30">
+                    {col}
+                  </th>
+                ))}
               </tr>
             </thead>
 
-            <tbody className="divide-y divide-white/10 text-sm">
+            <tbody className="divide-y divide-white/[0.05] text-sm">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-white/55">
-                    Cargando agenda...
+                  <td colSpan={8} className="px-5 py-14 text-center">
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/10 border-t-white/50" />
+                      <span className="text-xs text-white/35">Cargando agenda...</span>
+                    </div>
                   </td>
                 </tr>
-              ) : citasFiltradas.length === 0 ? (
+              ) : citasPagina.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-white/55">
-                    No hay citas registradas.
+                  <td colSpan={8} className="px-5 py-14 text-center">
+                    <p className="text-sm text-white/30">No hay citas que coincidan con los filtros.</p>
+                    {(search || estadoFiltro !== 'todos' || fechaFiltro) && (
+                      <button
+                        type="button"
+                        onClick={() => { setSearch(''); setEstadoFiltro('todos'); setFechaFiltro('') }}
+                        className="mt-2 text-xs text-white/40 underline underline-offset-2 transition hover:text-white/60"
+                      >
+                        Limpiar filtros
+                      </button>
+                    )}
                   </td>
                 </tr>
               ) : (
-                citasFiltradas.map((cita) => {
+                citasPagina.map((cita) => {
                   const duracion = cita.servicios?.duracion_minutos || 0
                   const estado = (cita.estado || '').toLowerCase()
                   const disabled = updatingId === cita.id || deletingId === cita.id
@@ -576,132 +701,116 @@ export default function AgendaPage() {
                   const puedeReprogramar = !['completada', 'cancelada'].includes(estado)
 
                   return (
-                    <tr key={cita.id} className="align-top transition hover:bg-white/[0.03]">
-                      <td className="px-4 py-4">
+                    <tr
+                      key={cita.id}
+                      className="group align-top transition-colors duration-100 hover:bg-white/[0.025]"
+                    >
+                      {/* Fecha */}
+                      <td className="px-5 py-4">
                         <div className="font-medium text-white">
                           {formatDateTime(cita.fecha, cita.hora_inicio)}
                         </div>
-
-                        {cita.hora_fin ? (
-                          <div className="mt-0.5 text-xs text-white/45">
+                        {cita.hora_fin && (
+                          <div className="mt-0.5 text-xs text-white/35">
                             hasta {cita.hora_fin.slice(0, 5)}
                           </div>
-                        ) : null}
-
-                        <div className="mt-1 space-y-1">
-                          {getAuditLines(cita).map((line, index) => (
-                            <div key={index} className="text-[11px] leading-4 text-white/35">
-                              {line}
-                            </div>
+                        )}
+                        {duracion > 0 && (
+                          <div className="mt-1 text-[11px] text-white/30">{duracion} min</div>
+                        )}
+                        <div className="mt-1.5 space-y-0.5">
+                          {getAuditLines(cita).map((line, i) => (
+                            <div key={i} className="text-[10px] leading-4 text-white/25">{line}</div>
                           ))}
                         </div>
-
-                        {duracion > 0 ? (
-                          <div className="mt-1 text-xs text-white/35">
-                            {duracion} min
-                          </div>
-                        ) : null}
                       </td>
 
-                      <td className="px-4 py-4">
+                      {/* Cliente */}
+                      <td className="px-5 py-4">
                         <div className="font-medium text-white">
                           {cita.clientes?.nombre || 'Sin cliente'}
                         </div>
-                        <div className="mt-1 text-xs text-white/45">
+                        <div className="mt-0.5 text-xs text-white/40">
                           {cita.clientes?.telefono || cita.clientes?.email || 'Sin contacto'}
                         </div>
                       </td>
 
-                      <td className="px-4 py-4">
+                      {/* Fisio */}
+                      <td className="px-5 py-4">
                         <div className="font-medium text-white">
                           {cita.empleados?.nombre || 'Sin asignar'}
                         </div>
-                        <div className="mt-1 text-xs text-white/45">
-                          {cita.empleados?.rol === 'terapeuta'
+                        <div className="mt-0.5 text-xs text-white/40">
+                          {['terapeuta', 'fisioterapeuta'].includes(cita.empleados?.rol || '')
                             ? 'Fisioterapeuta'
-                            : cita.empleados?.rol === 'fisioterapeuta'
-                              ? 'Fisioterapeuta'
-                              : cita.empleados?.rol || 'Sin rol'}
+                            : cita.empleados?.rol || 'Sin rol'}
                         </div>
                       </td>
 
-                      <td className="px-4 py-4">
+                      {/* Servicio */}
+                      <td className="px-5 py-4">
                         <div className="font-medium text-white">
                           {cita.servicios?.nombre || 'Sin servicio'}
                         </div>
                       </td>
 
-                      <td className="px-4 py-4">
-                        <div className="space-y-2">
-                          <span
-                            className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${tipoCitaBadge(cita)}`}
-                          >
-                            {getTipoCita(cita)}
-                          </span>
-
-                          {cita.cliente_plan_id ? (
-                            <div className="text-xs text-white/45">
-                              <div>{cita.clientes_planes?.planes?.nombre || 'Plan asociado'}</div>
-                              <div>
-                                Disponibles: {getPlanDisponible(cita)}/
-                                {Number(cita.clientes_planes?.sesiones_totales || 0)}
-                              </div>
+                      {/* Tipo */}
+                      <td className="px-5 py-4">
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${tipoCitaBadge(cita)}`}>
+                          {getTipoCita(cita)}
+                        </span>
+                        {cita.cliente_plan_id && (
+                          <div className="mt-1.5 text-[11px] text-white/40">
+                            <div className="truncate max-w-[130px]">{cita.clientes_planes?.planes?.nombre || 'Plan'}</div>
+                            <div>
+                              {getPlanDisponible(cita)}/{Number(cita.clientes_planes?.sesiones_totales || 0)} disponibles
                             </div>
-                          ) : null}
-                        </div>
+                          </div>
+                        )}
                       </td>
 
-                      <td className="px-4 py-4">
-                        <span
-                          className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${estadoBadge(cita.estado)}`}
-                        >
+                      {/* Estado */}
+                      <td className="px-5 py-4">
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${estadoBadge(cita.estado)}`}>
                           {cita.estado}
                         </span>
                       </td>
 
-                      <td className="px-4 py-4">
-                        <div className="max-w-xs text-white/75">
-                          {cita.notas?.trim() || 'Sin notas'}
-                        </div>
+                      {/* Notas */}
+                      <td className="px-5 py-4">
+                        <p className="max-w-[160px] text-xs leading-relaxed text-white/55">
+                          {cita.notas?.trim() || <span className="text-white/25">Sin notas</span>}
+                        </p>
                       </td>
 
-                      <td className="px-4 py-4">
-                        <div className="flex flex-wrap gap-2">
+                      {/* Acciones */}
+                      <td className="px-5 py-4">
+                        <div className="flex flex-wrap gap-1.5">
                           <Link
                             href={`/admin/operaciones/agenda/${cita.id}`}
-                            className="
-                              rounded-xl border border-white/10 bg-white/[0.03]
-                              px-3 py-1.5 text-xs font-medium text-white/80
-                              transition hover:bg-white/[0.06]
-                            "
+                            className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] font-medium text-white/70 transition hover:bg-white/[0.07]"
                           >
                             Ver
                           </Link>
 
                           <Link
                             href={`/admin/operaciones/agenda/${cita.id}/editar`}
-                            className={`
-                              rounded-xl border px-3 py-1.5 text-xs font-medium transition
-                              ${
-                                puedeEditar
-                                  ? 'border-white/10 bg-white/[0.03] text-white/80 hover:bg-white/[0.06]'
-                                  : 'cursor-not-allowed border-white/10 bg-white/[0.02] text-white/35 pointer-events-none'
-                              }
-                            `}
+                            className={`rounded-lg border px-3 py-1.5 text-[11px] font-medium transition ${
+                              puedeEditar
+                                ? 'border-white/10 bg-white/[0.03] text-white/70 hover:bg-white/[0.07]'
+                                : 'pointer-events-none cursor-not-allowed border-white/[0.05] bg-transparent text-white/20'
+                            }`}
                           >
                             Editar
                           </Link>
 
                           <Link
                             href={`/admin/operaciones/agenda/${cita.id}/reprogramar`}
-                            className={`
-                              rounded-xl border px-3 py-1.5 text-xs font-medium transition
-                              ${
-                                puedeReprogramar
-                                  ? 'border-amber-400/20 bg-amber-400/10 text-amber-300 hover:bg-amber-400/15'
-                                  : 'cursor-not-allowed border-white/10 bg-white/[0.02] text-white/35 pointer-events-none'
-                              }
-                            `}
+                            className={`rounded-lg border px-3 py-1.5 text-[11px] font-medium transition ${
+                              puedeReprogramar
+                                ? 'border-amber-400/20 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20'
+                                : 'pointer-events-none cursor-not-allowed border-white/[0.05] bg-transparent text-white/20'
+                            }`}
                           >
                             Reprogramar
                           </Link>
@@ -711,7 +820,7 @@ export default function AgendaPage() {
                             disabled={!puedeConfirmar || disabled}
                             onClick={() => cambiarEstado(cita, 'confirmada')}
                           >
-                            {disabled && updatingId === cita.id ? 'Procesando...' : 'Confirmar'}
+                            {disabled && updatingId === cita.id ? '...' : 'Confirmar'}
                           </ActionButton>
 
                           <ActionButton
@@ -719,7 +828,7 @@ export default function AgendaPage() {
                             disabled={!puedeCompletar || disabled}
                             onClick={() => cambiarEstado(cita, 'completada')}
                           >
-                            {disabled && updatingId === cita.id ? 'Procesando...' : 'Completar'}
+                            {disabled && updatingId === cita.id ? '...' : 'Completar'}
                           </ActionButton>
 
                           <ActionButton
@@ -727,21 +836,16 @@ export default function AgendaPage() {
                             disabled={!puedeCancelar || disabled}
                             onClick={() => cambiarEstado(cita, 'cancelada')}
                           >
-                            {disabled && updatingId === cita.id ? 'Procesando...' : 'Cancelar'}
+                            {disabled && updatingId === cita.id ? '...' : 'Cancelar'}
                           </ActionButton>
 
                           <button
                             type="button"
                             disabled={disabled}
                             onClick={() => eliminarCitaCompleta(cita)}
-                            className="
-                              rounded-xl border border-red-500/25 bg-red-500/10
-                              px-3 py-1.5 text-xs font-medium text-red-300
-                              transition hover:bg-red-500/15
-                              disabled:cursor-not-allowed disabled:opacity-40
-                            "
+                            className="rounded-lg border border-red-500/20 bg-red-500/[0.07] px-3 py-1.5 text-[11px] font-medium text-red-300 transition hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-35"
                           >
-                            {deletingId === cita.id ? 'Eliminando...' : 'Eliminar'}
+                            {deletingId === cita.id ? '...' : 'Eliminar'}
                           </button>
                         </div>
                       </td>
@@ -752,7 +856,64 @@ export default function AgendaPage() {
             </tbody>
           </table>
         </div>
-      </Section>
+
+        {/* ── Paginación ── */}
+        {!loading && totalPaginas > 1 && (
+          <div className="flex items-center justify-between border-t border-white/[0.06] bg-white/[0.01] px-5 py-3.5">
+            <span className="text-xs text-white/35">
+              Mostrando {(pagina - 1) * ITEMS_POR_PAGINA + 1}–{Math.min(pagina * ITEMS_POR_PAGINA, citasFiltradas.length)} de {citasFiltradas.length}
+            </span>
+
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                disabled={pagina === 1}
+                onClick={() => setPagina((p) => p - 1)}
+                className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 transition hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                ← Anterior
+              </button>
+
+              {Array.from({ length: totalPaginas }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === totalPaginas || Math.abs(p - pagina) <= 1)
+                .reduce<(number | '...')[]>((acc, p, idx, arr) => {
+                  if (idx > 0 && typeof arr[idx - 1] === 'number' && (p as number) - (arr[idx - 1] as number) > 1) {
+                    acc.push('...')
+                  }
+                  acc.push(p)
+                  return acc
+                }, [])
+                .map((p, idx) =>
+                  p === '...' ? (
+                    <span key={`ellipsis-${idx}`} className="px-1.5 text-xs text-white/25">…</span>
+                  ) : (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setPagina(p as number)}
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                        pagina === p
+                          ? 'border-white/20 bg-white/[0.1] text-white'
+                          : 'border-white/10 bg-white/[0.03] text-white/50 hover:bg-white/[0.07]'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  )
+                )}
+
+              <button
+                type="button"
+                disabled={pagina === totalPaginas}
+                onClick={() => setPagina((p) => p + 1)}
+                className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 transition hover:bg-white/[0.07] disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                Siguiente →
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
