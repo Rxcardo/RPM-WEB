@@ -158,17 +158,7 @@ export default function EmpleadoLayout({ children }: { children: ReactNode }) {
 
       <div className="empleado-shell">
 
-        {/* Topbar con logo — fixed, no bloquea contenido */}
-        <header className="fixed inset-x-0 top-0 z-50 flex h-14 items-center justify-center px-4">
-          <Image
-            src="/logo-imprimir.png"
-            alt="RPM"
-            width={72}
-            height={28}
-            className="object-contain opacity-90"
-            priority
-          />
-        </header>
+      
 
         {/* Área scrollable */}
         <div className="empleado-scroll">
