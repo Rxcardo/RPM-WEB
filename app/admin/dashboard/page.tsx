@@ -133,6 +133,60 @@ function truncateText(value: string | null | undefined, max = 90) {
   return `${text.slice(0, max).trimEnd()}…`;
 }
 
+function onlyHour(value: string | null | undefined) {
+  return (value || "").slice(0, 5);
+}
+
+function normalizeTimeForDb(value: string) {
+  const clean = (value || "").trim();
+  if (!clean) return null;
+  return clean.length === 5 ? `${clean}:00` : clean;
+}
+
+function dateTimeMs(fecha: string, hora: string) {
+  return new Date(`${fecha}T${hora || "00:00"}`).getTime();
+}
+
+function getDurationMinutes(inicio: string | null | undefined, fin: string | null | undefined) {
+  const hi = onlyHour(inicio);
+  const hf = onlyHour(fin);
+  if (!hi || !hf) return 60;
+  const diff = dateTimeMs("2000-01-01", hf) - dateTimeMs("2000-01-01", hi);
+  const minutes = Math.round(diff / 60000);
+  return minutes > 0 ? minutes : 60;
+}
+
+function addMinutesToHour(hour: string, minutes: number) {
+  const base = new Date(`2000-01-01T${hour || "00:00"}`);
+  base.setMinutes(base.getMinutes() + minutes);
+  return `${String(base.getHours()).padStart(2, "0")}:${String(base.getMinutes()).padStart(2, "0")}`;
+}
+
+function isPlanOperativoFromRow(row: EntrenamientoPlanRow, hoy: string) {
+  const cp = firstOrNull(row.clientes_planes);
+  if (!cp) return false;
+  const estadoPlan = (cp.estado || "").toLowerCase();
+  if (estadoPlan !== "activo") return false;
+  if (cp.fecha_fin && cp.fecha_fin < hoy) return false;
+  return true;
+}
+
+function canReagendarSesion(row: EntrenamientoPlanRow) {
+  const asistenciaActual = (row.asistencia_estado || "pendiente").toLowerCase();
+  return (
+    asistenciaActual === "pendiente" ||
+    (asistenciaActual === "no_asistio_aviso" && row.reprogramable === true)
+  ) && (row.estado || "").toLowerCase() !== "completado";
+}
+
+function getBloqueKey(row: EntrenamientoPlanRow) {
+  return `${onlyHour(row.hora_inicio) || "—"}-${onlyHour(row.hora_fin) || "—"}`;
+}
+
+function getBloqueLabel(row: EntrenamientoPlanRow) {
+  return `${formatTime(row.hora_inicio)} – ${formatTime(row.hora_fin)}`;
+}
+
 // ─── Dot colours ──────────────────────────────────────────────────────────────
 
 function asistenciaPlanDot(estado: string | null | undefined) {
@@ -314,6 +368,11 @@ export default function DashboardPage() {
   const [openEmpleadoAsistenciaId, setOpenEmpleadoAsistenciaId] = useState<string | null>(null);
   const [reprogramandoId, setReprogramandoId] = useState<string | null>(null);
   const [reprogramacionDrafts, setReprogramacionDrafts] = useState<Record<string, ReprogramacionDraft>>({});
+  const [bloqueSesionSeleccionado, setBloqueSesionSeleccionado] = useState<string | null>(null);
+  const [sesionReagendar, setSesionReagendar] = useState<EntrenamientoPlanRow | null>(null);
+  const [reagendarForm, setReagendarForm] = useState<ReprogramacionDraft>({ fecha: "", hora_inicio: "", hora_fin: "", motivo: "" });
+  const [guardandoReagenda, setGuardandoReagenda] = useState(false);
+  const [errorReagenda, setErrorReagenda] = useState("");
 
   const [citasHoyPage, setCitasHoyPage] = useState(1);
   const [sesionesPlanPage, setSesionesPlanPage] = useState(1);
@@ -438,16 +497,64 @@ export default function DashboardPage() {
     return matchesSearch(filtroCitasHoy, [getCitaCliente(cita), getCitaEmpleado(cita), getCitaServicio(cita), cita.estado, getCitaHoraInicio(cita)]);
   }).sort((a, b) => String(getCitaHoraInicio(a) || "").localeCompare(String(getCitaHoraInicio(b) || ""))), [citas, asistenciaFilterFecha, filtroCitasHoy]);
 
-  const sesionesPlanHoyFiltradas = useMemo(() => entrenamientosPlan.filter((row) => {
+  const sesionesPlanBaseDia = useMemo(() => entrenamientosPlan.filter((row) => {
     if (row.fecha !== asistenciaFilterFecha) return false;
     if ((row.estado || "").toLowerCase() === "cancelado") return false;
-    const cp = firstOrNull(row.clientes_planes);
-    if (!cp || (cp.estado || "").toLowerCase() === "cancelado") return false;
-    const cliente = firstOrNull(row.clientes);
-    const empleado = firstOrNull(row.empleados);
-    const plan = firstOrNull(cp.planes);
-    return matchesSearch(filtroSesionesPlan, [cliente?.nombre, empleado?.nombre, plan?.nombre, row.asistencia_estado]);
-  }), [entrenamientosPlan, asistenciaFilterFecha, filtroSesionesPlan]);
+    if (!isPlanOperativoFromRow(row, hoy)) return false;
+    return true;
+  }).sort((a, b) => `${a.hora_inicio || ""}`.localeCompare(`${b.hora_inicio || ""}`)), [entrenamientosPlan, asistenciaFilterFecha, hoy]);
+
+  const sesionesPlanHoyFiltradas = useMemo(() => {
+    const q = normalizeSearch(filtroSesionesPlan);
+
+    // Sin búsqueda: se muestran solo las sesiones del día seleccionado.
+    if (!q) return sesionesPlanBaseDia;
+
+    // Con búsqueda: se ignora la fecha exacta y se busca la sesión pendiente más cercana
+    // de cada cliente con plan activo vigente. Esto cubre el caso: vino hoy, pero su sesión era mañana.
+    const candidatas = entrenamientosPlan
+      .filter((row) => {
+        if ((row.estado || "").toLowerCase() === "cancelado") return false;
+        if ((row.asistencia_estado || "pendiente") !== "pendiente") return false;
+        if (!row.fecha || row.fecha < hoy) return false;
+        if (!isPlanOperativoFromRow(row, hoy)) return false;
+
+        const cp = firstOrNull(row.clientes_planes);
+        const cliente = firstOrNull(row.clientes);
+        const empleado = firstOrNull(row.empleados);
+        const plan = firstOrNull(cp?.planes);
+        return matchesSearch(filtroSesionesPlan, [cliente?.nombre, empleado?.nombre, plan?.nombre, row.fecha, row.hora_inicio]);
+      })
+      .sort((a, b) => `${a.fecha || "9999-99-99"} ${a.hora_inicio || "99:99"}`.localeCompare(`${b.fecha || "9999-99-99"} ${b.hora_inicio || "99:99"}`));
+
+    const porCliente = new Map<string, EntrenamientoPlanRow>();
+    candidatas.forEach((row) => {
+      const key = row.cliente_id || firstOrNull(row.clientes)?.nombre || row.id;
+      if (!porCliente.has(key)) porCliente.set(key, row);
+    });
+
+    return Array.from(porCliente.values());
+  }, [entrenamientosPlan, sesionesPlanBaseDia, filtroSesionesPlan, hoy]);
+
+  const bloquesSesionesPlan = useMemo(() => {
+    const map = new Map<string, { key: string; label: string; sesiones: EntrenamientoPlanRow[] }>();
+    sesionesPlanBaseDia
+      .filter((row) => (row.asistencia_estado || "pendiente") === "pendiente")
+      .forEach((row) => {
+        const key = getBloqueKey(row);
+        if (!map.has(key)) map.set(key, { key, label: getBloqueLabel(row), sesiones: [] });
+        map.get(key)!.sesiones.push(row);
+      });
+
+    return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key));
+  }, [sesionesPlanBaseDia]);
+
+  const bloqueActivoSesiones = useMemo(() => {
+    if (!bloquesSesionesPlan.length) return null;
+    return bloquesSesionesPlan.find((b) => b.key === bloqueSesionSeleccionado) || bloquesSesionesPlan[0];
+  }, [bloquesSesionesPlan, bloqueSesionSeleccionado]);
+
+  const mostrandoBusquedaSesiones = normalizeSearch(filtroSesionesPlan).length > 0;
 
   const empleadosActivosNoAdmin = useMemo(() => empleados.filter((e) => {
     if (e.estado?.toLowerCase() !== "activo") return false;
@@ -564,6 +671,129 @@ export default function DashboardPage() {
     finally { setSavingEmpleadoAsistenciaId(null); }
   }
 
+  function abrirReagendarSesion(row: EntrenamientoPlanRow, usarHoy = false) {
+    const inicio = onlyHour(row.hora_inicio) || "08:00";
+    const duracion = getDurationMinutes(row.hora_inicio, row.hora_fin);
+    const fin = onlyHour(row.hora_fin) || addMinutesToHour(inicio, duracion);
+
+    setErrorReagenda("");
+    setSesionReagendar(row);
+    setReagendarForm({
+      fecha: usarHoy ? hoy : row.fecha || hoy,
+      hora_inicio: inicio,
+      hora_fin: fin,
+      motivo: usarHoy ? "Cliente asistió en una fecha distinta a su sesión programada." : "",
+    });
+  }
+
+  function cerrarReagendarSesion() {
+    if (guardandoReagenda) return;
+    setSesionReagendar(null);
+    setErrorReagenda("");
+  }
+
+  async function guardarReagendaSesion() {
+    if (!sesionReagendar) return;
+
+    const fecha = reagendarForm.fecha.trim();
+    const horaInicio = reagendarForm.hora_inicio.trim();
+    const horaFin = reagendarForm.hora_fin.trim();
+    const motivo = reagendarForm.motivo.trim();
+
+    if (!fecha) {
+      setErrorReagenda("Selecciona la nueva fecha.");
+      return;
+    }
+
+    if (!horaInicio || !horaFin) {
+      setErrorReagenda("Selecciona hora inicio y hora fin.");
+      return;
+    }
+
+    if (dateTimeMs(fecha, horaFin) <= dateTimeMs(fecha, horaInicio)) {
+      setErrorReagenda("La hora fin debe ser mayor a la hora inicio.");
+      return;
+    }
+
+    const cp = firstOrNull(sesionReagendar.clientes_planes);
+    const asistenciaActual = (sesionReagendar.asistencia_estado || "pendiente").toLowerCase();
+    const fechaFinPlan = cp?.fecha_fin || null;
+    const puedeExtenderVencimiento = asistenciaActual === "no_asistio_aviso";
+
+    if (fechaFinPlan && fecha > fechaFinPlan && !puedeExtenderVencimiento) {
+      setErrorReagenda(`Solo las sesiones en estado Avisó pueden reagendarse después del vencimiento del plan (${fechaFinPlan}).`);
+      return;
+    }
+
+    setGuardandoReagenda(true);
+    setErrorReagenda("");
+
+    const anteriorFecha = sesionReagendar.fecha || "sin fecha";
+    const anteriorInicio = onlyHour(sesionReagendar.hora_inicio) || "—";
+    const anteriorFin = onlyHour(sesionReagendar.hora_fin) || "—";
+    const notaReagenda = `Reagendada desde ${anteriorFecha} ${anteriorInicio}-${anteriorFin} hacia ${fecha} ${horaInicio}-${horaFin}${motivo ? `. Motivo: ${motivo}` : ""}`;
+
+    try {
+      let auditorId = empleadoActualId || await resolveEmpleadoActualId();
+      if (!empleadoActualId && auditorId) setEmpleadoActualId(auditorId);
+
+      const rpcRes = await supabase.rpc("reprogramar_entrenamiento_plan_seguro", {
+        p_entrenamiento_id: sesionReagendar.id,
+        p_nueva_fecha: fecha,
+        p_nueva_hora_inicio: normalizeTimeForDb(horaInicio),
+        p_nueva_hora_fin: normalizeTimeForDb(horaFin),
+        p_motivo: notaReagenda,
+        p_marcado_por: auditorId || null,
+      });
+
+      if (rpcRes.error) throw rpcRes.error;
+      const rpcData = rpcRes.data as { ok?: boolean; error?: string; extendio_plan?: boolean } | null;
+      if (rpcData && rpcData.ok === false) throw new Error(rpcData.error || "No se pudo reagendar la sesión.");
+
+      const updateRes = await supabase
+        .from("entrenamientos")
+        .select(`id,cliente_plan_id,cliente_id,empleado_id,recurso_id,fecha,hora_inicio,hora_fin,estado,asistencia_estado,aviso_previo,consume_sesion,reprogramable,motivo_asistencia,fecha_asistencia,reprogramado_de_entrenamiento_id,marcado_por,actualizado_por:marcado_por(id,nombre),clientes:cliente_id(nombre),empleados:empleado_id(nombre,rol),clientes_planes:cliente_plan_id(id,fecha_fin,estado,planes:plan_id(nombre))`)
+        .eq("id", sesionReagendar.id)
+        .single();
+
+      if (updateRes.error) throw updateRes.error;
+
+      const row: any = updateRes.data;
+      const normalizada: EntrenamientoPlanRow = {
+        ...row,
+        clientes: firstOrNull(row?.clientes),
+        empleados: firstOrNull(row?.empleados),
+        clientes_planes: firstOrNull(row?.clientes_planes)
+          ? {
+              ...firstOrNull(row?.clientes_planes),
+              planes: firstOrNull(firstOrNull(row?.clientes_planes)?.planes),
+            }
+          : null,
+      };
+
+      if (sesionReagendar.consume_sesion === true) {
+        setClientesPlanes((prev) => prev.map((p) => {
+          if (p.id !== sesionReagendar.cliente_plan_id) return p;
+          const total = Number(p.sesiones_totales || 0);
+          const usadas = Math.min(total, Math.max(0, Number(p.sesiones_usadas || 0) - 1));
+          return { ...p, sesiones_usadas: usadas };
+        }));
+      }
+
+      setEntrenamientosPlan((prev) => prev.map((r) => r.id === normalizada.id ? normalizada : r));
+      setCitas((prev) => prev.map((c) => c.id === normalizada.id ? { ...c, fecha, hora_inicio: normalizeTimeForDb(horaInicio) || horaInicio, hora_fin: normalizeTimeForDb(horaFin) || horaFin, estado: "programada", notas: notaReagenda } : c));
+
+      showAlert("success", "Listo", rpcData?.extendio_plan ? "Sesión reagendada y plan extendido." : "Sesión reagendada correctamente.");
+      setSesionReagendar(null);
+      setPanelOpen("sesiones");
+    } catch (err: any) {
+      setErrorReagenda(err?.message || "No se pudo reagendar la sesión.");
+      showAlert("error", "Error", err?.message || "No se pudo reagendar la sesión.");
+    } finally {
+      setGuardandoReagenda(false);
+    }
+  }
+
   async function loadPagosDetalle(desde = ingresosRangoDesde, hasta = ingresosRangoHasta) {
     if (loadingPagosDetalle) return;
     setLoadingPagosDetalle(true);
@@ -578,6 +808,86 @@ export default function DashboardPage() {
       if (desde === mesDesde && hasta === mesHasta) setPagos(rows.map((r) => ({ id: r.id, fecha: r.fecha, monto: r.monto, monto_equivalente_usd: r.monto_equivalente_usd, estado: r.estado })));
     } catch (err: any) { showAlert("error", "Error", err?.message); }
     finally { setLoadingPagosDetalle(false); }
+  }
+
+
+
+  function renderSesionPlanCard(row: EntrenamientoPlanRow, options?: { compact?: boolean; searchResult?: boolean }) {
+    const cliente = firstOrNull(row.clientes);
+    const empleado = firstOrNull(row.empleados);
+    const cp = firstOrNull(row.clientes_planes);
+    const plan = firstOrNull(cp?.planes);
+    const open = openSesionPlanId === row.id;
+    const puedeReagendar = canReagendarSesion(row);
+    const saving = savingAsistenciaId === row.id;
+
+    return (
+      <div key={row.id} className={`overflow-hidden rounded-xl border ${options?.searchResult ? "border-violet-400/15 bg-violet-400/[0.04]" : "border-white/[0.06] bg-white/[0.02]"}`}>
+        <RowItem
+          dot={asistenciaPlanDot(row.asistencia_estado)}
+          onClick={() => setOpenSesionPlanId(open ? null : row.id)}
+          left={
+            <div>
+              <p className="truncate text-sm font-medium text-white">{cliente?.nombre || "Cliente"}</p>
+              <p className="truncate text-[11px] text-white/40">
+                {options?.searchResult ? `${formatDate(row.fecha)} · ` : ""}{formatTime(row.hora_inicio)} · {asistenciaLabel(row.asistencia_estado)}
+              </p>
+            </div>
+          }
+          right={<span className="text-[10px] text-white/25">{open ? "−" : "+"}</span>}
+        />
+
+        {open && (
+          <div className="border-t border-white/[0.06] px-3 pb-3 pt-2">
+            <p className="mb-2 text-[11px] text-white/40">
+              {empleado?.nombre || "Sin personal"} · {roleLabel(empleado?.rol)} · <span className="text-violet-400/70">{plan?.nombre || "Plan"}</span>
+              {cp?.fecha_fin ? <span className="text-white/30"> · Vence {formatDate(cp.fecha_fin)}</span> : null}
+            </p>
+
+            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void marcarAsistenciaPlan(row.id, "asistio")}
+                className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2 py-1.5 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-400/15 disabled:opacity-50"
+              >
+                Asistió
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void marcarAsistenciaPlan(row.id, "no_asistio_aviso")}
+                className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-2 py-1.5 text-[11px] font-semibold text-amber-300 transition hover:bg-amber-400/15 disabled:opacity-50"
+              >
+                Avisó
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void marcarAsistenciaPlan(row.id, "no_asistio_sin_aviso")}
+                className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-2 py-1.5 text-[11px] font-semibold text-rose-300 transition hover:bg-rose-400/15 disabled:opacity-50"
+              >
+                Sin aviso
+              </button>
+              <button
+                type="button"
+                disabled={!puedeReagendar}
+                onClick={() => abrirReagendarSesion(row, true)}
+                className="rounded-lg border border-violet-400/20 bg-violet-400/10 px-2 py-1.5 text-[11px] font-semibold text-violet-200 transition hover:bg-violet-400/15 disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/30"
+              >
+                Reagendar
+              </button>
+            </div>
+
+            {options?.searchResult && row.cliente_id ? (
+              <Link href={`/admin/personas/clientes/${row.cliente_id}`} className="mt-2 inline-flex text-[11px] text-white/35 underline underline-offset-2 transition hover:text-white/65">
+                Ver cliente
+              </Link>
+            ) : null}
+          </div>
+        )}
+      </div>
+    );
   }
 
   // ─── Render ───────────────────────────────────────────────────────────────
@@ -783,70 +1093,57 @@ export default function DashboardPage() {
         {/* Col 2 — Sesiones plan */}
         <div>
           <SectionLabel>Sesiones de plan</SectionLabel>
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <div className="flex items-center gap-2 pb-1">
               <input
                 type="text"
                 value={filtroSesionesPlan}
-                onChange={(e) => { setFiltroSesionesPlan(e.target.value); setSesionesPlanPage(1); }}
-                placeholder="Buscar…"
+                onChange={(e) => { setFiltroSesionesPlan(e.target.value); setSesionesPlanPage(1); setBloqueSesionSeleccionado(null); }}
+                placeholder="Buscar cliente con plan activo…"
                 className="w-full rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-xs text-white outline-none placeholder:text-white/25 focus:border-white/15"
               />
-              <div className="flex shrink-0 gap-1.5 text-[11px]">
-                <span className="flex items-center gap-1 text-white/35"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" />{sesionesPlanHoyFiltradas.filter((x) => (x.asistencia_estado || "pendiente") === "pendiente").length}</span>
-                <span className="flex items-center gap-1 text-white/35"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />{sesionesPlanHoyFiltradas.filter((x) => x.asistencia_estado === "asistio").length}</span>
-              </div>
+              <GhostBtn onClick={() => setPanelOpen("sesiones")}>
+                {mostrandoBusquedaSesiones ? sesionesPlanHoyFiltradas.length : bloquesSesionesPlan.length} ver
+              </GhostBtn>
             </div>
 
-            {sesionesPlanHoyFiltradas.length === 0 ? (
-              <p className="py-3 text-center text-xs text-white/30">Sin sesiones</p>
-            ) : sesionesPage.map((row) => {
-              const cliente = firstOrNull(row.clientes);
-              const empleado = firstOrNull(row.empleados);
-              const cp = firstOrNull(row.clientes_planes);
-              const plan = firstOrNull(cp?.planes);
-              const open = openSesionPlanId === row.id;
-
-              return (
-                <div key={row.id} className="overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.02]">
-                  <RowItem
-                    dot={asistenciaPlanDot(row.asistencia_estado)}
-                    onClick={() => setOpenSesionPlanId(open ? null : row.id)}
-                    left={
-                      <div>
-                        <p className="truncate text-sm font-medium text-white">{cliente?.nombre || "Cliente"}</p>
-                        <p className="truncate text-[11px] text-white/40">{formatTime(row.hora_inicio)} · {asistenciaLabel(row.asistencia_estado)}</p>
-                      </div>
-                    }
-                    right={<span className="text-[10px] text-white/25">{open ? "−" : "+"}</span>}
-                  />
-                  {open && (
-                    <div className="border-t border-white/[0.06] px-3 pb-3 pt-2">
-                      <p className="mb-2 text-[11px] text-white/40">{empleado?.nombre} · {roleLabel(empleado?.rol)} · <span className="text-violet-400/70">{plan?.nombre}</span></p>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        {(["asistio", "no_asistio_aviso", "no_asistio_sin_aviso"] as const).map((estado) => {
-                          const labels = { asistio: "Asistió", no_asistio_aviso: "Avisó", no_asistio_sin_aviso: "Sin aviso" };
-                          const colors = { asistio: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/15", no_asistio_aviso: "border-amber-400/20 bg-amber-400/10 text-amber-300 hover:bg-amber-400/15", no_asistio_sin_aviso: "border-rose-400/20 bg-rose-400/10 text-rose-300 hover:bg-rose-400/15" };
-                          return (
-                            <button key={estado} type="button" disabled={savingAsistenciaId === row.id} onClick={() => void marcarAsistenciaPlan(row.id, estado)} className={`rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition disabled:opacity-50 ${colors[estado]}`}>
-                              {labels[estado]}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+            {mostrandoBusquedaSesiones ? (
+              <div className="space-y-1.5">
+                <p className="rounded-xl border border-violet-400/15 bg-violet-400/5 px-3 py-2 text-[11px] text-violet-200/80">
+                  Busca la sesión pendiente más cercana del cliente, aunque no sea de hoy.
+                </p>
+                {sesionesPlanHoyFiltradas.length === 0 ? (
+                  <p className="py-3 text-center text-xs text-white/30">Sin sesiones pendientes cercanas</p>
+                ) : sesionesPage.map((row) => renderSesionPlanCard(row, { searchResult: true }))}
+              </div>
+            ) : bloquesSesionesPlan.length === 0 ? (
+              <p className="py-3 text-center text-xs text-white/30">Sin bloques pendientes</p>
+            ) : (
+              <div className="space-y-2">
+                <div className="grid gap-2">
+                  {bloquesSesionesPlan.slice(0, 5).map((bloque) => {
+                    const activo = bloqueActivoSesiones?.key === bloque.key;
+                    return (
+                      <button key={bloque.key} type="button" onClick={() => setBloqueSesionSeleccionado(bloque.key)} className={`rounded-xl border px-3 py-2 text-left transition ${activo ? "border-amber-400/25 bg-amber-400/10" : "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"}`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-white">{bloque.label}</p>
+                            <p className="text-[11px] text-white/35">Bloque de entrenamiento</p>
+                          </div>
+                          <PillBadge color="amber">{bloque.sesiones.length} persona{bloque.sesiones.length !== 1 ? "s" : ""}</PillBadge>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
-              );
-            })}
 
-            {sesionesPlanHoyFiltradas.length > PAGE_SIZE && (
-              <div className="flex items-center justify-between pt-1">
-                <p className="text-[11px] text-white/25">{sesionesPlanPage}/{totalPagesSesiones}</p>
-                <div className="flex gap-1">
-                  <GhostBtn onClick={() => setSesionesPlanPage((p) => Math.max(p - 1, 1))} disabled={sesionesPlanPage <= 1}>←</GhostBtn>
-                  <GhostBtn onClick={() => setSesionesPlanPage((p) => Math.min(p + 1, totalPagesSesiones))} disabled={sesionesPlanPage >= totalPagesSesiones}>→</GhostBtn>
-                </div>
+                {bloqueActivoSesiones && (
+                  <div className="space-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-2">
+                    <p className="px-1 text-[11px] font-medium uppercase tracking-wider text-white/30">{bloqueActivoSesiones.label}</p>
+                    {bloqueActivoSesiones.sesiones.slice(0, 4).map((row) => renderSesionPlanCard(row, { compact: true }))}
+                    {bloqueActivoSesiones.sesiones.length > 4 && <p className="px-1 pt-1 text-[11px] text-white/30">+{bloqueActivoSesiones.sesiones.length - 4} más en este bloque. Abre “ver” para revisar todos.</p>}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -974,41 +1271,57 @@ export default function DashboardPage() {
       {/* Panel — Sesiones detalle */}
       <SlidePanel open={panelOpen === "sesiones"} onClose={() => setPanelOpen(null)} title="Sesiones de plan">
         <div className="space-y-3">
-          <input type="text" value={filtroSesionesPlan} onChange={(e) => setFiltroSesionesPlan(e.target.value)} placeholder="Buscar…" className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none placeholder:text-white/25 focus:border-white/15" />
+          <input
+            type="text"
+            value={filtroSesionesPlan}
+            onChange={(e) => { setFiltroSesionesPlan(e.target.value); setSesionesPlanPage(1); setBloqueSesionSeleccionado(null); }}
+            placeholder="Buscar cliente con plan activo…"
+            className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white outline-none placeholder:text-white/25 focus:border-white/15"
+          />
           <Divider />
-          {sesionesPlanHoyFiltradas.length === 0 ? (
-            <p className="py-4 text-center text-sm text-white/30">Sin sesiones</p>
-          ) : sesionesPlanHoyFiltradas.map((row) => {
-            const cliente = firstOrNull(row.clientes);
-            const empleado = firstOrNull(row.empleados);
-            const cp = firstOrNull(row.clientes_planes);
-            const plan = firstOrNull(cp?.planes);
-            const open = openSesionPlanId === row.id;
-            return (
-              <div key={row.id} className="overflow-hidden rounded-xl border border-white/[0.06]">
-                <button type="button" onClick={() => setOpenSesionPlanId(open ? null : row.id)} className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-white/[0.03]">
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${asistenciaPlanDot(row.asistencia_estado)}`} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-white">{cliente?.nombre}</p>
-                    <p className="text-[11px] text-white/40">{formatTime(row.hora_inicio)} · {plan?.nombre} · {asistenciaLabel(row.asistencia_estado)}</p>
+
+          {mostrandoBusquedaSesiones ? (
+            <div className="space-y-2">
+              <p className="rounded-xl border border-violet-400/15 bg-violet-400/5 px-3 py-2 text-[11px] text-violet-200/80">
+                Resultado: sesión pendiente más cercana del cliente. Desde aquí puedes marcar asistencia o reagendarla a hoy.
+              </p>
+              {sesionesPlanHoyFiltradas.length === 0 ? (
+                <p className="py-4 text-center text-sm text-white/30">Sin sesiones pendientes cercanas</p>
+              ) : sesionesPlanHoyFiltradas.map((row) => renderSesionPlanCard(row, { searchResult: true }))}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {bloquesSesionesPlan.length === 0 ? (
+                <p className="py-4 text-center text-sm text-white/30">Sin bloques pendientes para este día</p>
+              ) : (
+                <>
+                  <div className="grid gap-2">
+                    {bloquesSesionesPlan.map((bloque) => {
+                      const activo = bloqueActivoSesiones?.key === bloque.key;
+                      return (
+                        <button key={bloque.key} type="button" onClick={() => setBloqueSesionSeleccionado(bloque.key)} className={`rounded-xl border px-3 py-2 text-left transition ${activo ? "border-amber-400/25 bg-amber-400/10" : "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"}`}>
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-white">{bloque.label}</p>
+                              <p className="text-[11px] text-white/35">Pendientes del {formatDate(asistenciaFilterFecha)}</p>
+                            </div>
+                            <PillBadge color="amber">{bloque.sesiones.length} persona{bloque.sesiones.length !== 1 ? "s" : ""}</PillBadge>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
-                  <span className="text-[10px] text-white/25">{open ? "−" : "+"}</span>
-                </button>
-                {open && (
-                  <div className="border-t border-white/[0.06] px-3 pb-3 pt-2">
-                    <p className="mb-2 text-[11px] text-white/40">{empleado?.nombre} · {roleLabel(empleado?.rol)}</p>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {(["asistio", "no_asistio_aviso", "no_asistio_sin_aviso"] as const).map((estado) => {
-                        const labels = { asistio: "Asistió", no_asistio_aviso: "Avisó", no_asistio_sin_aviso: "Sin aviso" };
-                        const colors = { asistio: "border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/15", no_asistio_aviso: "border-amber-400/20 bg-amber-400/10 text-amber-300 hover:bg-amber-400/15", no_asistio_sin_aviso: "border-rose-400/20 bg-rose-400/10 text-rose-300 hover:bg-rose-400/15" };
-                        return <button key={estado} type="button" disabled={savingAsistenciaId === row.id} onClick={() => void marcarAsistenciaPlan(row.id, estado)} className={`rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition disabled:opacity-50 ${colors[estado]}`}>{labels[estado]}</button>;
-                      })}
+
+                  {bloqueActivoSesiones && (
+                    <div className="space-y-2 border-t border-white/[0.06] pt-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-widest text-white/30">Clientes en {bloqueActivoSesiones.label}</p>
+                      {bloqueActivoSesiones.sesiones.map((row) => renderSesionPlanCard(row))}
                     </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
       </SlidePanel>
 
@@ -1168,6 +1481,113 @@ export default function DashboardPage() {
           ))}
         </div>
       </SlidePanel>
+
+      {sesionReagendar ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0f1117] p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-lg font-semibold text-white">Reagendar sesión</p>
+                <p className="mt-1 text-sm text-white/50">
+                  {firstOrNull(sesionReagendar.clientes)?.nombre || "Cliente"} · {firstOrNull(firstOrNull(sesionReagendar.clientes_planes)?.planes)?.nombre || "Sesión del plan"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={cerrarReagendarSesion}
+                className="rounded-full border border-white/10 px-3 py-1 text-sm text-white/60 transition hover:bg-white/[0.06]"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm text-white/65">
+              <p>Actual: {formatDate(sesionReagendar.fecha)} · {formatTime(sesionReagendar.hora_inicio)} - {formatTime(sesionReagendar.hora_fin)}</p>
+              {firstOrNull(sesionReagendar.clientes_planes)?.fecha_fin ? (
+                <p className="mt-1 text-xs text-white/40">
+                  Vencimiento del plan: {firstOrNull(sesionReagendar.clientes_planes)?.fecha_fin}
+                </p>
+              ) : null}
+              {(sesionReagendar.asistencia_estado || "").toLowerCase() === "no_asistio_aviso" ? (
+                <p className="mt-1 text-xs text-violet-300">Si eliges una fecha mayor al vencimiento, el plan se extenderá automáticamente.</p>
+              ) : null}
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <label className="block">
+                <span className="text-xs font-medium uppercase tracking-wide text-white/45">Nueva fecha</span>
+                <input
+                  type="date"
+                  value={reagendarForm.fecha}
+                  onChange={(e) => setReagendarForm((prev) => ({ ...prev, fecha: e.target.value }))}
+                  className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-violet-400/40"
+                />
+              </label>
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium uppercase tracking-wide text-white/45">Hora inicio</span>
+                  <input
+                    type="time"
+                    value={reagendarForm.hora_inicio}
+                    onChange={(e) => {
+                      const nextInicio = e.target.value;
+                      const duracion = getDurationMinutes(sesionReagendar.hora_inicio, sesionReagendar.hora_fin);
+                      setReagendarForm((prev) => ({ ...prev, hora_inicio: nextInicio, hora_fin: addMinutesToHour(nextInicio, duracion) }));
+                    }}
+                    className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-violet-400/40"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-xs font-medium uppercase tracking-wide text-white/45">Hora fin</span>
+                  <input
+                    type="time"
+                    value={reagendarForm.hora_fin}
+                    onChange={(e) => setReagendarForm((prev) => ({ ...prev, hora_fin: e.target.value }))}
+                    className="mt-1 w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition focus:border-violet-400/40"
+                  />
+                </label>
+              </div>
+
+              <label className="block">
+                <span className="text-xs font-medium uppercase tracking-wide text-white/45">Motivo opcional</span>
+                <textarea
+                  value={reagendarForm.motivo}
+                  onChange={(e) => setReagendarForm((prev) => ({ ...prev, motivo: e.target.value }))}
+                  rows={3}
+                  placeholder="Ej: cliente vino hoy y se usa la sesión más cercana"
+                  className="mt-1 w-full resize-none rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-violet-400/40"
+                />
+              </label>
+            </div>
+
+            {errorReagenda ? (
+              <p className="mt-3 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-300">{errorReagenda}</p>
+            ) : null}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={cerrarReagendarSesion}
+                disabled={guardandoReagenda}
+                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-white/75 transition hover:bg-white/[0.06] disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={guardarReagendaSesion}
+                disabled={guardandoReagenda}
+                className="rounded-2xl border border-violet-400/20 bg-violet-400/15 px-4 py-2 text-sm font-semibold text-violet-100 transition hover:bg-violet-400/20 disabled:opacity-50"
+              >
+                {guardandoReagenda ? "Guardando..." : "Guardar cambio"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
 
     </div>
   );
