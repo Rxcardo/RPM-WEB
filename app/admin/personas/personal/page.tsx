@@ -284,16 +284,27 @@ function ComisionesPendientesBlock({ comisiones }: { comisiones: ComisionResumen
 
       {/* Cards de cada profesional */}
       <div className="grid gap-px bg-white/[0.04] sm:grid-cols-2 xl:grid-cols-4">
-        {comisiones.map((c) => (
-          <div key={c.empleado_id} className="bg-[#0b0f17] p-4">
-            <div className="mb-3 flex items-start justify-between gap-2">
-              <p className="truncate text-sm font-semibold text-white">{c.nombre}</p>
-              <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-white/35">
-                {c.cantidad} reg.
-              </span>
-            </div>
+        {comisiones.map((c) => {
+          const puedeAbrirPerfil = Boolean(c.empleado_id && !c.empleado_id.startsWith('sin-empleado-'))
+          const cardClassName = `
+            block bg-[#0b0f17] p-4 transition
+            ${puedeAbrirPerfil ? 'cursor-pointer hover:bg-[#101722] focus:outline-none focus:ring-2 focus:ring-amber-400/30' : ''}
+          `
+          const contenido = (
+            <>
+              <div className="mb-3 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">{c.nombre}</p>
+                  {puedeAbrirPerfil ? (
+                    <p className="mt-0.5 text-[10px] font-medium text-amber-300/80">Click para abrir perfil</p>
+                  ) : null}
+                </div>
+                <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-white/35">
+                  {c.cantidad} reg.
+                </span>
+              </div>
 
-            <div className="space-y-1.5 text-[11px]">
+              <div className="space-y-1.5 text-[11px]">
               <div className="flex justify-between">
                 <span className="text-white/35">Base USD</span>
                 <span className="text-white/55">{money(c.total_base_usd)}</span>
@@ -324,9 +335,29 @@ function ComisionesPendientesBlock({ comisiones }: { comisiones: ComisionResumen
                 <span className="text-white/35">RPM Bs</span>
                 <span className="text-white/50">{money(c.total_rpm_bs, 'VES')}</span>
               </div>
-            </div>
-          </div>
-        ))}
+              </div>
+            </>
+          )
+
+          if (!puedeAbrirPerfil) {
+            return (
+              <div key={c.empleado_id} className={cardClassName}>
+                {contenido}
+              </div>
+            )
+          }
+
+          return (
+            <Link
+              key={c.empleado_id}
+              href={`/admin/personas/personal/${c.empleado_id}`}
+              className={cardClassName}
+              title={`Abrir perfil de ${c.nombre}`}
+            >
+              {contenido}
+            </Link>
+          )
+        })}
       </div>
     </div>
   )
@@ -438,8 +469,8 @@ export default function PersonalPage() {
       })
 
       setComisiones(
-        Array.from(grouped.values()).sort(
-          (a, b) => b.total_profesional_usd - a.total_profesional_usd
+        Array.from(grouped.values()).sort((a, b) =>
+          a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base' })
         )
       )
     } catch (err) {
@@ -457,7 +488,7 @@ export default function PersonalPage() {
         supabase
           .from('empleados')
           .select(`id, nombre, cedula, telefono, email, rol, auth_user_id, estado, created_at, comision_plan_porcentaje, comision_cita_porcentaje`)
-          .order('created_at', { ascending: false }),
+          .order('nombre', { ascending: true }),
         supabase.from('citas').select('*'),
       ])
 
@@ -680,7 +711,9 @@ export default function PersonalPage() {
       const matchEstado =
         estadoFiltro === 'todos' || empleado.estado?.toLowerCase() === estadoFiltro.toLowerCase()
       return matchSearch && matchRol && matchEstado
-    })
+    }).sort((a, b) =>
+      a.empleado.nombre.localeCompare(b.empleado.nombre, 'es', { sensitivity: 'base' })
+    )
   }, [rows, search, rolFiltro, estadoFiltro])
 
   // ─── Render ───────────────────────────────────────────────────────────────

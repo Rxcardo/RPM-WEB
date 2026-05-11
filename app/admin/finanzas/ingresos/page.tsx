@@ -476,6 +476,7 @@ function IngresosPageContent() {
   const [destinoSaldo, setDestinoSaldo] = useState<DestinoSaldo>('credito')
   const [cuentaCobrarSeleccionadaId, setCuentaCobrarSeleccionadaId] = useState('')
   const [montoAbonoDeuda, setMontoAbonoDeuda] = useState('')
+  const [montoActualizarDeudaUSD, setMontoActualizarDeudaUSD] = useState('')
   const [montoManualUSD, setMontoManualUSD] = useState('')
 
   // ─── Derived (idéntico al original) ──────────────────────────────────────
@@ -496,6 +497,12 @@ function IngresosPageContent() {
   const clienteTieneDeuda = useMemo(() => cuentasPendientesCliente.some((c) => Number(c.saldo_usd || 0) > 0.01), [cuentasPendientesCliente])
   const empleadoTieneDeuda = useMemo(() => cuentasPendientesEmpleado.some((c) => Number(c.saldo_usd || 0) > 0.01), [cuentasPendientesEmpleado])
   const montoAbonoDeudaNumero = useMemo(() => r2(Number(montoAbonoDeuda || 0)), [montoAbonoDeuda])
+  const montoActualizarDeudaNumero = useMemo(() => r2(Number(montoActualizarDeudaUSD || 0)), [montoActualizarDeudaUSD])
+  const saldoBaseDeudaParaAbono = useMemo(() => {
+    const saldoActual = r2(Number(cuentaPendienteSeleccionada?.saldo_usd || 0))
+    return montoActualizarDeudaUSD.trim() !== '' ? montoActualizarDeudaNumero : saldoActual
+  }, [cuentaPendienteSeleccionada, montoActualizarDeudaUSD, montoActualizarDeudaNumero])
+  const restanteDeudaPreview = useMemo(() => r2(Math.max(0, saldoBaseDeudaParaAbono - montoAbonoDeudaNumero)), [saldoBaseDeudaParaAbono, montoAbonoDeudaNumero])
   const montoManualUSDNumero = useMemo(() => r2(Number(montoManualUSD || 0)), [montoManualUSD])
   const esRecargaSaldoCredito = tipoIngreso === 'saldo' && destinoSaldo === 'credito'
   const montoObjetivoPagoRapidoUsd = useMemo(() => {
@@ -526,9 +533,9 @@ function IngresosPageContent() {
   useEffect(() => { if (!ventaSinCliente && tipoConsumidor === 'empleado') void cargarEstadoCuentaEmpleado(empleadoId) }, [empleadoId, ventaSinCliente, tipoConsumidor])
   useEffect(() => { if (!clientePrefill || clientes.length === 0 || editingId) return; if (!clientes.some((c) => c.id === clientePrefill)) return; setClienteId(clientePrefill); setShowForm(true); if (tipoIngresoPrefill === 'saldo') { setTipoIngreso('saldo'); if (destinoPrefill === 'deuda') { setDestinoSaldo('deuda'); setConcepto('Abono a deuda') } else { setDestinoSaldo('credito'); setConcepto('Recarga de saldo a favor') } } }, [clientePrefill, tipoIngresoPrefill, destinoPrefill, clientes, editingId])
   useEffect(() => { if (!empleadoPrefill || empleados.length === 0 || editingId) return; if (!empleados.some((e) => e.id === empleadoPrefill)) return; setTipoConsumidor('empleado'); setEmpleadoId(empleadoPrefill); setShowForm(true); if (tipoIngresoPrefill === 'saldo') { setTipoIngreso('saldo'); if (destinoPrefill === 'deuda') { setDestinoSaldo('deuda'); setConcepto('Abono a deuda de empleado') } else { setDestinoSaldo('credito'); setConcepto('Recarga de saldo a favor de empleado') } } }, [empleadoPrefill, tipoIngresoPrefill, destinoPrefill, empleados, editingId])
-  useEffect(() => { const cuentasActivas = tipoConsumidor === 'empleado' ? cuentasPendientesEmpleado : cuentasPendientesCliente; if (cuentasActivas.length > 0) { if (cuentaPrefill && cuentasActivas.some((c) => c.id === cuentaPrefill)) { setCuentaCobrarSeleccionadaId(cuentaPrefill); return }; setCuentaCobrarSeleccionadaId((prev) => { if (prev && cuentasActivas.some((c) => c.id === prev)) return prev; return cuentasActivas[0].id }) } else { setCuentaCobrarSeleccionadaId(''); setMontoAbonoDeuda(''); if (destinoSaldo === 'deuda') setDestinoSaldo('credito') } }, [tipoConsumidor, cuentasPendientesCliente, cuentasPendientesEmpleado, cuentaPrefill, destinoSaldo])
+  useEffect(() => { const cuentasActivas = tipoConsumidor === 'empleado' ? cuentasPendientesEmpleado : cuentasPendientesCliente; if (cuentasActivas.length > 0) { if (cuentaPrefill && cuentasActivas.some((c) => c.id === cuentaPrefill)) { setCuentaCobrarSeleccionadaId(cuentaPrefill); return }; setCuentaCobrarSeleccionadaId((prev) => { if (prev && cuentasActivas.some((c) => c.id === prev)) return prev; return cuentasActivas[0].id }) } else { setCuentaCobrarSeleccionadaId(''); setMontoAbonoDeuda(''); setMontoActualizarDeudaUSD(''); if (destinoSaldo === 'deuda') setDestinoSaldo('credito') } }, [tipoConsumidor, cuentasPendientesCliente, cuentasPendientesEmpleado, cuentaPrefill, destinoSaldo])
   useEffect(() => { if (destinoSaldo === 'deuda' && cuentaPendienteSeleccionada) setConcepto(`Abono: ${cuentaPendienteSeleccionada.concepto}`) }, [destinoSaldo, cuentaCobrarSeleccionadaId])
-  useEffect(() => { if (destinoSaldo !== 'deuda') { setMontoAbonoDeuda(''); return }; if (!cuentaPendienteSeleccionada) { setMontoAbonoDeuda(''); return }; const saldo = r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0)); setMontoAbonoDeuda((prev) => { const prevNum = Number(prev || 0); if (!prev || prevNum <= 0 || prevNum > saldo) return saldo > 0 ? String(saldo) : ''; return String(r2(prevNum)) }) }, [destinoSaldo, cuentaPendienteSeleccionada])
+  useEffect(() => { if (destinoSaldo !== 'deuda') { setMontoAbonoDeuda(''); setMontoActualizarDeudaUSD(''); return }; if (!cuentaPendienteSeleccionada) { setMontoAbonoDeuda(''); setMontoActualizarDeudaUSD(''); return }; const saldo = r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0)); setMontoAbonoDeuda((prev) => { const prevNum = Number(prev || 0); if (!prev || prevNum <= 0 || prevNum > saldo) return saldo > 0 ? String(saldo) : ''; return String(r2(prevNum)) }); setMontoActualizarDeudaUSD('') }, [destinoSaldo, cuentaPendienteSeleccionada])
   useEffect(() => { setMetodoPagoUnicoId('') }, [monedaPagoUnico])
   useEffect(() => { if (tipoIngreso !== 'saldo' || destinoSaldo !== 'credito') setMontoManualUSD('') }, [tipoIngreso, destinoSaldo])
   useEffect(() => { if (tipoPago === 'mixto' && !editingId) { setPagoMixto1(pagoMixtoVacio('USD')); setPagoMixto2(pagoMixtoVacio('BS')) } }, [tipoPago, editingId])
@@ -682,19 +689,158 @@ function IngresosPageContent() {
     return data?.operacion_pago_id || null
   }
 
-  async function ajustarCuentaCobrarClienteSiAbonoSuperaSaldo(args: { cuenta: CuentaPendienteResumen; montoAbonoUsd: number }) {
-    const saldoActual = r2(Number(args.cuenta.saldo_usd || 0)); const montoAbonoUsd = r2(args.montoAbonoUsd); const diferencia = r2(montoAbonoUsd - saldoActual)
+  async function ajustarCuentaCobrarClienteParaAbono(args: { cuenta: CuentaPendienteResumen; montoAbonoUsd: number }) {
+    const saldoActual = r2(Number(args.cuenta.saldo_usd || 0))
+    const montoAbonoUsd = r2(args.montoAbonoUsd)
+    const diferencia = r2(montoAbonoUsd - saldoActual)
+
+    // Solo se ajusta ANTES cuando el pago real supera el saldo. Esto evita que el abono falle
+    // por diferencias de tasa/bolívares, pero no toca monto_pagado_usd para no duplicar el abono.
     if (diferencia <= 0.01) return
-    const totalActual = r2(Number(args.cuenta.monto_total_usd || 0)); const pagadoActual = r2(Number(args.cuenta.monto_pagado_usd || 0)); const nuevoTotal = r2(totalActual + diferencia); const nuevoSaldo = r2(Math.max(nuevoTotal - pagadoActual, 0))
-    const { error } = await supabase.from('cuentas_por_cobrar').update({ monto_total_usd: nuevoTotal, saldo_usd: nuevoSaldo, estado: nuevoSaldo <= 0.01 ? 'pagado' : (pagadoActual > 0 ? 'parcial' : 'pendiente'), notas: `Ajuste por pago en Bs.` }).eq('id', args.cuenta.id)
+
+    const totalActual = r2(Number(args.cuenta.monto_total_usd || 0))
+    const pagadoActual = r2(Number(args.cuenta.monto_pagado_usd || 0))
+    const nuevoTotal = r2(totalActual + diferencia)
+    const nuevoSaldo = r2(Math.max(nuevoTotal - pagadoActual, 0))
+
+    const { error } = await supabase
+      .from('cuentas_por_cobrar')
+      .update({
+        monto_total_usd: nuevoTotal,
+        saldo_usd: nuevoSaldo,
+        estado: nuevoSaldo <= 0.01 ? 'pagado' : pagadoActual > 0 ? 'parcial' : 'pendiente',
+        notas: 'Ajuste automático por pago superior a la deuda.',
+      })
+      .eq('id', args.cuenta.id)
+
     if (error) throw error
   }
 
-  async function ajustarCuentaCobrarEmpleadoSiAbonoSuperaSaldo(args: { cuenta: CuentaPendienteEmpleadoResumen; montoAbonoUsd: number }) {
-    const saldoActual = r2(Number(args.cuenta.saldo_usd || 0)); const montoAbonoUsd = r2(args.montoAbonoUsd); const diferencia = r2(montoAbonoUsd - saldoActual)
+  async function sincronizarCuentaCobrarClienteDesdeAbonos(cuentaId: string) {
+    const [{ data: cuenta, error: cuentaError }, { data: abonos, error: abonosError }] = await Promise.all([
+      supabase.from('cuentas_por_cobrar').select('id, monto_total_usd').eq('id', cuentaId).maybeSingle(),
+      supabase.from('abonos_cobranza').select('monto_usd').eq('cuenta_cobrar_id', cuentaId),
+    ])
+
+    if (cuentaError) throw cuentaError
+    if (abonosError) throw abonosError
+    if (!cuenta) return
+
+    const pagadoReal = r2((abonos || []).reduce((sum, row) => sum + Number(row.monto_usd || 0), 0))
+    const totalActual = r2(Number(cuenta.monto_total_usd || 0))
+    const totalFinal = r2(Math.max(totalActual, pagadoReal))
+    const saldoFinal = r2(Math.max(totalFinal - pagadoReal, 0))
+    const estadoFinal = saldoFinal <= 0.01 ? 'pagado' : pagadoReal > 0.01 ? 'parcial' : 'pendiente'
+
+    const { error } = await supabase
+      .from('cuentas_por_cobrar')
+      .update({
+        monto_total_usd: totalFinal,
+        monto_pagado_usd: pagadoReal,
+        saldo_usd: saldoFinal,
+        estado: estadoFinal,
+      })
+      .eq('id', cuentaId)
+
+    if (error) throw error
+  }
+
+
+  async function actualizarSaldoRealCuentaCliente(args: { cuenta: CuentaPendienteResumen; saldoRealUsd: number }) {
+    const saldoRealUsd = r2(args.saldoRealUsd)
+    if (saldoRealUsd < 0) throw new Error('El nuevo saldo de la deuda no puede ser negativo.')
+
+    const pagadoActual = r2(Number(args.cuenta.monto_pagado_usd || 0))
+    const nuevoTotal = r2(pagadoActual + saldoRealUsd)
+    const estadoFinal = saldoRealUsd <= 0.01 ? 'pagado' : pagadoActual > 0.01 ? 'parcial' : 'pendiente'
+
+    const { error } = await supabase
+      .from('cuentas_por_cobrar')
+      .update({
+        monto_total_usd: nuevoTotal,
+        saldo_usd: saldoRealUsd,
+        estado: estadoFinal,
+        notas: `Ajuste manual de deuda. Saldo actualizado a ${formatearMoneda(saldoRealUsd, 'USD')}.`,
+      })
+      .eq('id', args.cuenta.id)
+
+    if (error) throw error
+  }
+
+  async function actualizarSaldoRealCuentaEmpleado(args: { cuenta: CuentaPendienteEmpleadoResumen; saldoRealUsd: number }) {
+    const saldoRealUsd = r2(args.saldoRealUsd)
+    if (saldoRealUsd < 0) throw new Error('El nuevo saldo de la deuda no puede ser negativo.')
+
+    const pagadoActual = r2(Number(args.cuenta.monto_pagado_usd || 0))
+    const nuevoTotal = r2(pagadoActual + saldoRealUsd)
+    const estadoFinal = saldoRealUsd <= 0.01 ? 'pagado' : pagadoActual > 0.01 ? 'parcial' : 'pendiente'
+
+    const { error } = await supabase
+      .from('empleados_cuentas_por_cobrar')
+      .update({
+        monto_total_usd: nuevoTotal,
+        saldo_usd: saldoRealUsd,
+        estado: estadoFinal,
+        notas: `Ajuste manual de deuda. Saldo actualizado a ${formatearMoneda(saldoRealUsd, 'USD')}.`,
+      })
+      .eq('id', args.cuenta.id)
+
+    if (error) throw error
+  }
+
+  async function ajustarCuentaCobrarEmpleadoParaAbono(args: { cuenta: CuentaPendienteEmpleadoResumen; montoAbonoUsd: number }) {
+    const saldoActual = r2(Number(args.cuenta.saldo_usd || 0))
+    const montoAbonoUsd = r2(args.montoAbonoUsd)
+    const diferencia = r2(montoAbonoUsd - saldoActual)
+
+    // Solo se ajusta ANTES cuando el pago real supera el saldo. Esto evita que el abono falle
+    // por diferencias de tasa/bolívares, pero no toca monto_pagado_usd para no duplicar el abono.
     if (diferencia <= 0.01) return
-    const totalActual = r2(Number(args.cuenta.monto_total_usd || 0)); const pagadoActual = r2(Number(args.cuenta.monto_pagado_usd || 0)); const nuevoTotal = r2(totalActual + diferencia); const nuevoSaldo = r2(Math.max(nuevoTotal - pagadoActual, 0))
-    const { error } = await supabase.from('empleados_cuentas_por_cobrar').update({ monto_total_usd: nuevoTotal, saldo_usd: nuevoSaldo, estado: nuevoSaldo <= 0.01 ? 'pagado' : (pagadoActual > 0 ? 'parcial' : 'pendiente'), notas: `Ajuste por pago en Bs.` }).eq('id', args.cuenta.id)
+
+    const totalActual = r2(Number(args.cuenta.monto_total_usd || 0))
+    const pagadoActual = r2(Number(args.cuenta.monto_pagado_usd || 0))
+    const nuevoTotal = r2(totalActual + diferencia)
+    const nuevoSaldo = r2(Math.max(nuevoTotal - pagadoActual, 0))
+
+    const { error } = await supabase
+      .from('empleados_cuentas_por_cobrar')
+      .update({
+        monto_total_usd: nuevoTotal,
+        saldo_usd: nuevoSaldo,
+        estado: nuevoSaldo <= 0.01 ? 'pagado' : pagadoActual > 0 ? 'parcial' : 'pendiente',
+        notas: 'Ajuste automático por pago superior a la deuda.',
+      })
+      .eq('id', args.cuenta.id)
+
+    if (error) throw error
+  }
+
+  async function sincronizarCuentaCobrarEmpleadoDesdeAbonos(cuentaId: string) {
+    const [{ data: cuenta, error: cuentaError }, { data: abonos, error: abonosError }] = await Promise.all([
+      supabase.from('empleados_cuentas_por_cobrar').select('id, monto_total_usd').eq('id', cuentaId).maybeSingle(),
+      supabase.from('empleados_abonos_cobranza').select('monto_usd').eq('cuenta_cobrar_id', cuentaId),
+    ])
+
+    if (cuentaError) throw cuentaError
+    if (abonosError) throw abonosError
+    if (!cuenta) return
+
+    const pagadoReal = r2((abonos || []).reduce((sum, row) => sum + Number(row.monto_usd || 0), 0))
+    const totalActual = r2(Number(cuenta.monto_total_usd || 0))
+    const totalFinal = r2(Math.max(totalActual, pagadoReal))
+    const saldoFinal = r2(Math.max(totalFinal - pagadoReal, 0))
+    const estadoFinal = saldoFinal <= 0.01 ? 'pagado' : pagadoReal > 0.01 ? 'parcial' : 'pendiente'
+
+    const { error } = await supabase
+      .from('empleados_cuentas_por_cobrar')
+      .update({
+        monto_total_usd: totalFinal,
+        monto_pagado_usd: pagadoReal,
+        saldo_usd: saldoFinal,
+        estado: estadoFinal,
+      })
+      .eq('id', cuentaId)
+
     if (error) throw error
   }
 
@@ -722,14 +868,36 @@ function IngresosPageContent() {
     if (!ventaSinCliente && tipoConsumidor === 'empleado') {
       if (!empleadoId || !empleadoSeleccionado) { alert('Selecciona un empleado'); return }
       if (tipoIngreso === 'saldo' && destinoSaldo === 'deuda' && cuentaPendienteSeleccionada) {
-        if (montoAbonoDeudaNumero <= 0) { alert('El monto del abono debe ser mayor a 0'); return }
+        const ajusteManualActivo = montoActualizarDeudaUSD.trim() !== ''
         const saldoActual = r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))
-        if (montoAbonoDeudaNumero > saldoActual) { alert(`El abono no puede ser mayor al saldo pendiente (${formatearMoneda(saldoActual, 'USD')})`); return }
-        const errSaldo = validarPagoRapido(); if (errSaldo) { alert(errSaldo); return }
-        const montoRealAbonoUsd = r2(totalPagoRapidoRealUsd || montoAbonoDeudaNumero)
-        if (montoRealAbonoUsd <= 0) { alert('El pago real debe ser mayor a 0.'); return }
+        const saldoBaseParaAbono = ajusteManualActivo ? montoActualizarDeudaNumero : saldoActual
+
+        if (!ajusteManualActivo && montoAbonoDeudaNumero <= 0) { alert('El monto del abono debe ser mayor a 0'); return }
+        if (ajusteManualActivo && montoActualizarDeudaNumero < 0) { alert('El nuevo saldo de la deuda no puede ser negativo.'); return }
+        if (montoAbonoDeudaNumero < 0) { alert('El abono no puede ser negativo.'); return }
+        if (montoAbonoDeudaNumero > saldoBaseParaAbono) { alert(`El abono no puede ser mayor al saldo pendiente (${formatearMoneda(saldoBaseParaAbono, 'USD')})`); return }
+
+        let montoRealAbonoUsd = 0
+        if (montoAbonoDeudaNumero > 0) {
+          const errSaldo = validarPagoRapido(); if (errSaldo) { alert(errSaldo); return }
+          montoRealAbonoUsd = r2(totalPagoRapidoRealUsd || montoAbonoDeudaNumero)
+          if (montoRealAbonoUsd <= 0) { alert('El pago real debe ser mayor a 0.'); return }
+          if (montoRealAbonoUsd > saldoBaseParaAbono) { alert(`El pago real no puede ser mayor al saldo pendiente (${formatearMoneda(saldoBaseParaAbono, 'USD')})`); return }
+        }
+
         setSaving(true)
-        try { await ajustarCuentaCobrarEmpleadoSiAbonoSuperaSaldo({ cuenta: cuentaPendienteSeleccionada as CuentaPendienteEmpleadoResumen, montoAbonoUsd: montoRealAbonoUsd }); await registrarAbonoDeudaEmpleado({ cuentaCobrarId: cuentaPendienteSeleccionada.id, empleadoId: empleadoSeleccionado.id, montoUsd: montoRealAbonoUsd, notas: notas.trim() || null }); alert(`✅ Abono de empleado aplicado por ${formatearMoneda(montoRealAbonoUsd, 'USD')}`); resetForm(); await cargarDatos(); await cargarEstadoCuentaEmpleado(empleadoSeleccionado.id) } catch (err: any) { alert('Error: ' + (err.message || 'No se pudo guardar')) } finally { setSaving(false) }
+        try {
+          if (ajusteManualActivo) await actualizarSaldoRealCuentaEmpleado({ cuenta: cuentaPendienteSeleccionada as CuentaPendienteEmpleadoResumen, saldoRealUsd: saldoBaseParaAbono })
+          else await ajustarCuentaCobrarEmpleadoParaAbono({ cuenta: cuentaPendienteSeleccionada as CuentaPendienteEmpleadoResumen, montoAbonoUsd: montoRealAbonoUsd })
+
+          if (montoRealAbonoUsd > 0) {
+            await registrarAbonoDeudaEmpleado({ cuentaCobrarId: cuentaPendienteSeleccionada.id, empleadoId: empleadoSeleccionado.id, montoUsd: montoRealAbonoUsd, notas: notas.trim() || null })
+            await sincronizarCuentaCobrarEmpleadoDesdeAbonos(cuentaPendienteSeleccionada.id)
+          }
+
+          alert(montoRealAbonoUsd > 0 ? `✅ Abono de empleado aplicado por ${formatearMoneda(montoRealAbonoUsd, 'USD')}` : `✅ Deuda de empleado actualizada a ${formatearMoneda(saldoBaseParaAbono, 'USD')}`)
+          resetForm(); await cargarDatos(); await cargarEstadoCuentaEmpleado(empleadoSeleccionado.id)
+        } catch (err: any) { alert('Error: ' + (err.message || 'No se pudo guardar')) } finally { setSaving(false) }
         return
       }
       if (tipoIngreso === 'saldo') {
@@ -761,14 +929,36 @@ function IngresosPageContent() {
     if (!clienteId) { alert('Selecciona un cliente'); return }
     if (!clienteSeleccionado) { alert('Cliente inválido'); return }
     if (tipoIngreso === 'saldo' && destinoSaldo === 'deuda' && cuentaPendienteSeleccionada) {
-      if (montoAbonoDeudaNumero <= 0) { alert('El monto del abono debe ser mayor a 0'); return }
+      const ajusteManualActivo = montoActualizarDeudaUSD.trim() !== ''
       const saldoActual = r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))
-      if (montoAbonoDeudaNumero > saldoActual) { alert(`El abono no puede ser mayor al saldo pendiente (${formatearMoneda(saldoActual, 'USD')})`); return }
-      const errSaldo = validarPagoRapido(); if (errSaldo) { alert(errSaldo); return }
-      const montoRealAbonoUsd = r2(totalPagoRapidoRealUsd || montoAbonoDeudaNumero)
-      if (montoRealAbonoUsd <= 0) { alert('El pago real debe ser mayor a 0.'); return }
+      const saldoBaseParaAbono = ajusteManualActivo ? montoActualizarDeudaNumero : saldoActual
+
+      if (!ajusteManualActivo && montoAbonoDeudaNumero <= 0) { alert('El monto del abono debe ser mayor a 0'); return }
+      if (ajusteManualActivo && montoActualizarDeudaNumero < 0) { alert('El nuevo saldo de la deuda no puede ser negativo.'); return }
+      if (montoAbonoDeudaNumero < 0) { alert('El abono no puede ser negativo.'); return }
+      if (montoAbonoDeudaNumero > saldoBaseParaAbono) { alert(`El abono no puede ser mayor al saldo pendiente (${formatearMoneda(saldoBaseParaAbono, 'USD')})`); return }
+
+      let montoRealAbonoUsd = 0
+      if (montoAbonoDeudaNumero > 0) {
+        const errSaldo = validarPagoRapido(); if (errSaldo) { alert(errSaldo); return }
+        montoRealAbonoUsd = r2(totalPagoRapidoRealUsd || montoAbonoDeudaNumero)
+        if (montoRealAbonoUsd <= 0) { alert('El pago real debe ser mayor a 0.'); return }
+        if (montoRealAbonoUsd > saldoBaseParaAbono) { alert(`El pago real no puede ser mayor al saldo pendiente (${formatearMoneda(saldoBaseParaAbono, 'USD')})`); return }
+      }
+
       setSaving(true)
-      try { await ajustarCuentaCobrarClienteSiAbonoSuperaSaldo({ cuenta: cuentaPendienteSeleccionada as CuentaPendienteResumen, montoAbonoUsd: montoRealAbonoUsd }); await registrarPagoMixtoDeuda({ cuentaCobrarId: cuentaPendienteSeleccionada.id, fecha, notasGenerales: notas.trim() || null, pagos: buildPagosPayloadRapido() }); alert(`✅ Abono aplicado por ${formatearMoneda(montoRealAbonoUsd, 'USD')}`); resetForm(); await cargarDatos(); await cargarEstadoCuentaCliente(clienteSeleccionado.id) } catch (err: any) { alert('Error: ' + (err.message || 'No se pudo guardar')) } finally { setSaving(false) }
+      try {
+        if (ajusteManualActivo) await actualizarSaldoRealCuentaCliente({ cuenta: cuentaPendienteSeleccionada as CuentaPendienteResumen, saldoRealUsd: saldoBaseParaAbono })
+        else await ajustarCuentaCobrarClienteParaAbono({ cuenta: cuentaPendienteSeleccionada as CuentaPendienteResumen, montoAbonoUsd: montoRealAbonoUsd })
+
+        if (montoRealAbonoUsd > 0) {
+          await registrarPagoMixtoDeuda({ cuentaCobrarId: cuentaPendienteSeleccionada.id, fecha, notasGenerales: notas.trim() || null, pagos: buildPagosPayloadRapido() })
+          await sincronizarCuentaCobrarClienteDesdeAbonos(cuentaPendienteSeleccionada.id)
+        }
+
+        alert(montoRealAbonoUsd > 0 ? `✅ Abono aplicado por ${formatearMoneda(montoRealAbonoUsd, 'USD')}` : `✅ Deuda actualizada a ${formatearMoneda(saldoBaseParaAbono, 'USD')}`)
+        resetForm(); await cargarDatos(); await cargarEstadoCuentaCliente(clienteSeleccionado.id)
+      } catch (err: any) { alert('Error: ' + (err.message || 'No se pudo guardar')) } finally { setSaving(false) }
       return
     }
     if (tipoIngreso === 'saldo') {
@@ -817,7 +1007,7 @@ function IngresosPageContent() {
     setCantidad(1); setProductosVenta([nuevoProductoVentaItem()]); setConcepto(''); setNotas(''); setFecha(new Date().toISOString().slice(0, 10)); setVentaSinCliente(false)
     setPagoConDeudaState(pagoConDeudaInitial()); setTipoPago('unico'); setMonedaPagoUnico('USD'); setMetodoPagoUnicoId(''); setReferenciaPagoUnico(''); setNotasPagoUnico(''); setTasaPagoUnico(null); setMontoPagoUnicoBs(null)
     setPagoMixto1(pagoMixtoVacio('USD')); setPagoMixto2(pagoMixtoVacio('BS')); setEditingId(null); setEditingOperacionId(null)
-    setCuentaCobrarSeleccionadaId(''); setMontoAbonoDeuda(''); setMontoManualUSD(''); setDestinoSaldo('credito'); setShowForm(false)
+    setCuentaCobrarSeleccionadaId(''); setMontoAbonoDeuda(''); setMontoActualizarDeudaUSD(''); setMontoManualUSD(''); setDestinoSaldo('credito'); setShowForm(false)
   }
 
   function startEdit(operacion: PagoOperacion) {
@@ -1024,7 +1214,7 @@ function IngresosPageContent() {
                           />
                           {destinoSaldo === 'deuda' && cuentasPendientesCliente.length > 0 && (
                             <>
-                              <SelectorDeuda cuentas={cuentasPendientesCliente} seleccionadaId={cuentaCobrarSeleccionadaId} onSeleccionar={(id) => { setCuentaCobrarSeleccionadaId(id); const cuenta = cuentasPendientesCliente.find((c) => c.id === id); if (cuenta) { setConcepto(`Abono: ${cuenta.concepto}`); setMontoAbonoDeuda(String(r2(Number(cuenta.saldo_usd || 0)))) } }} />
+                              <SelectorDeuda cuentas={cuentasPendientesCliente} seleccionadaId={cuentaCobrarSeleccionadaId} onSeleccionar={(id) => { setCuentaCobrarSeleccionadaId(id); const cuenta = cuentasPendientesCliente.find((c) => c.id === id); if (cuenta) { setConcepto(`Abono: ${cuenta.concepto}`); setMontoAbonoDeuda(String(r2(Number(cuenta.saldo_usd || 0)))); setMontoActualizarDeudaUSD('') } }} />
                               {cuentaPendienteSeleccionada && (
                                 <div className="rounded-xl border border-violet-400/15 bg-violet-500/[0.05] p-3">
                                   <div className="mb-2 flex items-center justify-between">
@@ -1032,14 +1222,30 @@ function IngresosPageContent() {
                                     <button type="button" onClick={() => setMontoAbonoDeuda(String(r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))))} className={ghostBtn}>Saldo completo</button>
                                   </div>
                                   <div className="grid grid-cols-2 gap-2">
-                                    <div><label className={labelCls}>Abono USD</label><input type="number" min={0} step="0.01" value={montoAbonoDeuda} onChange={(e) => setMontoAbonoDeuda(e.target.value)} className={inputCls} placeholder="0.00" /></div>
-                                    <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
-                                      <p className="text-[9px] text-white/30">Pendiente</p>
-                                      <p className="mt-0.5 text-xs font-bold text-white">{formatearMoneda(Number(cuentaPendienteSeleccionada.saldo_usd || 0), 'USD')}</p>
-                                      <p className="mt-1 text-[9px] text-white/30">Restante</p>
-                                      <p className="text-xs font-bold text-amber-300">{formatearMoneda(Math.max(0, r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0) - montoAbonoDeudaNumero)), 'USD')}</p>
+                                    <div>
+                                      <label className={labelCls}>Abono USD</label>
+                                      <input type="number" min={0} step="0.01" value={montoAbonoDeuda} onChange={(e) => setMontoAbonoDeuda(e.target.value)} className={inputCls} placeholder="Dinero recibido" />
+                                    </div>
+                                    <div>
+                                      <label className={labelCls}>Actualizar deuda a USD</label>
+                                      <input type="number" min={0} step="0.01" value={montoActualizarDeudaUSD} onChange={(e) => { const saldoActual = String(r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))); setMontoActualizarDeudaUSD(e.target.value); if (montoAbonoDeuda === saldoActual) setMontoAbonoDeuda('') }} className={inputCls} placeholder={String(r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0)))} />
                                     </div>
                                   </div>
+                                  <div className="mt-2 grid grid-cols-3 gap-2">
+                                    <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
+                                      <p className="text-[9px] text-white/30">Pendiente actual</p>
+                                      <p className="mt-0.5 text-xs font-bold text-white">{formatearMoneda(Number(cuentaPendienteSeleccionada.saldo_usd || 0), 'USD')}</p>
+                                    </div>
+                                    <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
+                                      <p className="text-[9px] text-white/30">Base ajustada</p>
+                                      <p className="mt-0.5 text-xs font-bold text-violet-200">{formatearMoneda(saldoBaseDeudaParaAbono, 'USD')}</p>
+                                    </div>
+                                    <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
+                                      <p className="text-[9px] text-white/30">Restante final</p>
+                                      <p className="mt-0.5 text-xs font-bold text-amber-300">{formatearMoneda(restanteDeudaPreview, 'USD')}</p>
+                                    </div>
+                                  </div>
+                                  <p className="mt-2 text-[10px] text-white/35">Usa “Actualizar deuda a USD” solo si el saldo real cambió. Ej: deuda 130 → actualizar a 120, sin registrar eso como pago.</p>
                                 </div>
                               )}
                             </>
@@ -1097,14 +1303,37 @@ function IngresosPageContent() {
                           />
                           {destinoSaldo === 'deuda' && cuentasPendientesEmpleado.length > 0 && (
                             <>
-                              <SelectorDeuda cuentas={cuentasPendientesEmpleado as any} seleccionadaId={cuentaCobrarSeleccionadaId} onSeleccionar={(id) => { setCuentaCobrarSeleccionadaId(id); const cuenta = cuentasPendientesEmpleado.find((c) => c.id === id); if (cuenta) { setConcepto(`Abono empleado: ${cuenta.concepto}`); setMontoAbonoDeuda(String(r2(Number(cuenta.saldo_usd || 0)))) } }} />
+                              <SelectorDeuda cuentas={cuentasPendientesEmpleado as any} seleccionadaId={cuentaCobrarSeleccionadaId} onSeleccionar={(id) => { setCuentaCobrarSeleccionadaId(id); const cuenta = cuentasPendientesEmpleado.find((c) => c.id === id); if (cuenta) { setConcepto(`Abono empleado: ${cuenta.concepto}`); setMontoAbonoDeuda(String(r2(Number(cuenta.saldo_usd || 0)))); setMontoActualizarDeudaUSD('') } }} />
                               {cuentaPendienteSeleccionada && (
                                 <div className="rounded-xl border border-violet-400/15 bg-violet-500/[0.05] p-3">
                                   <div className="mb-2 flex items-center justify-between">
                                     <p className="text-xs font-medium text-white">Monto a abonar</p>
                                     <button type="button" onClick={() => setMontoAbonoDeuda(String(r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))))} className={ghostBtn}>Saldo completo</button>
                                   </div>
-                                  <input type="number" min={0} step="0.01" value={montoAbonoDeuda} onChange={(e) => setMontoAbonoDeuda(e.target.value)} className={inputCls} placeholder="0.00" />
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                      <label className={labelCls}>Abono USD</label>
+                                      <input type="number" min={0} step="0.01" value={montoAbonoDeuda} onChange={(e) => setMontoAbonoDeuda(e.target.value)} className={inputCls} placeholder="Dinero recibido" />
+                                    </div>
+                                    <div>
+                                      <label className={labelCls}>Actualizar deuda a USD</label>
+                                      <input type="number" min={0} step="0.01" value={montoActualizarDeudaUSD} onChange={(e) => { const saldoActual = String(r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0))); setMontoActualizarDeudaUSD(e.target.value); if (montoAbonoDeuda === saldoActual) setMontoAbonoDeuda('') }} className={inputCls} placeholder={String(r2(Number(cuentaPendienteSeleccionada.saldo_usd || 0)))} />
+                                    </div>
+                                  </div>
+                                  <div className="mt-2 grid grid-cols-3 gap-2">
+                                    <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
+                                      <p className="text-[9px] text-white/30">Pendiente actual</p>
+                                      <p className="mt-0.5 text-xs font-bold text-white">{formatearMoneda(Number(cuentaPendienteSeleccionada.saldo_usd || 0), 'USD')}</p>
+                                    </div>
+                                    <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
+                                      <p className="text-[9px] text-white/30">Base ajustada</p>
+                                      <p className="mt-0.5 text-xs font-bold text-violet-200">{formatearMoneda(saldoBaseDeudaParaAbono, 'USD')}</p>
+                                    </div>
+                                    <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
+                                      <p className="text-[9px] text-white/30">Restante final</p>
+                                      <p className="mt-0.5 text-xs font-bold text-amber-300">{formatearMoneda(restanteDeudaPreview, 'USD')}</p>
+                                    </div>
+                                  </div>
                                 </div>
                               )}
                             </>

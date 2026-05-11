@@ -15,7 +15,6 @@ import {
 type Pago = { id: string; fecha: string; concepto: string; categoria: string; monto: number; estado: string; tipo_origen: string; created_at?: string; moneda_pago: string | null; monto_equivalente_usd: number | null; monto_equivalente_bs: number | null; clientes: { nombre: string } | null; metodo_pago_v2?: { id?: string | null; nombre: string; moneda?: string | null; tipo?: string | null; cartera?: { nombre: string; codigo: string; moneda?: string | null } | null } | null };
 type Egreso = { id: string; fecha: string; concepto: string; categoria: string; monto: number; estado: string; proveedor: string | null; created_at?: string; moneda: string | null; monto_equivalente_usd: number | null; monto_equivalente_bs: number | null; empleado_id: string | null; empleados?: { nombre: string } | null; metodo_pago_v2?: { id?: string | null; nombre: string; moneda?: string | null; tipo?: string | null; cartera?: { nombre: string; codigo: string; moneda?: string | null } | null } | null };
 type MetodoSubcartera = { id: string; metodo_nombre: string; metodo_codigo: string; tipo: string | null; moneda: string; saldo_actual: number | null; banco: string | null; numero_cuenta: string | null; activo: boolean | null; cartera_id: string; cartera_nombre: string; cartera_codigo: string; cartera_color: string | null; cartera_icono: string | null };
-type ComisionResumen = { empleado_id: string; nombre: string; total_base_usd: number; total_base_bs: number; total_profesional_usd: number; total_profesional_bs: number; total_rpm_usd: number; total_rpm_bs: number; cantidad: number };
 type Movimiento = { id: string; fecha: string; tipo: "ingreso" | "egreso"; concepto: string; categoria: string; tercero: string; metodo_id: string; metodo: string; cartera: string; cartera_codigo: string; moneda_metodo: string; estado: string; moneda_origen: string; monto_usd: number; monto_bs: number; created_at?: string };
 type PagoMetodoCambio = { id: string; pago_id: string; metodo_anterior_id: string | null; metodo_nuevo_id: string | null; metodo_anterior_nombre: string | null; metodo_nuevo_nombre: string | null; actor_email: string | null; actor_id: string | null; motivo: string | null; created_at: string; };
 type CajaChicaModo = "cargar" | "gasto";
@@ -479,7 +478,7 @@ function SubcarteraCard({ item, moneda, open, onToggle, movimientos: movs, resum
 
 function PanelMovimientosCard({ open, resumen, moneda, onClose }: {
   open: boolean;
-  resumen: { title: string; description: string; movimientos: Movimiento[]; totalIngresos: number; totalEgresos: number; totalComisiones: number; neto: number };
+  resumen: { title: string; description: string; movimientos: Movimiento[]; totalIngresos: number; totalEgresos: number; neto: number };
   moneda: "USD"|"BS";
   onClose: () => void;
 }) {
@@ -514,12 +513,6 @@ function PanelMovimientosCard({ open, resumen, moneda, onClose }: {
               <p className="text-[9px] uppercase tracking-widest text-rose-300/60">Egresos</p>
               <p className="mt-1 text-sm font-bold tabular-nums text-rose-300">{money(resumen.totalEgresos, currency)}</p>
             </div>
-            {resumen.totalComisiones > 0 && (
-              <div className="rounded-xl border border-amber-400/15 bg-amber-400/[0.05] px-3 py-2">
-                <p className="text-[9px] uppercase tracking-widest text-amber-300/60">Comisiones</p>
-                <p className="mt-1 text-sm font-bold tabular-nums text-amber-300">{money(resumen.totalComisiones, currency)}</p>
-              </div>
-            )}
             <div className="rounded-xl border border-violet-400/15 bg-violet-400/[0.05] px-3 py-2">
               <p className="text-[9px] uppercase tracking-widest text-violet-300/60">Neto</p>
               <p className={`mt-1 text-sm font-bold tabular-nums ${resumen.neto >= 0 ? "text-violet-300" : "text-rose-300"}`}>{money(resumen.neto, currency)}</p>
@@ -576,7 +569,6 @@ export default function FinanzasResumenPage() {
   const [pagos, setPagos] = useState<Pago[]>([]);
   const [egresos, setEgresos] = useState<Egreso[]>([]);
   const [subcarteras, setSubcarteras] = useState<MetodoSubcartera[]>([]);
-  const [comisiones, setComisiones] = useState<ComisionResumen[]>([]);
   const [metodoCambios, setMetodoCambios] = useState<PagoMetodoCambio[]>([]);
   const [editingMovimiento, setEditingMovimiento] = useState<Movimiento | null>(null);
   const [editMetodoId, setEditMetodoId] = useState("");
@@ -607,25 +599,17 @@ export default function FinanzasResumenPage() {
   async function loadFinanzas() {
     try {
       setLoading(true); setError("");
-      const [pagosRes, egresosRes, comisionesRes, subcarterasRes, cambiosRes] = await Promise.all([
+      const [pagosRes, egresosRes, subcarterasRes, cambiosRes] = await Promise.all([
         supabase.from("pagos").select(`id,fecha,concepto,categoria,monto,estado,tipo_origen,created_at,moneda_pago,monto_equivalente_usd,monto_equivalente_bs,clientes:cliente_id(nombre),metodo_pago_v2:metodo_pago_v2_id(id,nombre,moneda,tipo,cartera:cartera_id(nombre,codigo,moneda))`).gte("fecha",fechaInicio).lte("fecha",fechaFin).order("fecha",{ascending:false}).order("created_at",{ascending:false}),
         supabase.from("egresos").select(`id,fecha,concepto,categoria,monto,estado,proveedor,created_at,moneda,monto_equivalente_usd,monto_equivalente_bs,empleado_id,empleados:empleado_id(nombre),metodo_pago_v2:metodo_pago_v2_id(id,nombre,moneda,tipo,cartera:cartera_id(nombre,codigo,moneda))`).gte("fecha",fechaInicio).lte("fecha",fechaFin).order("fecha",{ascending:false}).order("created_at",{ascending:false}),
-        supabase.from("comisiones_detalle").select(`empleado_id,monto_base_usd,monto_base_bs,monto_profesional_usd,monto_profesional_bs,monto_rpm_usd,monto_rpm_bs,empleados:empleado_id(nombre)`).gte("fecha",fechaInicio).lte("fecha",fechaFin).eq("estado","pendiente"),
         supabase.from("v_metodos_pago_completo").select(`id,metodo_nombre,metodo_codigo,tipo,moneda,saldo_actual,banco,numero_cuenta,activo,cartera_id,cartera_nombre,cartera_codigo,cartera_color,cartera_icono`).order("moneda",{ascending:true}).order("cartera_nombre",{ascending:true}).order("metodo_nombre",{ascending:true}),
         supabase.from("pagos_metodo_cambios").select(`id,pago_id,metodo_anterior_id,metodo_nuevo_id,metodo_anterior_nombre,metodo_nuevo_nombre,actor_email,actor_id,motivo,created_at`).order("created_at",{ascending:false}).limit(300),
       ]);
-      if (pagosRes.error) throw pagosRes.error; if (egresosRes.error) throw egresosRes.error; if (comisionesRes.error) throw comisionesRes.error; if (subcarterasRes.error) throw subcarterasRes.error;
+      if (pagosRes.error) throw pagosRes.error; if (egresosRes.error) throw egresosRes.error; if (subcarterasRes.error) throw subcarterasRes.error;
       setPagos(((pagosRes.data||[]) as any[]).map(normalizePago));
       setEgresos(((egresosRes.data||[]) as any[]).map(normalizeEgreso));
       setSubcarteras((subcarterasRes.data||[]) as MetodoSubcartera[]);
       setMetodoCambios(cambiosRes.error ? [] : ((cambiosRes.data||[]) as PagoMetodoCambio[]));
-      const grouped = new Map<string,ComisionResumen>();
-      ((comisionesRes.data||[]) as any[]).forEach((c:any) => {
-        const nombre = firstOrNull(c?.empleados)?.nombre||"Sin nombre"; const key=String(c.empleado_id); const ex=grouped.get(key);
-        if(ex){ex.total_base_usd+=Number(c.monto_base_usd||0);ex.total_base_bs+=Number(c.monto_base_bs||0);ex.total_profesional_usd+=Number(c.monto_profesional_usd||0);ex.total_profesional_bs+=Number(c.monto_profesional_bs||0);ex.total_rpm_usd+=Number(c.monto_rpm_usd||0);ex.total_rpm_bs+=Number(c.monto_rpm_bs||0);ex.cantidad+=1;}
-        else{grouped.set(key,{empleado_id:key,nombre,total_base_usd:Number(c.monto_base_usd||0),total_base_bs:Number(c.monto_base_bs||0),total_profesional_usd:Number(c.monto_profesional_usd||0),total_profesional_bs:Number(c.monto_profesional_bs||0),total_rpm_usd:Number(c.monto_rpm_usd||0),total_rpm_bs:Number(c.monto_rpm_bs||0),cantidad:1});}
-      });
-      setComisiones(Array.from(grouped.values()));
     } catch(err:any){setError(err?.message||"Error cargando finanzas.");}
     finally{setLoading(false);}
   }
@@ -652,10 +636,8 @@ export default function FinanzasResumenPage() {
     const iB=pagados.filter(m=>m.tipo==="ingreso").reduce((a,m)=>a+m.monto_bs,0);
     const eU=pagados.filter(m=>m.tipo==="egreso").reduce((a,m)=>a+m.monto_usd,0);
     const eB=pagados.filter(m=>m.tipo==="egreso").reduce((a,m)=>a+m.monto_bs,0);
-    const cpU=comisiones.reduce((a,c)=>a+c.total_profesional_usd,0);
-    const cpB=comisiones.reduce((a,c)=>a+c.total_profesional_bs,0);
-    return {ingresosUsd:iU,ingresosBs:iB,egresosUsd:eU,egresosBs:eB,utilidadUsd:iU-eU,utilidadBs:iB-eB,comisionesPendientesUsd:cpU,comisionesPendientesBs:cpB,flujoCajaUsd:iU-eU-cpU,flujoCajaBs:iB-eB-cpB};
-  },[movimientosFiltrados,comisiones]);
+    return {ingresosUsd:iU,ingresosBs:iB,egresosUsd:eU,egresosBs:eB,utilidadUsd:iU-eU,utilidadBs:iB-eB,flujoCajaUsd:iU-eU,flujoCajaBs:iB-eB};
+  },[movimientosFiltrados]);
 
   const panelResumen = useMemo(() => {
     const pagados = movimientosFiltrados.filter((m) => m.estado === "pagado" && !isTransferenciaInterna(m));
@@ -669,11 +651,10 @@ export default function FinanzasResumenPage() {
     const selected = data[activePanel];
     const totalIngresos = selected.filter((m) => m.tipo === "ingreso").reduce((a, m) => a + valor(m), 0);
     const totalEgresos = selected.filter((m) => m.tipo === "egreso").reduce((a, m) => a + valor(m), 0);
-    const totalComisiones = activePanel === "flujo" ? (monedaVista === "USD" ? totales.comisionesPendientesUsd : totales.comisionesPendientesBs) : 0;
-    const neto = totalIngresos - totalEgresos - totalComisiones;
+    const neto = totalIngresos - totalEgresos;
     const titles = { ingresos: "Ingresos", egresos: "Egresos", utilidad: "Utilidad", flujo: "Flujo de caja" };
-    const descriptions = { ingresos:"Movimientos pagados que entraron en el período seleccionado.", egresos:"Movimientos pagados que salieron en el período seleccionado.", utilidad:"Ingresos menos egresos pagados del período.", flujo:"Utilidad menos comisiones pendientes del período." };
-    return { title: `${titles[activePanel]} ${monedaVista}`, description: descriptions[activePanel], movimientos: selected, totalIngresos, totalEgresos, totalComisiones, neto };
+    const descriptions = { ingresos:"Movimientos pagados que entraron en el período seleccionado.", egresos:"Movimientos pagados que salieron en el período seleccionado.", utilidad:"Ingresos menos egresos pagados del período.", flujo:"Ingresos menos egresos pagados del período." };
+    return { title: `${titles[activePanel]} ${monedaVista}`, description: descriptions[activePanel], movimientos: selected, totalIngresos, totalEgresos, neto };
   }, [movimientosFiltrados, monedaVista, panelActivo, totales]);
 
   const flujoPorDia = useMemo(() => {
@@ -942,7 +923,7 @@ export default function FinanzasResumenPage() {
         <MetricTile active={panelActivo==="ingresos"} onClick={()=>setPanelActivo("ingresos")} label={`Ingresos ${monedaVista}`} value={money(monedaVista==="USD"?totales.ingresosUsd:totales.ingresosBs,currency)} accent="text-emerald-400" />
         <MetricTile active={panelActivo==="egresos"} onClick={()=>setPanelActivo("egresos")} label={`Egresos ${monedaVista}`} value={money(monedaVista==="USD"?totales.egresosUsd:totales.egresosBs,currency)} accent="text-rose-400" />
         <MetricTile active={panelActivo==="utilidad"} onClick={()=>setPanelActivo("utilidad")} label={`Utilidad ${monedaVista}`} value={money(monedaVista==="USD"?totales.utilidadUsd:totales.utilidadBs,currency)} accent={(monedaVista==="USD"?totales.utilidadUsd:totales.utilidadBs)>=0?"text-emerald-400":"text-rose-400"} />
-        <MetricTile active={panelActivo==="flujo"} onClick={()=>setPanelActivo("flujo")} label={`Flujo de caja ${monedaVista}`} value={money(monedaVista==="USD"?totales.flujoCajaUsd:totales.flujoCajaBs,currency)} accent={(monedaVista==="USD"?totales.flujoCajaUsd:totales.flujoCajaBs)>=0?"text-violet-400":"text-amber-400"} sub={comisiones.length>0?`Com. pend. ${money(monedaVista==="USD"?totales.comisionesPendientesUsd:totales.comisionesPendientesBs, currency)}`:undefined} />
+        <MetricTile active={panelActivo==="flujo"} onClick={()=>setPanelActivo("flujo")} label={`Flujo de caja ${monedaVista}`} value={money(monedaVista==="USD"?totales.flujoCajaUsd:totales.flujoCajaBs,currency)} accent={(monedaVista==="USD"?totales.flujoCajaUsd:totales.flujoCajaBs)>=0?"text-violet-400":"text-amber-400"} />
       </div>
 
       <PanelMovimientosCard open={panelActivo!==null} resumen={panelResumen} moneda={monedaVista} onClose={()=>setPanelActivo(null)} />
@@ -966,27 +947,6 @@ export default function FinanzasResumenPage() {
           </div>
         )}
       </div>
-
-      {/* Comisiones */}
-      {comisiones.length>0&&(
-        <div>
-          <SectionLabel>Comisiones pendientes</SectionLabel>
-          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
-            {comisiones.map((c)=>(
-              <div key={c.empleado_id} className="rounded-2xl border border-amber-400/15 bg-amber-400/[0.04] p-4">
-                <div className="mb-3 flex items-center justify-between gap-2"><p className="truncate text-sm font-semibold text-white">{c.nombre}</p><span className="shrink-0 text-[10px] text-white/25">{c.cantidad} reg.</span></div>
-                <div className="space-y-1.5 text-[11px]">
-                  <div className="flex justify-between"><span className="text-white/35">Base USD</span><span className="text-white/65">{money(c.total_base_usd)}</span></div>
-                  <div className="flex justify-between"><span className="text-white/35">Base Bs</span><span className="text-white/65">{money(c.total_base_bs,"VES")}</span></div>
-                  <Divider />
-                  <div className="flex justify-between"><span className="font-semibold text-emerald-400">Prof. USD</span><span className="font-bold text-emerald-400">{money(c.total_profesional_usd)}</span></div>
-                  <div className="flex justify-between"><span className="font-semibold text-amber-400">Prof. Bs</span><span className="font-bold text-amber-400">{money(c.total_profesional_bs,"VES")}</span></div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Charts */}
       <div className="grid gap-4 xl:grid-cols-2">

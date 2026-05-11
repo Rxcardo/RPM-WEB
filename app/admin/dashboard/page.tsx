@@ -684,6 +684,7 @@ export default function DashboardPage() {
   );
   const [filtroCitasHoy, setFiltroCitasHoy] = useState("");
   const [filtroSesionesPlan, setFiltroSesionesPlan] = useState("");
+  const [vistaSesionesPlan, setVistaSesionesPlan] = useState<"bloques" | "lista">("bloques");
   const [filtroAsistenciaPersonal, setFiltroAsistenciaPersonal] = useState("");
   const [filtroPlanActivo, setFiltroPlanActivo] = useState("");
 
@@ -1081,31 +1082,57 @@ export default function DashboardPage() {
 
     if (!q) return sesionesPlanBaseDia;
 
+    const fechaReferencia = asistenciaFilterFecha || hoy;
+
+    const getPrioridadBusqueda = (row: EntrenamientoPlanRow) => {
+      const asistencia = (row.asistencia_estado || "pendiente").toLowerCase();
+      const estado = (row.estado || "").toLowerCase();
+
+      // Prioridad 0: si el cliente ya fue marcado como asistió hoy, esa es la sesión que debe salir.
+      if (row.fecha === fechaReferencia && asistencia === "asistio") return 0;
+
+      // Prioridad 1: cualquier sesión del día filtrado, aunque esté marcada como avisó/sin aviso/completada.
+      if (row.fecha === fechaReferencia) return 1;
+
+      // Prioridad 2: próxima sesión pendiente desde hoy hacia adelante.
+      if (row.fecha && row.fecha >= hoy && asistencia === "pendiente") return 2;
+
+      // Prioridad 3: próximas sesiones ya gestionadas.
+      if (row.fecha && row.fecha >= hoy && estado !== "cancelado") return 3;
+
+      // Prioridad 4: historial, solo como último respaldo si no hay nada más.
+      return 4;
+    };
+
     const candidatas = entrenamientosPlan
       .filter((row) => {
         if ((row.estado || "").toLowerCase() === "cancelado") return false;
-        if ((row.asistencia_estado || "pendiente") !== "pendiente")
-          return false;
-        if (!row.fecha || row.fecha < hoy) return false;
-        if (!isPlanOperativoFromRow(row, hoy)) return false;
+        if (!row.fecha) return false;
 
         const cp = firstOrNull(row.clientes_planes);
+        if (!cp || (cp.estado || "").toLowerCase() === "cancelado") return false;
+
         const cliente = firstOrNull(row.clientes);
         const empleado = firstOrNull(row.empleados);
         const plan = firstOrNull(cp?.planes);
+
         return matchesSearch(filtroSesionesPlan, [
           cliente?.nombre,
           empleado?.nombre,
           plan?.nombre,
           row.fecha,
           row.hora_inicio,
+          row.asistencia_estado,
+          row.estado,
         ]);
       })
-      .sort((a, b) =>
-        `${a.fecha || "9999-99-99"} ${a.hora_inicio || "99:99"}`.localeCompare(
+      .sort((a, b) => {
+        const prioridad = getPrioridadBusqueda(a) - getPrioridadBusqueda(b);
+        if (prioridad !== 0) return prioridad;
+        return `${a.fecha || "9999-99-99"} ${a.hora_inicio || "99:99"}`.localeCompare(
           `${b.fecha || "9999-99-99"} ${b.hora_inicio || "99:99"}`,
-        ),
-      );
+        );
+      });
 
     const porCliente = new Map<string, EntrenamientoPlanRow>();
     candidatas.forEach((row) => {
@@ -1114,16 +1141,20 @@ export default function DashboardPage() {
     });
 
     return Array.from(porCliente.values());
-  }, [entrenamientosPlan, sesionesPlanBaseDia, filtroSesionesPlan, hoy]);
+  }, [
+    entrenamientosPlan,
+    sesionesPlanBaseDia,
+    filtroSesionesPlan,
+    asistenciaFilterFecha,
+    hoy,
+  ]);
 
   const bloquesSesionesPlan = useMemo(() => {
     const map = new Map<
       string,
       { key: string; label: string; sesiones: EntrenamientoPlanRow[] }
     >();
-    sesionesPlanBaseDia
-      .filter((row) => (row.asistencia_estado || "pendiente") === "pendiente")
-      .forEach((row) => {
+    sesionesPlanBaseDia.forEach((row) => {
         const key = getBloqueKey(row);
         if (!map.has(key))
           map.set(key, { key, label: getBloqueLabel(row), sesiones: [] });
@@ -1172,6 +1203,16 @@ export default function DashboardPage() {
 
   const mostrandoBusquedaSesiones =
     normalizeSearch(filtroSesionesPlan).length > 0;
+
+  function getBloqueResumen(sesiones: EntrenamientoPlanRow[]) {
+    const asistidas = sesiones.filter(
+      (row) => (row.asistencia_estado || "").toLowerCase() === "asistio",
+    ).length;
+    const pendientes = sesiones.filter(
+      (row) => (row.asistencia_estado || "pendiente").toLowerCase() === "pendiente",
+    ).length;
+    return { asistidas, pendientes, total: sesiones.length };
+  }
 
   const empleadosActivosNoAdmin = useMemo(
     () =>
@@ -2131,16 +2172,37 @@ export default function DashboardPage() {
               <GhostBtn onClick={() => setPanelOpen("sesiones")}>
                 {mostrandoBusquedaSesiones
                   ? sesionesPlanHoyFiltradas.length
-                  : bloquesSesionesPlan.length}{" "}
+                  : vistaSesionesPlan === "bloques"
+                    ? bloquesSesionesPlan.length
+                    : sesionesPlanBaseDia.length}{" "}
                 ver
               </GhostBtn>
             </div>
 
+            {!mostrandoBusquedaSesiones && (
+              <div className="grid grid-cols-2 gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-1">
+                <button
+                  type="button"
+                  onClick={() => setVistaSesionesPlan("bloques")}
+                  className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition ${vistaSesionesPlan === "bloques" ? "bg-amber-400/15 text-amber-200" : "text-white/35 hover:bg-white/[0.04] hover:text-white/60"}`}
+                >
+                  Ver por bloques
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVistaSesionesPlan("lista")}
+                  className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition ${vistaSesionesPlan === "lista" ? "bg-violet-400/15 text-violet-200" : "text-white/35 hover:bg-white/[0.04] hover:text-white/60"}`}
+                >
+                  Ver sesiones
+                </button>
+              </div>
+            )}
+
             {mostrandoBusquedaSesiones ? (
               <div className="space-y-1.5">
                 <p className="rounded-xl border border-violet-400/15 bg-violet-400/5 px-3 py-2 text-[11px] text-violet-200/80">
-                  Busca la sesión pendiente más cercana del cliente, aunque no
-                  sea de hoy.
+                  Si el cliente ya asistió hoy, se muestra esa sesión primero.
+                  Si no, se muestra la sesión más cercana.
                 </p>
                 {sesionesPlanHoyFiltradas.length === 0 ? (
                   <p className="py-3 text-center text-xs text-white/30">
@@ -2152,9 +2214,19 @@ export default function DashboardPage() {
                   )
                 )}
               </div>
+            ) : vistaSesionesPlan === "lista" ? (
+              sesionesPlanBaseDia.length === 0 ? (
+                <p className="py-3 text-center text-xs text-white/30">
+                  Sin sesiones para este día
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {sesionesPlanBaseDia.map((row) => renderSesionPlanCard(row))}
+                </div>
+              )
             ) : bloquesSesionesPlan.length === 0 ? (
               <p className="py-3 text-center text-xs text-white/30">
-                Sin bloques pendientes
+                Sin bloques para este día
               </p>
             ) : (
               <div className="space-y-2">
@@ -2177,10 +2249,19 @@ export default function DashboardPage() {
                               Bloque de entrenamiento
                             </p>
                           </div>
-                          <PillBadge color="amber">
-                            {bloque.sesiones.length} persona
-                            {bloque.sesiones.length !== 1 ? "s" : ""}
-                          </PillBadge>
+                          {(() => {
+                            const resumen = getBloqueResumen(bloque.sesiones);
+                            return (
+                              <div className="flex shrink-0 flex-col items-end gap-1">
+                                <PillBadge color="amber">
+                                  {resumen.total} persona{resumen.total !== 1 ? "s" : ""}
+                                </PillBadge>
+                                <span className="text-[10px] text-white/30">
+                                  {resumen.pendientes} pend. · {resumen.asistidas} asist.
+                                </span>
+                              </div>
+                            );
+                          })()}
                         </div>
                       </button>
                     );
@@ -2487,11 +2568,30 @@ export default function DashboardPage() {
           />
           <Divider />
 
+          {!mostrandoBusquedaSesiones && (
+            <div className="grid grid-cols-2 gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-1">
+              <button
+                type="button"
+                onClick={() => setVistaSesionesPlan("bloques")}
+                className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition ${vistaSesionesPlan === "bloques" ? "bg-amber-400/15 text-amber-200" : "text-white/35 hover:bg-white/[0.04] hover:text-white/60"}`}
+              >
+                Ver por bloques
+              </button>
+              <button
+                type="button"
+                onClick={() => setVistaSesionesPlan("lista")}
+                className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold transition ${vistaSesionesPlan === "lista" ? "bg-violet-400/15 text-violet-200" : "text-white/35 hover:bg-white/[0.04] hover:text-white/60"}`}
+              >
+                Ver sesiones
+              </button>
+            </div>
+          )}
+
           {mostrandoBusquedaSesiones ? (
             <div className="space-y-2">
               <p className="rounded-xl border border-violet-400/15 bg-violet-400/5 px-3 py-2 text-[11px] text-violet-200/80">
-                Resultado: sesión pendiente más cercana del cliente. Desde aquí
-                puedes marcar asistencia o reagendarla a hoy.
+                Resultado inteligente: primero sale la sesión de hoy si ya fue marcada,
+                y luego la sesión más cercana si todavía está pendiente.
               </p>
               {sesionesPlanHoyFiltradas.length === 0 ? (
                 <p className="py-4 text-center text-sm text-white/30">
@@ -2503,11 +2603,21 @@ export default function DashboardPage() {
                 )
               )}
             </div>
+          ) : vistaSesionesPlan === "lista" ? (
+            <div className="space-y-2">
+              {sesionesPlanBaseDia.length === 0 ? (
+                <p className="py-4 text-center text-sm text-white/30">
+                  Sin sesiones para este día
+                </p>
+              ) : (
+                sesionesPlanBaseDia.map((row) => renderSesionPlanCard(row))
+              )}
+            </div>
           ) : (
             <div className="space-y-3">
               {bloquesSesionesPlan.length === 0 ? (
                 <p className="py-4 text-center text-sm text-white/30">
-                  Sin bloques pendientes para este día
+                  Sin bloques para este día
                 </p>
               ) : (
                 <>
@@ -2529,14 +2639,22 @@ export default function DashboardPage() {
                                 {bloque.label}
                               </p>
                               <p className="text-[11px] text-white/35">
-                                Pendientes del{" "}
-                                {formatDate(asistenciaFilterFecha)}
+                                Sesiones del {formatDate(asistenciaFilterFecha)}
                               </p>
                             </div>
-                            <PillBadge color="amber">
-                              {bloque.sesiones.length} persona
-                              {bloque.sesiones.length !== 1 ? "s" : ""}
-                            </PillBadge>
+                            {(() => {
+                              const resumen = getBloqueResumen(bloque.sesiones);
+                              return (
+                                <div className="flex shrink-0 flex-col items-end gap-1">
+                                  <PillBadge color="amber">
+                                    {resumen.total} persona{resumen.total !== 1 ? "s" : ""}
+                                  </PillBadge>
+                                  <span className="text-[10px] text-white/30">
+                                    {resumen.pendientes} pend. · {resumen.asistidas} asist.
+                                  </span>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </button>
                       );

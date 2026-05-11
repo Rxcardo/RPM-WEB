@@ -338,9 +338,11 @@ export default function AgendaPage() {
     if (
       nuevoEstado === 'cancelada' &&
       !window.confirm(
-        cita.cliente_plan_id
-          ? `¿Seguro que deseas cancelar la cita de ${cita.clientes?.nombre || 'este cliente'}?\n\nSi la cita ya estaba completada y consumió una sesión del plan, esa sesión se devolverá automáticamente.`
-          : `¿Seguro que deseas cancelar la cita de ${cita.clientes?.nombre || 'este cliente'}?\n\nEsta cita no está ligada a un plan, así que no tocará sesiones.`
+        `¿Seguro que deseas cancelar la cita de ${cita.clientes?.nombre || 'este cliente'}?
+
+La cita quedará registrada como cancelada y se reversarán pagos, deudas, abonos, créditos, movimientos y comisiones relacionadas.
+
+¿Deseas continuar?`
       )
     ) return
 
@@ -361,16 +363,29 @@ export default function AgendaPage() {
         setEmpleadoActualId(auditorId)
       }
 
-      const { error: updateError } = await supabase
-        .from('citas')
-        .update({ estado: nuevoEstado, updated_by: auditorId || null })
-        .eq('id', cita.id)
+      if (nuevoEstado === 'cancelada') {
+        const { data, error } = await supabase.rpc('cancelar_cita_segura', {
+          p_cita_id: cita.id,
+          p_usuario_id: auditorId || null,
+          p_revertir_finanzas: true,
+          p_motivo: 'cancelada_desde_agenda',
+        })
 
-      if (updateError) throw new Error(updateError.message)
+        if (error) throw new Error(error.message)
+        console.info('Cita cancelada con reversión financiera:', data)
+      } else {
+        const { error: updateError } = await supabase
+          .from('citas')
+          .update({ estado: nuevoEstado, updated_by: auditorId || null })
+          .eq('id', cita.id)
+
+        if (updateError) throw new Error(updateError.message)
+      }
+
       await loadAgenda()
     } catch (err: any) {
       console.error(err)
-      setActionError(err?.message || 'No se pudo cambiar el estado de la cita.')
+      setActionError(err?.message || 'No se pudo cambiar/cancelar la cita.')
     } finally {
       setUpdatingId(null)
     }
@@ -382,14 +397,35 @@ export default function AgendaPage() {
     const fechaCita = formatDateTime(cita.fecha, cita.hora_inicio)
 
     const ok = window.confirm(
-      `⚠️ Vas a eliminar completamente la cita de ${nombreCliente} (${fechaCita}).\n\nEsto también eliminará pagos, comisiones, cuentas por cobrar y registros financieros relacionados.\n\n¿Seguro que deseas continuar?`
+      `⚠️ Vas a eliminar completamente la cita de ${nombreCliente} (${fechaCita}).\n\nLa cita se eliminará desde la RPC segura y se revertirá su impacto financiero: pagos, deudas, abonos, créditos, movimientos y comisiones relacionadas.\n\n¿Seguro que deseas continuar?`
     )
     if (!ok) return
 
     setDeletingId(cita.id)
     try {
-      const { error } = await supabase.rpc('eliminar_cita_completa', { p_cita_id: cita.id })
+      let auditorId = empleadoActualId || ''
+      if (!auditorId) {
+        auditorId = await resolveEmpleadoActualId()
+        setEmpleadoActualId(auditorId)
+      }
+
+      const { data, error } = await supabase.rpc('eliminar_cita_segura', {
+        p_cita_id: cita.id,
+        p_usuario_id: auditorId || null,
+        p_revertir_finanzas: true,
+        p_motivo: 'eliminada_desde_agenda',
+      })
+
       if (error) throw new Error(error.message)
+
+      const resumen = data as {
+        pagos_reversados?: number
+        deudas_canceladas?: number
+        comisiones_canceladas?: number
+      } | null
+
+      setActionError('')
+      console.info('Cita eliminada con RPC segura:', resumen)
       await loadAgenda()
     } catch (err: any) {
       console.error(err)
@@ -838,15 +874,6 @@ export default function AgendaPage() {
                           >
                             {disabled && updatingId === cita.id ? '...' : 'Cancelar'}
                           </ActionButton>
-
-                          <button
-                            type="button"
-                            disabled={disabled}
-                            onClick={() => eliminarCitaCompleta(cita)}
-                            className="rounded-lg border border-red-500/20 bg-red-500/[0.07] px-3 py-1.5 text-[11px] font-medium text-red-300 transition hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-35"
-                          >
-                            {deletingId === cita.id ? '...' : 'Eliminar'}
-                          </button>
                         </div>
                       </td>
                     </tr>
