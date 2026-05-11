@@ -46,7 +46,8 @@ type PlanReal = {
   clientes: Cliente | Cliente[] | null
   plan: { id: string; nombre?: string | null } | { id: string; nombre?: string | null }[] | null
 }
-type AlertState  = { type: 'error' | 'success' | 'info' | 'warning'; title: string; message: string } | null
+type AlertVariant = 'error' | 'success' | 'info' | 'warning'
+type AlertState  = { type: AlertVariant; title: string; message: string } | null
 type FiltroCliente = { clienteId: string; nombre: string } | null
 type EstadoFiltro = 'todos' | 'enviado' | 'borrador' | 'cancelado'
 type DrawerPanel  = 'deudas' | 'planes' | null
@@ -515,7 +516,7 @@ export default function ComunicacionPage() {
   const [clienteSearch, setClienteSearch] = useState('')
   const [showDropdown,  setShowDropdown]  = useState(false)
 
-  function showAlert(type: AlertState['type'], title: string, message: string) { setAlert({ type, title, message }) }
+  function showAlert(type: AlertVariant, title: string, message: string) { setAlert({ type, title, message }) }
   function clearAlert() { setAlert(null) }
 
   useEffect(() => { void loadData(); void loadEmpleadoActual() }, [])
