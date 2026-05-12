@@ -3284,13 +3284,13 @@ function IngresosPageContent() {
     ],
   );
   const totales = useMemo(() => {
-    const pagados = operaciones.filter((p) => p.estado === "pagado");
+    const pagadosFiltrados = pagosFiltrados.filter((p) => p.estado === "pagado");
     return {
-      totalUSD: pagados.reduce((sum, p) => sum + Number(p.total_usd || 0), 0),
-      totalBS: pagados.reduce((sum, p) => sum + Number(p.total_bs || 0), 0),
-      cantidad: pagados.length,
+      totalUSD: r2(pagadosFiltrados.reduce((sum, p) => sum + Number(p.total_usd || 0), 0)),
+      totalBS: r2(pagadosFiltrados.reduce((sum, p) => sum + Number(p.total_bs || 0), 0)),
+      cantidad: pagadosFiltrados.length,
     };
-  }, [operaciones]);
+  }, [pagosFiltrados]);
   const mostrarPagoRapido =
     ventaSinCliente ||
     tipoIngreso === "saldo" ||
