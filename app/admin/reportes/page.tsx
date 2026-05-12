@@ -390,6 +390,104 @@ function DataTable({ headers, rows, empty }: { headers: string[]; rows: Array<Ar
   )
 }
 
+
+type MultiFilterOption = { value: string; label?: string }
+
+function MultiFilterDropdown({
+  label,
+  values,
+  options,
+  onChange,
+  placeholder = 'Todas',
+  emptyLabel = 'Sin opciones',
+}: {
+  label: string
+  values: string[]
+  options: MultiFilterOption[]
+  onChange: (values: string[]) => void
+  placeholder?: string
+  emptyLabel?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const selectedSet = useMemo(() => new Set(values), [values])
+  const selectedLabels = useMemo(() => {
+    const labelMap = new Map(options.map((option) => [option.value, option.label || option.value]))
+    return values.map((value) => labelMap.get(value) || value).filter(Boolean)
+  }, [options, values])
+
+  function toggleValue(value: string) {
+    if (selectedSet.has(value)) onChange(values.filter((item) => item !== value))
+    else onChange([...values, value])
+  }
+
+  return (
+    <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-2.5">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="flex w-full items-center justify-between gap-3 rounded-xl px-1 py-1 text-left transition hover:bg-white/[0.03]"
+      >
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30">{label}</p>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {selectedLabels.length === 0 ? (
+              <span className="text-xs text-white/35">{placeholder}</span>
+            ) : (
+              selectedLabels.slice(0, 3).map((item) => (
+                <span key={item} className="max-w-[140px] truncate rounded-full border border-sky-400/20 bg-sky-400/10 px-2 py-0.5 text-[10px] font-semibold text-sky-300">
+                  {item}
+                </span>
+              ))
+            )}
+            {selectedLabels.length > 3 && (
+              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] font-semibold text-white/45">
+                +{selectedLabels.length - 3}
+              </span>
+            )}
+          </div>
+        </div>
+        <span className={`shrink-0 text-xs text-white/35 transition ${open ? 'rotate-180' : ''}`}>⌄</span>
+      </button>
+
+      {open && (
+        <div className="mt-2 rounded-2xl border border-white/[0.07] bg-[#050714] p-2 shadow-[0_14px_40px_rgba(0,0,0,0.35)]">
+          <div className="mb-2 flex items-center justify-between gap-2 px-1">
+            <span className="text-[10px] text-white/30">{values.length ? `${values.length} seleccionado(s)` : 'Sin filtro activo'}</span>
+            {values.length > 0 && (
+              <button type="button" onClick={() => onChange([])} className="text-[10px] font-semibold text-amber-300/80 transition hover:text-amber-200">
+                Limpiar
+              </button>
+            )}
+          </div>
+
+          <div className="max-h-48 space-y-1 overflow-y-auto pr-1">
+            {options.length === 0 ? (
+              <p className="px-2 py-3 text-center text-[11px] text-white/25">{emptyLabel}</p>
+            ) : (
+              options.map((option) => {
+                const active = selectedSet.has(option.value)
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => toggleValue(option.value)}
+                    className={`flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left text-xs transition ${active ? 'bg-sky-400/12 text-sky-200 ring-1 ring-sky-400/20' : 'text-white/55 hover:bg-white/[0.05] hover:text-white/80'}`}
+                  >
+                    <span className="min-w-0 truncate">{option.label || option.value}</span>
+                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-md border text-[9px] ${active ? 'border-sky-300/40 bg-sky-300/20 text-sky-100' : 'border-white/10 text-transparent'}`}>
+                      ✓
+                    </span>
+                  </button>
+                )
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Presupuesto Drawer ───────────────────────────────────────────────────────
 
 function PresupuestoDrawer({
@@ -539,6 +637,10 @@ export default function ReportesPage() {
   const [horaFin, setHoraFin] = useState('23:59')
   const [generadoPor, setGeneradoPor] = useState('')
   const [search, setSearch] = useState('')
+  const [filtroExportMonedas, setFiltroExportMonedas] = useState<string[]>([])
+  const [filtroExportMetodos, setFiltroExportMetodos] = useState<string[]>([])
+  const [filtroExportCategorias, setFiltroExportCategorias] = useState<string[]>([])
+  const [filtroExportEstados, setFiltroExportEstados] = useState<string[]>([])
   const [monedaVista, setMonedaVista] = useState<'USD'|'BS'>('USD')
   const [agrupacion, setAgrupacion] = useState<'dia'|'semana'|'mes'|'anio'>('dia')
   const [clientes, setClientes] = useState<ClienteRow[]>([])
@@ -628,12 +730,44 @@ export default function ReportesPage() {
   const clientesFiltrados=useMemo(()=>clientes.filter((r)=>matchSearch([r.nombre,r.telefono,r.email,r.estado,r.empleados?.nombre])),[clientes,search])
   const planesFiltrados=useMemo(()=>planes.filter((r)=>matchSearch([r.clientes?.nombre,r.planes?.nombre,r.estado,r.moneda_venta])),[planes,search])
   const citasFiltradas=useMemo(()=>citas.filter((r)=>matchSearch([r.clientes?.nombre,r.empleados?.nombre,r.servicios?.nombre,r.recursos?.nombre,r.estado])),[citas,search])
-  const ingresosFiltrados=useMemo(()=>ingresos.filter((r)=>matchSearch([r.concepto,r.categoria,r.tipo_origen,r.clientes?.nombre,r.metodos_pago_v2?.nombre,r.estado,r.referencia])),[ingresos,search])
-  const egresosFiltrados=useMemo(()=>egresos.filter((r)=>matchSearch([r.concepto,r.categoria,r.proveedor,r.empleados?.nombre,r.metodos_pago_v2?.nombre,r.estado,r.referencia])),[egresos,search])
+  const ingresosBaseFiltrados=useMemo(()=>ingresos.filter((r)=>matchSearch([r.concepto,r.categoria,r.tipo_origen,r.clientes?.nombre,r.metodos_pago_v2?.nombre,r.estado,r.referencia])),[ingresos,search])
+  const egresosBaseFiltrados=useMemo(()=>egresos.filter((r)=>matchSearch([r.concepto,r.categoria,r.proveedor,r.empleados?.nombre,r.metodos_pago_v2?.nombre,r.estado,r.referencia])),[egresos,search])
   const cobranzasFiltradas=useMemo(()=>cobranzas.filter((r)=>matchSearch([r.cliente_nombre,r.clientes?.nombre,r.concepto,r.tipo_origen,r.estado])),[cobranzas,search])
   const inventarioFiltrado=useMemo(()=>inventario.filter((r)=>matchSearch([r.inventario?.nombre,r.tipo,r.concepto])),[inventario,search])
-  const nominaFiltrada=useMemo(()=>nomina.filter((r)=>matchSearch([r.empleados?.nombre,r.tipo,r.moneda_pago,r.notas,r.referencia])),[nomina,search])
-  const liquidacionFiltrada=useMemo(()=>liquidacion.filter((r)=>matchSearch([r.empleados?.nombre,r.tipo,r.moneda_pago,r.notas,r.referencia])),[liquidacion,search])
+  const nominaBaseFiltrada=useMemo(()=>nomina.filter((r)=>matchSearch([r.empleados?.nombre,r.tipo,r.moneda_pago,r.notas,r.referencia])),[nomina,search])
+  const liquidacionBaseFiltrada=useMemo(()=>liquidacion.filter((r)=>matchSearch([r.empleados?.nombre,r.tipo,r.moneda_pago,r.notas,r.referencia])),[liquidacion,search])
+
+  const ingresosFiltrados = useMemo(() => applyExportFilters(
+    ingresosBaseFiltrados,
+    (r) => r.moneda_pago || r.metodos_pago_v2?.moneda,
+    (r) => r.metodos_pago_v2?.nombre,
+    (r) => r.categoria,
+    (r) => r.estado,
+  ), [ingresosBaseFiltrados, filtroExportMonedas, filtroExportMetodos, filtroExportCategorias, filtroExportEstados])
+
+  const egresosFiltrados = useMemo(() => applyExportFilters(
+    egresosBaseFiltrados,
+    (r) => r.moneda || r.metodos_pago_v2?.moneda,
+    (r) => r.metodos_pago_v2?.nombre,
+    (r) => categoriaEgresoLabel(r),
+    (r) => r.estado,
+  ), [egresosBaseFiltrados, filtroExportMonedas, filtroExportMetodos, filtroExportCategorias, filtroExportEstados])
+
+  const nominaFiltrada = useMemo(() => applyExportFilters(
+    nominaBaseFiltrada,
+    (r) => r.moneda_pago,
+    (r) => r.metodos_pago_v2?.nombre,
+    (r) => tipoNominaLabel(r),
+    () => null,
+  ), [nominaBaseFiltrada, filtroExportMonedas, filtroExportMetodos, filtroExportCategorias, filtroExportEstados])
+
+  const liquidacionFiltrada = useMemo(() => applyExportFilters(
+    liquidacionBaseFiltrada,
+    (r) => r.moneda_pago,
+    (r) => r.metodos_pago_v2?.nombre,
+    (r) => tipoNominaLabel(r),
+    () => null,
+  ), [liquidacionBaseFiltrada, filtroExportMonedas, filtroExportMetodos, filtroExportCategorias, filtroExportEstados])
 
   const resumen=useMemo(()=>{
     const ingresosUsd=ingresosFiltrados.filter((x)=>x.estado==='pagado').reduce((acc,x)=>acc+Number(x.monto_equivalente_usd||0),0)
@@ -679,22 +813,100 @@ export default function ReportesPage() {
   },[tipo,ingresosFiltrados,egresosFiltrados,nominaFiltrada,liquidacionFiltrada,monedaVista,agrupacion])
   const acumuladoChart=useMemo(()=>{let acumulado=0;return financieroAgrupadoChart.map((d)=>{const saldo=d.ingresos-d.egresos;acumulado+=saldo;return{...d,saldo,acumulado:Math.round(acumulado*100)/100}})},[financieroAgrupadoChart])
 
+  function normalizeExportMoneda(value: string | null | undefined) {
+    const raw = String(value || '').trim().toUpperCase()
+    if (['BS','VES','BOLIVARES','BOLÍVARES','BOLIVAR','BOLÍVAR'].includes(raw)) return 'BS'
+    if (['USD','$','DOLAR','DÓLAR','DOLARES','DÓLARES'].includes(raw)) return 'USD'
+    return raw
+  }
+
+  const exportFilterOptions = useMemo(() => {
+    const metodos = new Set<string>()
+    const categorias = new Set<string>()
+    const estados = new Set<string>()
+    const monedas = new Set<string>()
+
+    const addIngreso = (rows: IngresoRow[]) => rows.forEach((r) => {
+      if (r.metodos_pago_v2?.nombre) metodos.add(r.metodos_pago_v2.nombre)
+      if (r.categoria) categorias.add(r.categoria)
+      if (r.estado) estados.add(r.estado)
+      const moneda = normalizeExportMoneda(r.moneda_pago || r.metodos_pago_v2?.moneda)
+      if (moneda) monedas.add(moneda)
+    })
+
+    const addEgreso = (rows: EgresoRow[]) => rows.forEach((r) => {
+      if (r.metodos_pago_v2?.nombre) metodos.add(r.metodos_pago_v2.nombre)
+      const categoria = categoriaEgresoLabel(r)
+      if (categoria) categorias.add(categoria)
+      if (r.estado) estados.add(r.estado)
+      const moneda = normalizeExportMoneda(r.moneda || r.metodos_pago_v2?.moneda)
+      if (moneda) monedas.add(moneda)
+    })
+
+    const addNomina = (rows: NominaRow[]) => rows.forEach((r) => {
+      if (r.metodos_pago_v2?.nombre) metodos.add(r.metodos_pago_v2.nombre)
+      const categoria = tipoNominaLabel(r)
+      if (categoria) categorias.add(categoria)
+      if (r.moneda_pago) monedas.add(normalizeExportMoneda(r.moneda_pago))
+    })
+
+    if (tipo === 'ingresos' || tipo === 'financiero') addIngreso(ingresosBaseFiltrados)
+    if (tipo === 'egresos' || tipo === 'financiero') addEgreso(egresosBaseFiltrados)
+    if (tipo === 'nomina') addNomina(nominaBaseFiltrada)
+    if (tipo === 'liquidacion') addNomina(liquidacionBaseFiltrada)
+
+    return {
+      metodos: Array.from(metodos).sort((a,b)=>a.localeCompare(b)),
+      categorias: Array.from(categorias).sort((a,b)=>a.localeCompare(b)),
+      estados: Array.from(estados).sort((a,b)=>a.localeCompare(b)),
+      monedas: Array.from(monedas).sort((a,b)=>a.localeCompare(b)),
+    }
+  }, [tipo, ingresosBaseFiltrados, egresosBaseFiltrados, nominaBaseFiltrada, liquidacionBaseFiltrada])
+
+  function applyExportFilters<T>(
+    rows: T[],
+    getMoneda: (r: T) => string | null | undefined,
+    getMetodo: (r: T) => string | null | undefined,
+    getCategoria: (r: T) => string | null | undefined,
+    getEstado: (r: T) => string | null | undefined,
+  ): T[] {
+    return rows.filter((r) => {
+      const moneda = normalizeExportMoneda(getMoneda(r))
+      const metodo = getMetodo(r) || ''
+      const categoria = getCategoria(r) || ''
+      const estado = getEstado(r) || ''
+      if (filtroExportMonedas.length > 0 && !filtroExportMonedas.includes(moneda)) return false
+      if (filtroExportMetodos.length > 0 && !filtroExportMetodos.includes(metodo)) return false
+      if (filtroExportCategorias.length > 0 && !filtroExportCategorias.includes(categoria)) return false
+      if (filtroExportEstados.length > 0 && !filtroExportEstados.includes(estado)) return false
+      return true
+    })
+  }
+
+  const ingresosExportFiltrados = ingresosFiltrados
+  const egresosExportFiltrados = egresosFiltrados
+  const nominaExportFiltrada = nominaFiltrada
+  const liquidacionExportFiltrada = liquidacionFiltrada
+
+  const filtrosExportActivos = Boolean(filtroExportMonedas.length || filtroExportMetodos.length || filtroExportCategorias.length || filtroExportEstados.length)
+  const exportCountActual = tipo==='ingresos' ? ingresosExportFiltrados.length : tipo==='egresos' ? egresosExportFiltrados.length : tipo==='nomina' ? nominaExportFiltrada.length : tipo==='liquidacion' ? liquidacionExportFiltrada.length : tipo==='financiero' ? ingresosExportFiltrados.length + egresosExportFiltrados.length : null
+
   function buildExportRows() {
     if(tipo==='clientes')return{title:'Reporte de clientes',filenameBase:'RPM_Clientes',rows:clientesFiltrados.map((row)=>({ID:row.id,Nombre:row.nombre,Cédula:row.cedula||'',Teléfono:row.telefono||'',Email:row.email||'',Dirección:row.direccion||'',Terapeuta:row.empleados?.nombre||'',Estado:row.estado,'Fecha Creación':formatDateTime(row.created_at)}))}
     if(tipo==='planes')return{title:'Reporte de planes',filenameBase:'RPM_Planes',rows:planesFiltrados.map((row)=>{const precioFinal=row.moneda_venta==='USD'?row.precio_final_usd||row.planes?.precio||0:row.monto_final_bs||0;return{ID:row.id,Cliente:row.clientes?.nombre||'',Plan:row.planes?.nombre||'','Precio Final USD':Number(row.precio_final_usd||0),'Precio Final BS':Number(row.monto_final_bs||0),'Moneda Venta':row.moneda_venta||'','Fecha Inicio':row.fecha_inicio||'','Fecha Fin':row.fecha_fin||'','Sesiones Totales':row.sesiones_totales,'Sesiones Usadas':row.sesiones_usadas,'Sesiones Restantes':Number(row.sesiones_totales||0)-Number(row.sesiones_usadas||0),Estado:row.estado}})}
     if(tipo==='citas')return{title:'Reporte de citas',filenameBase:'RPM_Citas',rows:citasFiltradas.map((row)=>({ID:row.id,Fecha:row.fecha,'Hora Inicio':row.hora_inicio,'Hora Fin':row.hora_fin,Cliente:row.clientes?.nombre||'',Terapeuta:row.empleados?.nombre||'',Servicio:row.servicios?.nombre||'',Recurso:row.recursos?.nombre||'',Estado:row.estado}))}
-    if(tipo==='ingresos')return{title:'Reporte de ingresos',filenameBase:'RPM_Ingresos',rows:ingresosFiltrados.map((row)=>({ID:row.id,Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Concepto:row.concepto,Categoría:row.categoria,'Tipo Origen':row.tipo_origen,Cliente:row.clientes?.nombre||'','Método Pago':row.metodos_pago_v2?.nombre||'','Moneda Pago':row.moneda_pago||'',Referencia:row.referencia||'','Monto Original':Number(row.monto||0),'Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),Estado:row.estado}))}
-    if(tipo==='egresos')return{title:'Reporte de egresos',filenameBase:'RPM_Egresos',rows:egresosFiltrados.map((row)=>({ID:row.id,Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Concepto:row.concepto,Categoría:categoriaEgresoLabel(row),Proveedor:row.proveedor||'',Empleado:row.empleados?.nombre||'','Método Pago':row.metodos_pago_v2?.nombre||'',Moneda:row.moneda||'',Referencia:row.referencia||'','Monto Original':Number(row.monto||0),'Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),Estado:row.estado}))}
+    if(tipo==='ingresos')return{title:'Reporte de ingresos',filenameBase:'RPM_Ingresos',rows:ingresosExportFiltrados.map((row)=>({ID:row.id,Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Concepto:row.concepto,Categoría:row.categoria,'Tipo Origen':row.tipo_origen,Cliente:row.clientes?.nombre||'','Método Pago':row.metodos_pago_v2?.nombre||'','Moneda Pago':row.moneda_pago||'',Referencia:row.referencia||'','Monto Original':Number(row.monto||0),'Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),Estado:row.estado}))}
+    if(tipo==='egresos')return{title:'Reporte de egresos',filenameBase:'RPM_Egresos',rows:egresosExportFiltrados.map((row)=>({ID:row.id,Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Concepto:row.concepto,Categoría:categoriaEgresoLabel(row),Proveedor:row.proveedor||'',Empleado:row.empleados?.nombre||'','Método Pago':row.metodos_pago_v2?.nombre||'',Moneda:row.moneda||'',Referencia:row.referencia||'','Monto Original':Number(row.monto||0),'Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),Estado:row.estado}))}
     if(tipo==='cobranzas')return{title:'Reporte de cobranzas',filenameBase:'RPM_Cobranzas',rows:cobranzasFiltradas.map((row)=>({ID:row.id,Cliente:row.clientes?.nombre||row.cliente_nombre||'',Concepto:row.concepto,'Tipo Origen':row.tipo_origen,'Monto Total USD':Number(row.monto_total_usd||0),'Monto Pagado USD':Number(row.monto_pagado_usd||0),'Saldo USD':Number(row.saldo_usd||0),'Fecha Venta':row.fecha_venta,'Fecha Vencimiento':row.fecha_vencimiento||'',Estado:row.estado}))}
     if(tipo==='inventario')return{title:'Reporte de inventario',filenameBase:'RPM_Inventario',rows:inventarioFiltrado.map((row)=>({ID:row.id,Producto:row.inventario?.nombre||'',Tipo:row.tipo,Cantidad:Number(row.cantidad||0),'Cantidad Anterior':Number(row.cantidad_anterior||0),'Cantidad Nueva':Number(row.cantidad_nueva||0),Concepto:row.concepto,'Precio Unitario USD':Number(row.precio_unitario_usd||0),'Monto Total USD':Number(row.monto_total_usd||0),'Fecha Creación':formatDateTime(row.created_at)}))}
-    if(tipo==='nomina')return{title:'Reporte de nómina',filenameBase:'RPM_Nomina',rows:nominaFiltrada.map((row)=>({ID:row.id,Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Empleado:row.empleados?.nombre||'',Tipo:row.tipo,'Moneda Pago':row.moneda_pago,'Monto Pago':Number(row.monto_pago||0),'Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),'Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'',Notas:row.notas||''}))}
-    if(tipo==='liquidacion')return{title:'Reporte de liquidaciones',filenameBase:'RPM_Liquidaciones',rows:liquidacionFiltrada.map((row)=>({ID:row.id,Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Empleado:row.empleados?.nombre||'',Tipo:tipoNominaLabel(row),'Moneda Pago':row.moneda_pago,'Monto Pago':Number(row.monto_pago||0),'Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),'Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'',Notas:row.notas||''}))}
-    return{title:'Reporte financiero',filenameBase:'RPM_Financiero',rows:[...ingresosFiltrados.map((row)=>({Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Tipo:'Ingreso',Concepto:row.concepto,Categoría:row.categoria,Tercero:row.clientes?.nombre||'','Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'','Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),Estado:row.estado})),...egresosFiltrados.map((row)=>({Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Tipo:'Egreso',Concepto:row.concepto,Categoría:categoriaEgresoLabel(row),Tercero:row.empleados?.nombre||row.proveedor||'','Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'','Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),Estado:row.estado}))]}
+    if(tipo==='nomina')return{title:'Reporte de nómina',filenameBase:'RPM_Nomina',rows:nominaExportFiltrada.map((row)=>({ID:row.id,Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Empleado:row.empleados?.nombre||'',Tipo:row.tipo,'Moneda Pago':row.moneda_pago,'Monto Pago':Number(row.monto_pago||0),'Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),'Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'',Notas:row.notas||''}))}
+    if(tipo==='liquidacion')return{title:'Reporte de liquidaciones',filenameBase:'RPM_Liquidaciones',rows:liquidacionExportFiltrada.map((row)=>({ID:row.id,Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Empleado:row.empleados?.nombre||'',Tipo:tipoNominaLabel(row),'Moneda Pago':row.moneda_pago,'Monto Pago':Number(row.monto_pago||0),'Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),'Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'',Notas:row.notas||''}))}
+    return{title:'Reporte financiero',filenameBase:'RPM_Financiero',rows:[...ingresosExportFiltrados.map((row)=>({Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Tipo:'Ingreso',Concepto:row.concepto,Categoría:row.categoria,Tercero:row.clientes?.nombre||'','Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'','Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),Estado:row.estado})),...egresosExportFiltrados.map((row)=>({Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Tipo:'Egreso',Concepto:row.concepto,Categoría:categoriaEgresoLabel(row),Tercero:row.empleados?.nombre||row.proveedor||'','Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'','Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),Estado:row.estado}))]}
   }
 
   async function handleExportExcel(){const data=buildExportRows();const stamp=new Date().toISOString().slice(0,19).replace(/:/g,'-');await exportStyledExcel({title:data.title,subtitle:`${getPeriodoTexto(fechaInicio,fechaFin,horaInicio,horaFin)} · Generado por: ${generadoPor||'—'}`,sheetName:data.title,filename:`${data.filenameBase}_${stamp}.xlsx`,rows:data.rows,logoSrc:'/logo-rpm.png',accentColor:'111827'})}
   async function handleExportPDF(){const data=buildExportRows();const stamp=new Date().toISOString().slice(0,19).replace(/:/g,'-');await exportReportePDF({title:data.title,subtitle:getPeriodoTexto(fechaInicio,fechaFin,horaInicio,horaFin),rows:data.rows,filename:`${data.filenameBase}_${stamp}.pdf`,generadoPor,logoSrc:'/logo-imprimir.png'})}
-  async function handleCierrePDF(){await exportCierrePDF({ingresos:ingresosFiltrados,egresos:egresosFiltrados,fechaInicio,fechaFin,horaInicio,horaFin,monedaVista,generadoPor,logoSrc:'/logo-imprimir.png'})}
+  async function handleCierrePDF(){await exportCierrePDF({ingresos:ingresosExportFiltrados,egresos:egresosExportFiltrados,fechaInicio,fechaFin,horaInicio,horaFin,monedaVista,generadoPor,logoSrc:'/logo-imprimir.png'})}
   async function handlePresupuestoPDF(){await exportPresupuestoPDF({numero:presupNumero,fecha:formatBudgetDate(presupFecha),atencion:presupAtencion,direccion:presupDireccion,rif:presupRif,telefono:presupTelefono,lineas:presupLineas,observaciones:presupObservaciones||undefined,realizadoPor:presupRealizadoPor||generadoPor||undefined});registrarDocumento('presupuesto',presupAtencion||'Sin cliente',`Presupuesto #${presupNumero}`)}
   async function handleInformeSesionesPDF(){await exportInformeSesionesPDF({citas:citasFiltradas,paciente:constanciaPaciente||citasFiltradas[0]?.clientes?.nombre||'',cedula:constanciaCedula,terapeuta:constanciaTerapeuta,ciudad:constanciaCiudad,generadoPor,logoSrc:'/logo-imprimir.png'});registrarDocumento('informe_sesiones',constanciaPaciente||citasFiltradas[0]?.clientes?.nombre||'Sin paciente',`Informe de sesiones · ${citasFiltradas.length} citas`)}
   async function handleConstanciaPDF(){const sesiones=citasFiltradas.filter((row)=>(row.estado||'').toLowerCase()!=='cancelada').map((row)=>({fecha:row.fecha,terapeuta:row.empleados?.nombre||constanciaTerapeuta,tipoSesion:row.servicios?.nombre||'Sesión de fisioterapia'})).sort((a,b)=>(a.fecha>b.fecha?1:-1));await exportConstanciaPDF({paciente:constanciaPaciente||citasFiltradas[0]?.clientes?.nombre||'',cedula:constanciaCedula,terapeuta:constanciaTerapeuta,ciudad:constanciaCiudad,fechaEmision:shortDate(todayISO()),sesiones,generadoPor});registrarDocumento('constancia',constanciaPaciente||citasFiltradas[0]?.clientes?.nombre||'Sin paciente',`Constancia con ${sesiones.length} sesiones`)}
@@ -815,6 +1027,58 @@ export default function ReportesPage() {
                     </button>
                   ))}
                 </div>
+              </div>
+            )}
+
+
+            {showFinanciero && (
+              <div className="mt-4 border-t border-white/[0.06] pt-4">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30">Filtros de movimientos / impresión</p>
+                  {filtrosExportActivos && (
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-300">
+                        Mostrando {exportCountActual ?? 0} mov.
+                      </span>
+                      <GhostBtn onClick={() => { setFiltroExportMonedas([]); setFiltroExportMetodos([]); setFiltroExportCategorias([]); setFiltroExportEstados([]) }}>
+                        Limpiar
+                      </GhostBtn>
+                    </div>
+                  )}
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <MultiFilterDropdown
+                    label="Moneda"
+                    values={filtroExportMonedas}
+                    onChange={setFiltroExportMonedas}
+                    options={exportFilterOptions.monedas.map((m) => ({ value: m, label: m }))}
+                    placeholder="Todas las monedas"
+                  />
+                  <MultiFilterDropdown
+                    label="Subcartera / método"
+                    values={filtroExportMetodos}
+                    onChange={setFiltroExportMetodos}
+                    options={exportFilterOptions.metodos.map((m) => ({ value: m, label: m }))}
+                    placeholder="Todas las subcarteras"
+                  />
+                  <MultiFilterDropdown
+                    label="Categoría"
+                    values={filtroExportCategorias}
+                    onChange={setFiltroExportCategorias}
+                    options={exportFilterOptions.categorias.map((c) => ({ value: c, label: c }))}
+                    placeholder="Todas las categorías"
+                  />
+                  <MultiFilterDropdown
+                    label="Estado"
+                    values={filtroExportEstados}
+                    onChange={setFiltroExportEstados}
+                    options={exportFilterOptions.estados.map((estado) => ({ value: estado, label: estado }))}
+                    placeholder="Todos los estados"
+                  />
+                </div>
+                <p className="mt-2 text-[10px] text-white/30">
+                  Estos filtros actualizan la tabla de movimientos, métricas, gráficos, PDF, Excel y Cierre PDF. Puedes elegir varias opciones por bloque; si dejas un bloque vacío, ese bloque no filtra.
+                </p>
               </div>
             )}
 
