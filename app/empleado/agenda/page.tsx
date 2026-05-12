@@ -118,6 +118,30 @@ function normalize(value: string) {
   return value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 }
 
+
+function formatDateLabel(value: string) {
+  if (!value) return 'Fecha'
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(year, (month || 1) - 1, day || 1)
+  return new Intl.DateTimeFormat('es-VE', {
+    weekday: 'long',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(date)
+}
+
+function moveDate(value: string, days: number) {
+  const base = value || todayKey()
+  const [year, month, day] = base.split('-').map(Number)
+  const date = new Date(year, (month || 1) - 1, day || 1)
+  date.setDate(date.getDate() + days)
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
 export default function EmpleadoAgendaPage() {
   const supabase = useMemo(
     () => createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!),
@@ -133,6 +157,7 @@ export default function EmpleadoAgendaPage() {
   const [toast, setToast] = useState<Toast>(null)
   const [openId, setOpenId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [selectedDate, setSelectedDate] = useState(todayKey())
 
   async function load(keepOpen = true) {
     setLoading(true)
@@ -158,20 +183,20 @@ export default function EmpleadoAgendaPage() {
     }
 
     setEmpleado(emp as Empleado)
-    const hoy = todayKey()
+    const fechaConsulta = selectedDate || todayKey()
 
     const [{ data: citasData, error: citasError }, { data: sesionesData, error: sesionesError }] = await Promise.all([
       supabase
         .from('citas')
         .select('id,cliente_id,fecha,hora_inicio,hora_fin,estado,notas,clientes:cliente_id(id,nombre,telefono)')
         .eq('terapeuta_id', emp.id)
-        .eq('fecha', hoy)
+        .eq('fecha', fechaConsulta)
         .order('hora_inicio'),
       supabase
         .from('v_entrenamientos_plan_asistencia')
         .select('*')
         .eq('empleado_id', emp.id)
-        .eq('fecha', hoy)
+        .eq('fecha', fechaConsulta)
         .order('hora_inicio'),
     ])
 
@@ -197,7 +222,7 @@ export default function EmpleadoAgendaPage() {
   useEffect(() => {
     void load(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [selectedDate])
 
   async function completarCita(id: string) {
     setBusy(id)
@@ -220,16 +245,18 @@ export default function EmpleadoAgendaPage() {
     setBusy(`${id}:${estado}`)
     setToast(null)
 
-    const res = await fetch('/api/empleado/sesion-asistencia', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sesion_id: id, entrenamiento_id: id, asistencia_estado: estado }),
+    const { error } = await supabase.rpc('marcar_asistencia_entrenamiento', {
+      p_entrenamiento_id: id,
+      p_asistencia_estado: estado,
+      p_motivo: null,
+      p_marcado_por: null,
     })
 
-    const json = await res.json().catch(() => ({}))
-
-    if (!res.ok) setToast({ type: 'error', text: json?.error || 'No se pudo marcar la asistencia.' })
-    else setToast({ type: 'ok', text: `Sesión actualizada: ${asistenciaLabel(estado)}.` })
+    if (error) {
+      setToast({ type: 'error', text: error.message || 'No se pudo marcar la asistencia.' })
+    } else {
+      setToast({ type: 'ok', text: `Sesión actualizada: ${asistenciaLabel(estado)}.` })
+    }
 
     await load()
     setOpenId(null)
@@ -285,16 +312,19 @@ export default function EmpleadoAgendaPage() {
       <header className="flex items-end justify-between gap-3">
         <div className="min-w-0">
           <p className="rpm-muted truncate text-[11px] font-black uppercase tracking-[0.18em]">{empleado?.nombre || 'Empleado'}</p>
-          <h1 className="mt-0.5 text-2xl font-black tracking-tight sm:text-3xl lg:text-[2rem]">Agenda de hoy</h1>
+          <h1 className="mt-0.5 text-2xl font-black tracking-tight sm:text-3xl lg:text-[2rem]">Agenda</h1>
+          <p className="rpm-muted mt-1 text-xs font-bold capitalize">{formatDateLabel(selectedDate)}</p>
         </div>
-        <button
-          type="button"
-          onClick={() => load(false)}
-          disabled={loading}
-          className="shrink-0 rounded-2xl border border-[var(--line)] bg-white/10 px-3 py-2 text-xs font-black text-[var(--text)] transition hover:bg-white/20 disabled:opacity-50"
-        >
-          Actualizar
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={() => load(false)}
+            disabled={loading}
+            className="rounded-2xl border border-[var(--line)] bg-white/10 px-3 py-2 text-xs font-black text-[var(--text)] transition hover:bg-white/20 disabled:opacity-50"
+          >
+            Actualizar
+          </button>
+        </div>
       </header>
 
       {toast ? (
@@ -322,7 +352,7 @@ export default function EmpleadoAgendaPage() {
                 <h2 className="mt-0.5 text-xl font-black leading-none sm:text-2xl">{totalActividades} actividades</h2>
               </div>
             </div>
-            <p className="hidden text-right text-xs font-semibold text-white/60 sm:block">{todayKey()}</p>
+            <p className="hidden text-right text-xs font-semibold capitalize text-white/60 sm:block">{formatDateLabel(selectedDate)}</p>
           </div>
         </div>
 
@@ -340,6 +370,44 @@ export default function EmpleadoAgendaPage() {
             <p className="mt-0.5 text-lg font-black">{marcadas}</p>
           </div>
         </div>
+      </section>
+
+      <section className="glass-card grid gap-2 rounded-[1.15rem] p-2.5 sm:grid-cols-[auto_1fr_auto_auto]">
+        <button
+          type="button"
+          onClick={() => setSelectedDate((prev) => moveDate(prev, -1))}
+          className="rounded-2xl border border-[var(--line)] bg-white/10 px-3 py-2 text-xs font-black transition hover:bg-white/20"
+        >
+          Ayer
+        </button>
+        <label className="flex min-w-0 items-center gap-2 rounded-2xl border border-[var(--line)] bg-white/10 px-3 py-2">
+          <CalendarDays className="h-4 w-4 shrink-0 text-[var(--muted)]" />
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value || todayKey())}
+            className="w-full bg-transparent text-sm font-black outline-none"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => setSelectedDate(todayKey())}
+          className={cx(
+            'rounded-2xl border px-3 py-2 text-xs font-black transition',
+            selectedDate === todayKey()
+              ? 'border-[var(--purple)] bg-[var(--purple)] text-white'
+              : 'border-[var(--line)] bg-white/10 hover:bg-white/20'
+          )}
+        >
+          Hoy
+        </button>
+        <button
+          type="button"
+          onClick={() => setSelectedDate((prev) => moveDate(prev, 1))}
+          className="rounded-2xl border border-[var(--line)] bg-white/10 px-3 py-2 text-xs font-black transition hover:bg-white/20"
+        >
+          Mañana
+        </button>
       </section>
 
       <label className="glass-card flex items-center gap-2 rounded-[1.15rem] px-3 py-2.5">
