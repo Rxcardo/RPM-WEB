@@ -372,42 +372,62 @@ export default function EmpleadoAgendaPage() {
         </div>
       </section>
 
-      <section className="glass-card grid gap-2 rounded-[1.15rem] p-2.5 sm:grid-cols-[auto_1fr_auto_auto]">
-        <button
-          type="button"
-          onClick={() => setSelectedDate((prev) => moveDate(prev, -1))}
-          className="rounded-2xl border border-[var(--line)] bg-white/10 px-3 py-2 text-xs font-black transition hover:bg-white/20"
-        >
-          Ayer
-        </button>
-        <label className="flex min-w-0 items-center gap-2 rounded-2xl border border-[var(--line)] bg-white/10 px-3 py-2">
-          <CalendarDays className="h-4 w-4 shrink-0 text-[var(--muted)]" />
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value || todayKey())}
-            className="w-full bg-transparent text-sm font-black outline-none"
-          />
-        </label>
-        <button
-          type="button"
-          onClick={() => setSelectedDate(todayKey())}
-          className={cx(
-            'rounded-2xl border px-3 py-2 text-xs font-black transition',
-            selectedDate === todayKey()
-              ? 'border-[var(--purple)] bg-[var(--purple)] text-white'
-              : 'border-[var(--line)] bg-white/10 hover:bg-white/20'
-          )}
-        >
-          Hoy
-        </button>
-        <button
-          type="button"
-          onClick={() => setSelectedDate((prev) => moveDate(prev, 1))}
-          className="rounded-2xl border border-[var(--line)] bg-white/10 px-3 py-2 text-xs font-black transition hover:bg-white/20"
-        >
-          Mañana
-        </button>
+      <section className="glass-card flex flex-wrap items-center justify-between gap-2 rounded-[1.15rem] p-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="rpm-muted hidden text-[11px] font-black uppercase tracking-[0.16em] sm:inline">
+            Fecha
+          </span>
+
+          <label
+            title="Cambiar fecha"
+            className="group relative flex h-10 w-10 cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-[var(--line)] bg-white/10 transition hover:bg-white/20 active:scale-95"
+          >
+            <CalendarDays className="pointer-events-none h-4.5 w-4.5 text-[var(--text)] transition group-hover:scale-110" />
+            <input
+              aria-label="Seleccionar fecha"
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value || todayKey())}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0 [color-scheme:dark]"
+            />
+          </label>
+
+          <div className="min-w-0">
+            <p className="text-sm font-black capitalize leading-tight">{formatDateLabel(selectedDate)}</p>
+            <p className="rpm-muted text-[10px] font-bold uppercase tracking-wide">
+              {selectedDate === todayKey() ? 'Hoy' : selectedDate}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setSelectedDate((prev) => moveDate(prev, -1))}
+            className="rounded-xl border border-[var(--line)] bg-white/10 px-2.5 py-2 text-xs font-black transition hover:bg-white/20"
+          >
+            Ayer
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedDate(todayKey())}
+            className={cx(
+              'rounded-xl border px-2.5 py-2 text-xs font-black transition',
+              selectedDate === todayKey()
+                ? 'border-[var(--purple)] bg-[var(--purple)] text-white'
+                : 'border-[var(--line)] bg-white/10 hover:bg-white/20'
+            )}
+          >
+            Hoy
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedDate((prev) => moveDate(prev, 1))}
+            className="rounded-xl border border-[var(--line)] bg-white/10 px-2.5 py-2 text-xs font-black transition hover:bg-white/20"
+          >
+            Mañana
+          </button>
+        </div>
       </section>
 
       <label className="glass-card flex items-center gap-2 rounded-[1.15rem] px-3 py-2.5">
