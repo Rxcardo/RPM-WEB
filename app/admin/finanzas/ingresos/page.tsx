@@ -137,13 +137,21 @@ interface PagoItem {
   tasa_bcv: number | null;
   estado: string;
   cliente_id?: string | null;
+  cita_id?: string | null;
+  cliente_plan_id?: string | null;
   inventario_id?: string | null;
   cantidad_producto?: number | null;
   metodo_pago_id?: string | null;
   metodo_pago_v2_id?: string | null;
   notas?: string | null;
   referencia?: string | null;
-  metodos_pago_v2?: { nombre: string } | null;
+  metodos_pago_v2?: {
+    id?: string | null;
+    nombre: string;
+    tipo?: string | null;
+    moneda?: string | null;
+    cartera?: Cartera | null;
+  } | null;
   clientes?: { nombre: string } | null;
 }
 
@@ -173,7 +181,15 @@ type TipoIngresoUI = "producto" | "saldo";
 type DestinoSaldo = "credito" | "deuda";
 type TipoConsumidor = "cliente" | "empleado";
 type ModoCobroEmpleadoProducto = "pagado" | "deuda";
-type TipoFiltroIngreso = "todos" | "producto" | "saldo" | "venta_rapida";
+type TipoFiltroIngreso =
+  | "todos"
+  | "producto"
+  | "saldo"
+  | "venta_rapida"
+  | "plan"
+  | "cita"
+  | "abono"
+  | "otros";
 
 type RawCartera =
   | { nombre?: unknown; codigo?: unknown }
@@ -205,6 +221,8 @@ type RawPago = {
   monto_equivalente_usd?: unknown;
   monto_equivalente_bs?: unknown;
   cliente_id?: unknown;
+  cita_id?: unknown;
+  cliente_plan_id?: unknown;
   inventario_id?: unknown;
   cantidad_producto?: unknown;
   metodo_pago_id?: unknown;
@@ -212,8 +230,8 @@ type RawPago = {
   notas?: unknown;
   referencia?: unknown;
   metodos_pago_v2?:
-    | { nombre?: unknown }
-    | Array<{ nombre?: unknown }>
+    | { id?: unknown; nombre?: unknown; tipo?: unknown; moneda?: unknown; cartera?: RawCartera }
+    | Array<{ id?: unknown; nombre?: unknown; tipo?: unknown; moneda?: unknown; cartera?: RawCartera }>
     | null
     | undefined;
   clientes?:
@@ -346,6 +364,8 @@ function normalizePago(raw: RawPago): PagoItem {
     tasa_bcv: toNumberOrNull(raw.tasa_bcv),
     estado: toStringSafe(raw.estado),
     cliente_id: toStringOrNull(raw.cliente_id),
+    cita_id: toStringOrNull(raw.cita_id),
+    cliente_plan_id: toStringOrNull(raw.cliente_plan_id),
     inventario_id: toStringOrNull(raw.inventario_id),
     cantidad_producto: toNumberOrNull(raw.cantidad_producto),
     metodo_pago_id: toStringOrNull(raw.metodo_pago_id),
@@ -353,7 +373,13 @@ function normalizePago(raw: RawPago): PagoItem {
     notas: toStringOrNull(raw.notas),
     referencia: toStringOrNull(raw.referencia),
     metodos_pago_v2: metodo?.nombre
-      ? { nombre: toStringSafe(metodo.nombre) }
+      ? {
+          id: toStringOrNull(metodo.id),
+          nombre: toStringSafe(metodo.nombre),
+          tipo: toStringOrNull(metodo.tipo),
+          moneda: toStringOrNull(metodo.moneda),
+          cartera: normalizeCartera(metodo.cartera),
+        }
       : null,
     clientes: cliente?.nombre ? { nombre: toStringSafe(cliente.nombre) } : null,
   };
@@ -921,6 +947,139 @@ function Divider() {
   return <div className="h-px w-full bg-white/[0.05]" />;
 }
 
+
+function ingresoTipoBadge(operacion: PagoOperacion) {
+  const concepto = operacion.concepto.toLowerCase();
+  const categoria = operacion.categoria.toLowerCase();
+  const origen = operacion.tipo_origen.toLowerCase();
+  if (!operacion.cliente_id && (origen === "producto" || categoria === "producto")) return "Venta rápida";
+  if (categoria === "saldo_cliente" || origen === "saldo_cliente" || concepto.includes("saldo") || concepto.includes("recarga")) return "Saldo";
+  if (origen === "producto" || categoria === "producto" || operacion.inventario_id) return "Producto";
+  if ((operacion.items as any[]).some((i) => i.cliente_plan_id) || origen.includes("plan") || origen.includes("cliente_plan") || categoria.includes("plan") || concepto.includes("plan")) return "Plan";
+  if ((operacion.items as any[]).some((i) => i.cita_id) || origen.includes("cita") || categoria.includes("cita") || concepto.includes("cita") || concepto.includes("sesión") || concepto.includes("sesion")) return "Cita";
+  if (origen.includes("abono") || categoria.includes("abono") || concepto.includes("abono") || concepto.includes("deuda")) return "Abono";
+  return operacion.categoria || operacion.tipo_origen || "Ingreso";
+}
+
+function esOperacionEditableDesdeIngresos(operacion: PagoOperacion) {
+  const tipo = ingresoTipoBadge(operacion).toLowerCase();
+  return tipo === "producto" || tipo === "venta rápida" || tipo === "saldo";
+}
+
+function metodoLinea(item: PagoItem) {
+  const metodo = item.metodos_pago_v2;
+  const cartera = metodo?.cartera?.nombre || "Sin cartera";
+  const moneda = metodo?.moneda || item.moneda_pago || "USD";
+  return `${metodo?.nombre || "Método"} · ${cartera} · ${moneda}`;
+}
+
+function OperacionDetalleDrawer({
+  operacion,
+  onClose,
+}: {
+  operacion: PagoOperacion | null;
+  onClose: () => void;
+}) {
+  const open = !!operacion;
+  const tasaPrincipal = operacion?.items.find((item) => Number(item.tasa_bcv || 0) > 0)?.tasa_bcv || null;
+  return (
+    <>
+      <div
+        onClick={onClose}
+        className={`fixed inset-0 z-40 bg-black/35 backdrop-blur-[2px] transition-all duration-300 ${open ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}
+      />
+      <aside
+        className={`fixed bottom-4 right-4 top-4 z-50 flex w-[430px] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-3xl border border-white/[0.08] bg-[#080b18]/95 shadow-[0_24px_90px_rgba(0,0,0,0.65)] backdrop-blur-xl transition-all duration-300 ease-out ${open ? "translate-x-0 opacity-100" : "translate-x-[115%] opacity-0"}`}
+      >
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-emerald-400/[0.05] via-transparent to-transparent" />
+        <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/30 to-transparent" />
+        {operacion && (
+          <>
+            <div className="relative z-10 flex items-start justify-between gap-3 border-b border-white/[0.06] bg-[#080b18]/90 px-5 py-4 backdrop-blur-xl">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-widest text-emerald-300/80">Detalle de ingreso</p>
+                <h2 className="mt-1 line-clamp-2 text-lg font-bold leading-tight text-white">{operacion.concepto}</h2>
+                <p className="mt-1 text-xs text-white/35">{operacion.fecha} · {ingresoTipoBadge(operacion)} · {operacion.estado}</p>
+              </div>
+              <button type="button" onClick={onClose} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-sm text-white/45 transition hover:bg-white/[0.08] hover:text-white" aria-label="Cerrar detalle">✕</button>
+            </div>
+
+            <div className="relative z-10 min-h-0 flex-1 overflow-y-auto px-4 py-4">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-xl border border-emerald-400/15 bg-emerald-400/[0.05] px-3 py-2">
+                  <p className="text-[9px] uppercase tracking-widest text-emerald-300/60">Total USD</p>
+                  <p className="mt-1 text-sm font-bold tabular-nums text-emerald-300">{formatearMoneda(operacion.total_usd, "USD")}</p>
+                </div>
+                <div className="rounded-xl border border-amber-400/15 bg-amber-400/[0.05] px-3 py-2">
+                  <p className="text-[9px] uppercase tracking-widest text-amber-300/60">Total BS</p>
+                  <p className="mt-1 text-sm font-bold tabular-nums text-amber-300">{formatearMoneda(operacion.total_bs, "BS")}</p>
+                </div>
+                <div className="rounded-xl border border-violet-400/15 bg-violet-400/[0.05] px-3 py-2">
+                  <p className="text-[9px] uppercase tracking-widest text-violet-300/60">Cliente</p>
+                  <p className="mt-1 truncate text-sm font-bold text-violet-100">{operacion.cliente_nombre || "Venta rápida / sin cliente"}</p>
+                </div>
+                <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-2">
+                  <p className="text-[9px] uppercase tracking-widest text-white/30">Operación</p>
+                  <p className="mt-1 truncate text-sm font-bold text-white/70">{operacion.operacion_pago_id || operacion.id_representativo}</p>
+                </div>
+              </div>
+
+              <Divider />
+
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-semibold uppercase tracking-widest text-white/30">Movimientos de pago</p>
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-semibold text-white/45">{operacion.items.length}</span>
+                </div>
+                {operacion.items.map((item, index) => (
+                  <div key={item.id} className="rounded-2xl border border-white/[0.06] bg-white/[0.025] px-3 py-3 transition hover:bg-white/[0.045]">
+                    <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-300">Ingreso</span>
+                      <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white/50">Pago {item.pago_item_no || index + 1}</span>
+                      <span className="text-[10px] text-white/25">{item.fecha}</span>
+                    </div>
+                    <p className="text-xs font-semibold text-white">{metodoLinea(item)}</p>
+                    <p className="mt-1 text-[11px] text-white/35">Cartera: {item.metodos_pago_v2?.cartera?.nombre || "Sin cartera"} · Categoría: {item.categoria}</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-2.5 py-2">
+                        <p className="text-[9px] uppercase tracking-widest text-white/25">Monto origen</p>
+                        <p className="mt-1 text-xs font-bold text-white">{formatearMoneda(Number(item.monto ?? item.monto_pago ?? 0), item.moneda_pago === "BS" || item.moneda_pago === "VES" ? "BS" : "USD")}</p>
+                      </div>
+                      <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-2.5 py-2">
+                        <p className="text-[9px] uppercase tracking-widest text-white/25">Equivalente</p>
+                        <p className="mt-1 text-xs font-bold text-emerald-300">{formatearMoneda(Number(item.monto_equivalente_usd || 0), "USD")}</p>
+                        <p className="text-[10px] text-amber-300/80">{formatearMoneda(Number(item.monto_equivalente_bs || 0), "BS")}</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-white/30">
+                      {item.referencia && <span>Ref: #{item.referencia}</span>}
+                      {item.tasa_bcv && <span>Tasa: {item.tasa_bcv}</span>}
+                      {item.notas && <span>Nota: {item.notas}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <Divider />
+
+              <div className="mt-4 rounded-2xl border border-white/[0.06] bg-white/[0.025] p-3">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-white/30">Resumen técnico</p>
+                <div className="space-y-1 text-[11px] text-white/45">
+                  <p><span className="text-white/25">Tipo origen:</span> {operacion.tipo_origen || "—"}</p>
+                  <p><span className="text-white/25">Categoría:</span> {operacion.categoria || "—"}</p>
+                  <p><span className="text-white/25">Producto / inventario:</span> {operacion.inventario_id || "—"}</p>
+                  <p><span className="text-white/25">Cantidad:</span> {operacion.cantidad_producto || "—"}</p>
+                  {tasaPrincipal && <p><span className="text-white/25">Tasa BCV usada:</span> {tasaPrincipal}</p>}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </aside>
+    </>
+  );
+}
+
 function LoadingIngresos() {
   return (
     <div className="min-h-screen p-4 sm:p-6 lg:p-8">
@@ -954,6 +1113,7 @@ function IngresosPageContent() {
     searchParams.get("cuenta") || searchParams.get("cuentaId") || "";
 
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [pagos, setPagos] = useState<PagoItem[]>([]);
   const [metodosPago, setMetodosPago] = useState<MetodoPago[]>([]);
@@ -969,6 +1129,7 @@ function IngresosPageContent() {
   const [fechaDesdeFiltro, setFechaDesdeFiltro] = useState("");
   const [fechaHastaFiltro, setFechaHastaFiltro] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [detalleOperacion, setDetalleOperacion] = useState<PagoOperacion | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingOperacionId, setEditingOperacionId] = useState<string | null>(
     null,
@@ -1441,50 +1602,57 @@ function IngresosPageContent() {
 
   async function cargarDatos() {
     setLoading(true);
-    const [pagosRes, metodosRes, productosRes, clientesRes, empleadosRes] =
-      await Promise.all([
-        supabase
-          .from("pagos")
-          .select(
-            `id, operacion_pago_id, pago_item_no, pago_items_total, es_pago_mixto, fecha, concepto, categoria, tipo_origen, estado, moneda_pago, tasa_bcv, monto, monto_pago, monto_equivalente_usd, monto_equivalente_bs, cliente_id, inventario_id, cantidad_producto, metodo_pago_id, metodo_pago_v2_id, notas, referencia, metodos_pago_v2:metodo_pago_v2_id(nombre), clientes:cliente_id(nombre)`,
-          )
-          .in("categoria", ["producto", "saldo_cliente"])
-          .in("tipo_origen", ["producto", "saldo_cliente"])
-          .order("fecha", { ascending: false })
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("metodos_pago_v2")
-          .select(`id, nombre, tipo, moneda, cartera:carteras(nombre, codigo)`)
-          .eq("activo", true)
-          .eq("permite_recibir", true),
-        supabase
-          .from("inventario")
-          .select(
-            `id, nombre, descripcion, cantidad_actual, unidad_medida, precio_venta_usd, estado`,
-          )
-          .eq("estado", "activo")
-          .order("nombre"),
-        supabase
-          .from("clientes")
-          .select("id, nombre, telefono, email")
-          .order("nombre"),
-        supabase
-          .from("empleados")
-          .select("id, nombre, telefono, email, rol")
-          .eq("estado", "activo")
-          .order("nombre"),
-      ]);
-    if (pagosRes.data)
-      setPagos((pagosRes.data as RawPago[]).map(normalizePago));
-    if (metodosRes.data)
-      setMetodosPago(
-        (metodosRes.data as RawMetodoPago[]).map(normalizeMetodoPago),
-      );
-    if (productosRes.data) setProductos(productosRes.data as Producto[]);
-    if (clientesRes.data) setClientes(clientesRes.data as Cliente[]);
-    if (empleadosRes.data)
-      setEmpleados(empleadosRes.data as EmpleadoConsumidor[]);
-    setLoading(false);
+    setLoadError("");
+    try {
+      const [pagosRes, metodosRes, productosRes, clientesRes, empleadosRes] =
+        await Promise.all([
+          supabase
+            .from("pagos")
+            .select(
+              `id, operacion_pago_id, pago_item_no, pago_items_total, es_pago_mixto, fecha, concepto, categoria, tipo_origen, estado, moneda_pago, tasa_bcv, monto, monto_pago, monto_equivalente_usd, monto_equivalente_bs, cliente_id, cita_id, cliente_plan_id, inventario_id, cantidad_producto, metodo_pago_id, metodo_pago_v2_id, notas, referencia, metodos_pago_v2:metodo_pago_v2_id(id, nombre, tipo, moneda, cartera:cartera_id(nombre, codigo)), clientes:cliente_id(nombre)`,
+            )
+            .order("fecha", { ascending: false })
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("metodos_pago_v2")
+            .select(`id, nombre, tipo, moneda, cartera:carteras(nombre, codigo)`)
+            .eq("activo", true)
+            .eq("permite_recibir", true),
+          supabase
+            .from("inventario")
+            .select(
+              `id, nombre, descripcion, cantidad_actual, unidad_medida, precio_venta_usd, estado`,
+            )
+            .eq("estado", "activo")
+            .order("nombre"),
+          supabase
+            .from("clientes")
+            .select("id, nombre, telefono, email")
+            .order("nombre"),
+          supabase
+            .from("empleados")
+            .select("id, nombre, telefono, email, rol")
+            .eq("estado", "activo")
+            .order("nombre"),
+        ]);
+
+      if (pagosRes.error) throw pagosRes.error;
+      if (metodosRes.error) throw metodosRes.error;
+      if (productosRes.error) throw productosRes.error;
+      if (clientesRes.error) throw clientesRes.error;
+      if (empleadosRes.error) throw empleadosRes.error;
+
+      setPagos((pagosRes.data || []).map(normalizePago));
+      setMetodosPago((metodosRes.data || []).map(normalizeMetodoPago));
+      setProductos((productosRes.data || []) as Producto[]);
+      setClientes((clientesRes.data || []) as Cliente[]);
+      setEmpleados((empleadosRes.data || []) as EmpleadoConsumidor[]);
+    } catch (err: any) {
+      setLoadError(err?.message || "No se pudieron cargar los ingresos.");
+      setPagos([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function cargarEstadoCuentaCliente(id: string) {
@@ -2830,6 +2998,7 @@ function IngresosPageContent() {
     setMontoManualUSD("");
     setDestinoSaldo("credito");
     setShowForm(false);
+    setDetalleOperacion(null);
   }
 
   function startEdit(operacion: PagoOperacion) {
@@ -3048,6 +3217,22 @@ function IngresosPageContent() {
               !!pago.inventario_id);
           if (!esVentaRapida) return false;
         }
+        if (tipoFiltro === "plan") {
+          const esPlan = ingresoTipoBadge(pago).toLowerCase() === "plan";
+          if (!esPlan) return false;
+        }
+        if (tipoFiltro === "cita") {
+          const esCita = ingresoTipoBadge(pago).toLowerCase() === "cita";
+          if (!esCita) return false;
+        }
+        if (tipoFiltro === "abono") {
+          const esAbono = ingresoTipoBadge(pago).toLowerCase() === "abono";
+          if (!esAbono) return false;
+        }
+        if (tipoFiltro === "otros") {
+          const tipoIngresoActual = ingresoTipoBadge(pago).toLowerCase();
+          if (["producto", "venta rápida", "saldo", "plan", "cita", "abono"].includes(tipoIngresoActual)) return false;
+        }
         if (productoFiltro !== "todos") {
           const nombreProducto =
             productoNombrePorId.get(productoFiltro)?.toLowerCase() || "";
@@ -3115,6 +3300,15 @@ function IngresosPageContent() {
       modoCobroEmpleadoProducto === "pagado");
 
   if (loading) return <LoadingIngresos />;
+  if (loadError) {
+    return (
+      <div className="min-h-screen p-4 sm:p-6 lg:p-8">
+        <div className="mx-auto max-w-4xl rounded-2xl border border-rose-400/20 bg-rose-400/[0.06] p-4 text-sm text-rose-200">
+          Error cargando ingresos: {loadError}
+        </div>
+      </div>
+    );
+  }
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -3135,7 +3329,7 @@ function IngresosPageContent() {
               Ingresos y consumos
             </h1>
             <p className="mt-0.5 text-xs text-white/35">
-              Ventas de inventario · recargas · deudas · créditos
+              Planes · citas · productos · recargas · abonos
             </p>
           </div>
 
@@ -3198,6 +3392,8 @@ function IngresosPageContent() {
             )}
           </div>
         </div>
+
+        <OperacionDetalleDrawer operacion={detalleOperacion} onClose={() => setDetalleOperacion(null)} />
 
         <div className="grid gap-5 xl:grid-cols-3">
           {/* ══ FORMULARIO ══ */}
@@ -4292,9 +4488,13 @@ function IngresosPageContent() {
               <div className="mt-2.5 flex flex-wrap gap-1">
                 {[
                   { value: "todos", label: "Todos" },
+                  { value: "plan", label: "Planes" },
+                  { value: "cita", label: "Citas" },
+                  { value: "abono", label: "Abonos" },
                   { value: "producto", label: "Productos" },
                   { value: "saldo", label: "Saldos" },
                   { value: "venta_rapida", label: "Rápidas" },
+                  { value: "otros", label: "Otros" },
                 ].map((item) => (
                   <button
                     key={item.value}
@@ -4464,6 +4664,8 @@ function IngresosPageContent() {
                           </div>
                           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-white/30">
                             <span>{operacion.fecha}</span>
+                            <span>·</span>
+                            <span>{ingresoTipoBadge(operacion)}</span>
                             {operacion.cliente_nombre && (
                               <>
                                 <span>·</span>
@@ -4497,17 +4699,30 @@ function IngresosPageContent() {
                           </div>
                           <div className="flex gap-1">
                             <button
-                              onClick={() => startEdit(operacion)}
-                              className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-1.5 text-white/35 transition hover:text-white/70"
+                              onClick={() => setDetalleOperacion(operacion)}
+                              className="rounded-lg border border-emerald-400/15 bg-emerald-400/[0.06] p-1.5 text-emerald-300/70 transition hover:text-emerald-200"
+                              title="Ver detalle de movimientos"
                             >
-                              <Edit2 className="h-3.5 w-3.5" />
+                              <Receipt className="h-3.5 w-3.5" />
                             </button>
-                            <button
-                              onClick={() => eliminarPago(operacion)}
-                              className="rounded-lg border border-rose-400/15 bg-rose-400/[0.06] p-1.5 text-rose-300/60 transition hover:text-rose-300"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
+                            {esOperacionEditableDesdeIngresos(operacion) && (
+                              <>
+                                <button
+                                  onClick={() => startEdit(operacion)}
+                                  className="rounded-lg border border-white/[0.07] bg-white/[0.02] p-1.5 text-white/35 transition hover:text-white/70"
+                                  title="Editar ingreso operativo"
+                                >
+                                  <Edit2 className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => eliminarPago(operacion)}
+                                  className="rounded-lg border border-rose-400/15 bg-rose-400/[0.06] p-1.5 text-rose-300/60 transition hover:text-rose-300"
+                                  title="Eliminar ingreso operativo"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -4521,18 +4736,12 @@ function IngresosPageContent() {
                                 key={item.id}
                                 className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-2.5 py-1.5"
                               >
-                                <div className="flex items-center gap-2 text-[11px] text-white/50">
-                                  <span className="font-medium text-white/70">
-                                    {item.metodos_pago_v2?.nombre || "Método"}
-                                  </span>
-                                  <span>·</span>
-                                  <span>{item.moneda_pago || "USD"}</span>
-                                  {item.referencia && (
-                                    <>
-                                      <span>·</span>
-                                      <span>#{item.referencia}</span>
-                                    </>
-                                  )}
+                                <div className="min-w-0 flex-1 text-[11px] text-white/50">
+                                  <p className="truncate font-medium text-white/70">{metodoLinea(item)}</p>
+                                  <p className="mt-0.5 truncate text-[10px] text-white/30">
+                                    {item.referencia ? `Ref: #${item.referencia}` : "Sin referencia"}
+                                    {item.tasa_bcv ? ` · Tasa: ${item.tasa_bcv}` : ""}
+                                  </p>
                                 </div>
                                 <div className="text-right">
                                   <span className="text-xs font-semibold text-white">
