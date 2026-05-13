@@ -172,8 +172,14 @@ type SolicitudComunicacion = {
   titulo?: string | null;
   descripcion?: string | null;
   created_at?: string | null;
-  clientes?: { nombre?: string | null; telefono?: string | null } | { nombre?: string | null; telefono?: string | null }[] | null;
-  fisios?: { nombre?: string | null; rol?: string | null } | { nombre?: string | null; rol?: string | null }[] | null;
+  clientes?:
+    | { nombre?: string | null; telefono?: string | null }
+    | { nombre?: string | null; telefono?: string | null }[]
+    | null;
+  fisios?:
+    | { nombre?: string | null; rol?: string | null }
+    | { nombre?: string | null; rol?: string | null }[]
+    | null;
 };
 type ConversacionComunicacion = {
   id: string;
@@ -184,8 +190,14 @@ type ConversacionComunicacion = {
   recepcionista_id?: string | null;
   ultimo_mensaje?: string | null;
   ultima_actividad_at?: string | null;
-  clientes?: { nombre?: string | null; telefono?: string | null } | { nombre?: string | null; telefono?: string | null }[] | null;
-  fisios?: { nombre?: string | null; rol?: string | null } | { nombre?: string | null; rol?: string | null }[] | null;
+  clientes?:
+    | { nombre?: string | null; telefono?: string | null }
+    | { nombre?: string | null; telefono?: string | null }[]
+    | null;
+  fisios?:
+    | { nombre?: string | null; rol?: string | null }
+    | { nombre?: string | null; rol?: string | null }[]
+    | null;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -211,6 +223,19 @@ function sameDay(dateStr: string | null | undefined, todayStr: string) {
 
 function getDateKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function getMonthStartKey(dateStr: string | null | undefined) {
+  const base = dateStr || getDateKey(new Date());
+  return `${base.slice(0, 7)}-01`;
+}
+
+function getMonthEndKey(dateStr: string | null | undefined) {
+  const base = dateStr || getDateKey(new Date());
+  const year = Number(base.slice(0, 4));
+  const month = Number(base.slice(5, 7));
+  const last = new Date(year, month, 0).getDate();
+  return `${base.slice(0, 7)}-${String(last).padStart(2, "0")}`;
 }
 
 function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
@@ -374,13 +399,43 @@ function addMinutesToHour(hour: string, minutes: number) {
   return `${String(base.getHours()).padStart(2, "0")}:${String(base.getMinutes()).padStart(2, "0")}`;
 }
 
-function isPlanOperativoFromRow(row: EntrenamientoPlanRow, hoy: string) {
+function isSesionPlanVisible(row: EntrenamientoPlanRow) {
+  const estadoEntrenamiento = (row.estado || "").toLowerCase();
+  if (
+    estadoEntrenamiento === "cancelado" ||
+    estadoEntrenamiento === "cancelada"
+  ) {
+    return false;
+  }
+
   const cp = firstOrNull(row.clientes_planes);
   if (!cp) return false;
+
   const estadoPlan = (cp.estado || "").toLowerCase();
-  if (estadoPlan !== "activo") return false;
-  if (cp.fecha_fin && cp.fecha_fin < hoy) return false;
+
+  // Igual que en la página del cliente: las sesiones dentro del plan se muestran
+  // mientras el plan asociado no esté cancelado. No se ocultan por agotado,
+  // vencido, completado o asistido, porque siguen siendo sesiones reales.
+  if (estadoPlan === "cancelado" || estadoPlan === "cancelada") return false;
+
   return true;
+}
+
+function normalizarEntrenamientosPlanRows(rows: any[]) {
+  return rows
+    .map((row) => ({
+      ...row,
+      clientes: firstOrNull(row?.clientes),
+      empleados: firstOrNull(row?.empleados),
+      actualizado_por: firstOrNull(row?.actualizado_por),
+      clientes_planes: firstOrNull(row?.clientes_planes)
+        ? {
+            ...firstOrNull(row?.clientes_planes),
+            planes: firstOrNull(firstOrNull(row?.clientes_planes)?.planes),
+          }
+        : null,
+    }))
+    .filter((row) => isSesionPlanVisible(row));
 }
 
 function canReagendarSesion(row: EntrenamientoPlanRow) {
@@ -556,7 +611,10 @@ function dedupeConversacionesComunicacion(rows: ConversacionComunicacion[]) {
   rows.forEach((row) => {
     const key = comunicacionGroupKey(row);
     const existing = map.get(key);
-    map.set(key, existing ? pickBetterConversacionComunicacion(existing, row) : row);
+    map.set(
+      key,
+      existing ? pickBetterConversacionComunicacion(existing, row) : row,
+    );
   });
 
   return Array.from(map.values()).sort(
@@ -565,7 +623,6 @@ function dedupeConversacionesComunicacion(rows: ConversacionComunicacion[]) {
       comunicacionDateValue(a.ultima_actividad_at),
   );
 }
-
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -839,7 +896,9 @@ export default function DashboardPage() {
   );
   const [filtroCitasHoy, setFiltroCitasHoy] = useState("");
   const [filtroSesionesPlan, setFiltroSesionesPlan] = useState("");
-  const [vistaSesionesPlan, setVistaSesionesPlan] = useState<"bloques" | "lista">("bloques");
+  const [vistaSesionesPlan, setVistaSesionesPlan] = useState<
+    "bloques" | "lista"
+  >("bloques");
   const [filtroAsistenciaPersonal, setFiltroAsistenciaPersonal] = useState("");
   const [filtroPlanActivo, setFiltroPlanActivo] = useState("");
 
@@ -892,6 +951,11 @@ export default function DashboardPage() {
     void loadDashboard();
     void loadEmpleadoActual();
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    void loadEntrenamientosPlanForDate(asistenciaFilterFecha);
+  }, [asistenciaFilterFecha]);
 
   function showAlert(type: AlertType, title: string, message: string) {
     setAlert({ type, title, message });
@@ -973,8 +1037,11 @@ export default function DashboardPage() {
           )
           .not("cliente_plan_id", "is", null)
           .neq("estado", "cancelado")
+          .gte("fecha", getMonthStartKey(asistenciaFilterFecha))
+          .lte("fecha", getMonthEndKey(asistenciaFilterFecha))
           .order("fecha", { ascending: true })
-          .order("hora_inicio", { ascending: true }),
+          .order("hora_inicio", { ascending: true })
+          .limit(10000),
         supabase
           .from("empleados_asistencia")
           .select(
@@ -996,12 +1063,16 @@ export default function DashboardPage() {
           .order("created_at", { ascending: false }),
         supabase
           .from("solicitudes_comunicacion")
-          .select(`*, clientes:cliente_id(nombre,telefono), fisios:fisio_id(nombre,rol)`)
+          .select(
+            `*, clientes:cliente_id(nombre,telefono), fisios:fisio_id(nombre,rol)`,
+          )
           .order("created_at", { ascending: false })
           .limit(60),
         supabase
           .from("conversaciones")
-          .select(`*, clientes:cliente_id(nombre,telefono), fisios:fisio_id(nombre,rol)`)
+          .select(
+            `*, clientes:cliente_id(nombre,telefono), fisios:fisio_id(nombre,rol)`,
+          )
           .order("ultima_actividad_at", { ascending: false })
           .limit(40),
       ]);
@@ -1015,17 +1086,32 @@ export default function DashboardPage() {
       if (empleadosAsistenciaRes.error) throw empleadosAsistenciaRes.error;
       if (estadosCuentaRes.error) throw estadosCuentaRes.error;
       if (cuentasPorCobrarRes.error) throw cuentasPorCobrarRes.error;
-      if (solicitudesComunicacionRes.error) throw solicitudesComunicacionRes.error;
-      if (conversacionesComunicacionRes.error) throw conversacionesComunicacionRes.error;
+      if (solicitudesComunicacionRes.error)
+        throw solicitudesComunicacionRes.error;
+      if (conversacionesComunicacionRes.error)
+        throw conversacionesComunicacionRes.error;
 
       setClientes((clientesRes.data || []) as Cliente[]);
       setCitas((citasRes.data || []) as CitaRaw[]);
       setPagos((pagosRes.data || []) as Pago[]);
       setEmpleados((empleadosRes.data || []) as Empleado[]);
       setClientesPlanes((clientesPlanesRes.data || []) as PlanCliente[]);
-      setEntrenamientosPlan(
-        (entrenamientosPlanRes.data || []) as unknown as EntrenamientoPlanRow[],
-      );
+
+      const entrenamientosNormalizados = ((entrenamientosPlanRes.data || []) as any[])
+        .map((row) => ({
+          ...row,
+          clientes: firstOrNull(row?.clientes),
+          empleados: firstOrNull(row?.empleados),
+          clientes_planes: firstOrNull(row?.clientes_planes)
+            ? {
+                ...firstOrNull(row?.clientes_planes),
+                planes: firstOrNull(firstOrNull(row?.clientes_planes)?.planes),
+              }
+            : null,
+        }))
+        .filter((row) => isSesionPlanVisible(row as EntrenamientoPlanRow));
+
+      setEntrenamientosPlan(entrenamientosNormalizados as EntrenamientoPlanRow[]);
       setEmpleadosAsistencia(
         (empleadosAsistenciaRes.data ||
           []) as unknown as EmpleadoAsistenciaRow[],
@@ -1037,17 +1123,48 @@ export default function DashboardPage() {
         (cuentasPorCobrarRes.data || []) as CuentaPorCobrar[],
       );
       setSolicitudesComunicacion(
-        (solicitudesComunicacionRes.data || []) as unknown as SolicitudComunicacion[],
+        (solicitudesComunicacionRes.data ||
+          []) as unknown as SolicitudComunicacion[],
       );
       setConversacionesComunicacion(
         dedupeConversacionesComunicacion(
-          (conversacionesComunicacionRes.data || []) as unknown as ConversacionComunicacion[],
+          (conversacionesComunicacionRes.data ||
+            []) as unknown as ConversacionComunicacion[],
         ),
       );
     } catch (err: any) {
       setError(err?.message || "No se pudo cargar el dashboard.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadEntrenamientosPlanForDate(fechaRef: string) {
+    try {
+      const { data, error } = await supabase
+        .from("entrenamientos")
+        .select(
+          `id,cliente_plan_id,cliente_id,empleado_id,recurso_id,fecha,hora_inicio,hora_fin,estado,asistencia_estado,aviso_previo,consume_sesion,reprogramable,motivo_asistencia,fecha_asistencia,reprogramado_de_entrenamiento_id,marcado_por,actualizado_por:marcado_por(id,nombre),clientes:cliente_id(nombre),empleados:empleado_id(nombre,rol),clientes_planes:cliente_plan_id(id,fecha_fin,estado,planes:plan_id(nombre))`,
+        )
+        .not("cliente_plan_id", "is", null)
+        .neq("estado", "cancelado")
+        .gte("fecha", getMonthStartKey(fechaRef))
+        .lte("fecha", getMonthEndKey(fechaRef))
+        .order("fecha", { ascending: true })
+        .order("hora_inicio", { ascending: true })
+        .limit(10000);
+
+      if (error) throw error;
+
+      setEntrenamientosPlan(
+        normalizarEntrenamientosPlanRows((data || []) as any[]) as EntrenamientoPlanRow[],
+      );
+    } catch (err: any) {
+      showAlert(
+        "error",
+        "Error",
+        err?.message || "No se pudieron cargar las sesiones del plan.",
+      );
     }
   }
 
@@ -1254,7 +1371,7 @@ export default function DashboardPage() {
         .filter((row) => {
           if (row.fecha !== asistenciaFilterFecha) return false;
           if ((row.estado || "").toLowerCase() === "cancelado") return false;
-          if (!isPlanOperativoFromRow(row, hoy)) return false;
+          if (!isSesionPlanVisible(row)) return false;
           return true;
         })
         .sort((a, b) =>
@@ -1270,63 +1387,68 @@ export default function DashboardPage() {
 
     const fechaReferencia = asistenciaFilterFecha || hoy;
 
-    const getPrioridadBusqueda = (row: EntrenamientoPlanRow) => {
-      const asistencia = (row.asistencia_estado || "pendiente").toLowerCase();
-      const estado = (row.estado || "").toLowerCase();
+    const matches = entrenamientosPlan.filter((row) => {
+      if (!row.fecha) return false;
+      if (!isSesionPlanVisible(row)) return false;
 
-      // Prioridad 0: si el cliente ya fue marcado como asistió hoy, esa es la sesión que debe salir.
-      if (row.fecha === fechaReferencia && asistencia === "asistio") return 0;
+      const cp = firstOrNull(row.clientes_planes);
+      const cliente = firstOrNull(row.clientes);
+      const empleado = firstOrNull(row.empleados);
+      const plan = firstOrNull(cp?.planes);
 
-      // Prioridad 1: cualquier sesión del día filtrado, aunque esté marcada como avisó/sin aviso/completada.
-      if (row.fecha === fechaReferencia) return 1;
-
-      // Prioridad 2: próxima sesión pendiente desde hoy hacia adelante.
-      if (row.fecha && row.fecha >= hoy && asistencia === "pendiente") return 2;
-
-      // Prioridad 3: próximas sesiones ya gestionadas.
-      if (row.fecha && row.fecha >= hoy && estado !== "cancelado") return 3;
-
-      // Prioridad 4: historial, solo como último respaldo si no hay nada más.
-      return 4;
-    };
-
-    const candidatas = entrenamientosPlan
-      .filter((row) => {
-        if ((row.estado || "").toLowerCase() === "cancelado") return false;
-        if (!row.fecha) return false;
-
-        const cp = firstOrNull(row.clientes_planes);
-        if (!cp || (cp.estado || "").toLowerCase() === "cancelado") return false;
-
-        const cliente = firstOrNull(row.clientes);
-        const empleado = firstOrNull(row.empleados);
-        const plan = firstOrNull(cp?.planes);
-
-        return matchesSearch(filtroSesionesPlan, [
-          cliente?.nombre,
-          empleado?.nombre,
-          plan?.nombre,
-          row.fecha,
-          row.hora_inicio,
-          row.asistencia_estado,
-          row.estado,
-        ]);
-      })
-      .sort((a, b) => {
-        const prioridad = getPrioridadBusqueda(a) - getPrioridadBusqueda(b);
-        if (prioridad !== 0) return prioridad;
-        return `${a.fecha || "9999-99-99"} ${a.hora_inicio || "99:99"}`.localeCompare(
-          `${b.fecha || "9999-99-99"} ${b.hora_inicio || "99:99"}`,
-        );
-      });
-
-    const porCliente = new Map<string, EntrenamientoPlanRow>();
-    candidatas.forEach((row) => {
-      const key = row.cliente_id || firstOrNull(row.clientes)?.nombre || row.id;
-      if (!porCliente.has(key)) porCliente.set(key, row);
+      return matchesSearch(filtroSesionesPlan, [
+        cliente?.nombre,
+        empleado?.nombre,
+        plan?.nombre,
+        row.fecha,
+        row.hora_inicio,
+        row.hora_fin,
+        row.asistencia_estado,
+        row.estado,
+      ]);
     });
 
-    return Array.from(porCliente.values());
+    const grouped = new Map<string, EntrenamientoPlanRow[]>();
+
+    matches.forEach((row) => {
+      const key = row.cliente_id || firstOrNull(row.clientes)?.nombre || row.id;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)!.push(row);
+    });
+
+    const resultado: EntrenamientoPlanRow[] = [];
+
+    grouped.forEach((rows) => {
+      const sesionesDelDia = rows
+        .filter((r) => r.fecha === fechaReferencia)
+        .sort((a, b) => {
+          const aAsistio =
+            (a.asistencia_estado || "").toLowerCase() === "asistio";
+          const bAsistio =
+            (b.asistencia_estado || "").toLowerCase() === "asistio";
+          if (aAsistio !== bAsistio) return aAsistio ? -1 : 1;
+          return `${a.hora_inicio || ""}`.localeCompare(
+            `${b.hora_inicio || ""}`,
+          );
+        });
+
+      const futuras = rows
+        .filter((r) => r.fecha && r.fecha > fechaReferencia)
+        .sort((a, b) =>
+          `${a.fecha || "9999-99-99"} ${a.hora_inicio || "99:99"}`.localeCompare(
+            `${b.fecha || "9999-99-99"} ${b.hora_inicio || "99:99"}`,
+          ),
+        );
+
+      // Todas las sesiones del día seleccionado + las 3 próximas.
+      resultado.push(...sesionesDelDia, ...futuras.slice(0, 3));
+    });
+
+    return resultado.sort((a, b) =>
+      `${a.fecha || "9999-99-99"} ${a.hora_inicio || "99:99"}`.localeCompare(
+        `${b.fecha || "9999-99-99"} ${b.hora_inicio || "99:99"}`,
+      ),
+    );
   }, [
     entrenamientosPlan,
     sesionesPlanBaseDia,
@@ -1341,11 +1463,11 @@ export default function DashboardPage() {
       { key: string; label: string; sesiones: EntrenamientoPlanRow[] }
     >();
     sesionesPlanBaseDia.forEach((row) => {
-        const key = getBloqueKey(row);
-        if (!map.has(key))
-          map.set(key, { key, label: getBloqueLabel(row), sesiones: [] });
-        map.get(key)!.sesiones.push(row);
-      });
+      const key = getBloqueKey(row);
+      if (!map.has(key))
+        map.set(key, { key, label: getBloqueLabel(row), sesiones: [] });
+      map.get(key)!.sesiones.push(row);
+    });
 
     return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key));
   }, [sesionesPlanBaseDia]);
@@ -1395,7 +1517,8 @@ export default function DashboardPage() {
       (row) => (row.asistencia_estado || "").toLowerCase() === "asistio",
     ).length;
     const pendientes = sesiones.filter(
-      (row) => (row.asistencia_estado || "pendiente").toLowerCase() === "pendiente",
+      (row) =>
+        (row.asistencia_estado || "pendiente").toLowerCase() === "pendiente",
     ).length;
     return { asistidas, pendientes, total: sesiones.length };
   }
@@ -1527,7 +1650,13 @@ export default function DashboardPage() {
 
   async function actualizarSolicitudComunicacion(
     solicitudId: string,
-    estado: "pendiente" | "en_revision" | "aprobada" | "rechazada" | "resuelta" | "cancelada",
+    estado:
+      | "pendiente"
+      | "en_revision"
+      | "aprobada"
+      | "rechazada"
+      | "resuelta"
+      | "cancelada",
   ) {
     try {
       let auditorId = empleadoActualId || (await resolveEmpleadoActualId());
@@ -1536,7 +1665,12 @@ export default function DashboardPage() {
         .from("solicitudes_comunicacion")
         .update({
           estado,
-          resuelto_at: ["aprobada", "rechazada", "resuelta", "cancelada"].includes(estado)
+          resuelto_at: [
+            "aprobada",
+            "rechazada",
+            "resuelta",
+            "cancelada",
+          ].includes(estado)
             ? new Date().toISOString()
             : null,
           resuelto_por: auditorId || null,
@@ -2243,9 +2377,7 @@ export default function DashboardPage() {
           value={stats.solicitudesPendientes}
           sub={`${stats.solicitudesRevision} en revisión`}
           accent={
-            stats.solicitudesPendientes > 0
-              ? "text-amber-400"
-              : "text-sky-400"
+            stats.solicitudesPendientes > 0 ? "text-amber-400" : "text-sky-400"
           }
           onClick={() => setPanelOpen("comunicacion")}
           active={panelOpen === "comunicacion"}
@@ -2305,7 +2437,8 @@ export default function DashboardPage() {
           <div>
             <SectionLabel>Comunicación interna</SectionLabel>
             <p className="text-sm text-white/55">
-              {stats.solicitudesPendientes} solicitud(es) pendiente(s) · {conversacionesComunicacionUnicas.length} conversación(es) activas
+              {stats.solicitudesPendientes} solicitud(es) pendiente(s) ·{" "}
+              {conversacionesComunicacionUnicas.length} conversación(es) activas
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -2320,7 +2453,9 @@ export default function DashboardPage() {
             </Link>
           </div>
         </div>
-        {solicitudesComunicacion.filter((s) => (s.estado || "").toLowerCase() === "pendiente").length > 0 ? (
+        {solicitudesComunicacion.filter(
+          (s) => (s.estado || "").toLowerCase() === "pendiente",
+        ).length > 0 ? (
           <div className="mt-3 grid gap-2 lg:grid-cols-3">
             {solicitudesComunicacion
               .filter((s) => (s.estado || "").toLowerCase() === "pendiente")
@@ -2344,7 +2479,8 @@ export default function DashboardPage() {
                       </PillBadge>
                     </div>
                     <p className="truncate text-[11px] text-white/40">
-                      {cliente?.nombre || "Sin cliente"}{fisio?.nombre ? ` · ${fisio.nombre}` : ""}
+                      {cliente?.nombre || "Sin cliente"}
+                      {fisio?.nombre ? ` · ${fisio.nombre}` : ""}
                     </p>
                     <p className="mt-1 line-clamp-2 text-xs text-white/50">
                       {s.descripcion || s.titulo || "Sin descripción"}
@@ -2495,8 +2631,8 @@ export default function DashboardPage() {
             {mostrandoBusquedaSesiones ? (
               <div className="space-y-1.5">
                 <p className="rounded-xl border border-violet-400/15 bg-violet-400/5 px-3 py-2 text-[11px] text-violet-200/80">
-                  Si el cliente ya asistió hoy, se muestra esa sesión primero.
-                  Si no, se muestra la sesión más cercana.
+                  Se muestran máximo 3 sesiones por cliente: la de hoy si existe
+                  y las más cercanas a la fecha seleccionada.
                 </p>
                 {sesionesPlanHoyFiltradas.length === 0 ? (
                   <p className="py-3 text-center text-xs text-white/30">
@@ -2548,10 +2684,12 @@ export default function DashboardPage() {
                             return (
                               <div className="flex shrink-0 flex-col items-end gap-1">
                                 <PillBadge color="amber">
-                                  {resumen.total} persona{resumen.total !== 1 ? "s" : ""}
+                                  {resumen.total} persona
+                                  {resumen.total !== 1 ? "s" : ""}
                                 </PillBadge>
                                 <span className="text-[10px] text-white/30">
-                                  {resumen.pendientes} pend. · {resumen.asistidas} asist.
+                                  {resumen.pendientes} pend. ·{" "}
+                                  {resumen.asistidas} asist.
                                 </span>
                               </div>
                             );
@@ -2884,8 +3022,9 @@ export default function DashboardPage() {
           {mostrandoBusquedaSesiones ? (
             <div className="space-y-2">
               <p className="rounded-xl border border-violet-400/15 bg-violet-400/5 px-3 py-2 text-[11px] text-violet-200/80">
-                Resultado inteligente: primero sale la sesión de hoy si ya fue marcada,
-                y luego la sesión más cercana si todavía está pendiente.
+                Resultado inteligente: máximo 3 por cliente. Primero sale la
+                sesión de hoy si existe y luego las más cercanas a la fecha
+                seleccionada.
               </p>
               {sesionesPlanHoyFiltradas.length === 0 ? (
                 <p className="py-4 text-center text-sm text-white/30">
@@ -2941,10 +3080,12 @@ export default function DashboardPage() {
                               return (
                                 <div className="flex shrink-0 flex-col items-end gap-1">
                                   <PillBadge color="amber">
-                                    {resumen.total} persona{resumen.total !== 1 ? "s" : ""}
+                                    {resumen.total} persona
+                                    {resumen.total !== 1 ? "s" : ""}
                                   </PillBadge>
                                   <span className="text-[10px] text-white/30">
-                                    {resumen.pendientes} pend. · {resumen.asistidas} asist.
+                                    {resumen.pendientes} pend. ·{" "}
+                                    {resumen.asistidas} asist.
                                   </span>
                                 </div>
                               );
@@ -3269,13 +3410,18 @@ export default function DashboardPage() {
                         {s.descripcion || s.titulo || "Sin descripción"}
                       </p>
                       <p className="mt-2 text-[10px] text-white/25">
-                        {s.created_at ? new Date(s.created_at).toLocaleString("es-ES") : "—"}
+                        {s.created_at
+                          ? new Date(s.created_at).toLocaleString("es-ES")
+                          : "—"}
                       </p>
                       <div className="mt-3 grid grid-cols-2 gap-1.5">
                         <button
                           type="button"
                           onClick={() =>
-                            void actualizarSolicitudComunicacion(s.id, "en_revision")
+                            void actualizarSolicitudComunicacion(
+                              s.id,
+                              "en_revision",
+                            )
                           }
                           className="rounded-lg border border-sky-400/20 bg-sky-400/10 px-2 py-1.5 text-[11px] font-semibold text-sky-200 transition hover:bg-sky-400/15"
                         >
@@ -3284,7 +3430,10 @@ export default function DashboardPage() {
                         <button
                           type="button"
                           onClick={() =>
-                            void actualizarSolicitudComunicacion(s.id, "resuelta")
+                            void actualizarSolicitudComunicacion(
+                              s.id,
+                              "resuelta",
+                            )
                           }
                           className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2 py-1.5 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-400/15"
                         >
@@ -3293,7 +3442,10 @@ export default function DashboardPage() {
                         <button
                           type="button"
                           onClick={() =>
-                            void actualizarSolicitudComunicacion(s.id, "aprobada")
+                            void actualizarSolicitudComunicacion(
+                              s.id,
+                              "aprobada",
+                            )
                           }
                           className="rounded-lg border border-violet-400/20 bg-violet-400/10 px-2 py-1.5 text-[11px] font-semibold text-violet-200 transition hover:bg-violet-400/15"
                         >
@@ -3302,7 +3454,10 @@ export default function DashboardPage() {
                         <button
                           type="button"
                           onClick={() =>
-                            void actualizarSolicitudComunicacion(s.id, "rechazada")
+                            void actualizarSolicitudComunicacion(
+                              s.id,
+                              "rechazada",
+                            )
                           }
                           className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-2 py-1.5 text-[11px] font-semibold text-rose-300 transition hover:bg-rose-400/15"
                         >
@@ -3345,7 +3500,10 @@ export default function DashboardPage() {
                       className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-3"
                     >
                       <p className="truncate text-sm font-medium text-white">
-                        {cliente?.nombre || fisio?.nombre || c.titulo || "Conversación"}
+                        {cliente?.nombre ||
+                          fisio?.nombre ||
+                          c.titulo ||
+                          "Conversación"}
                       </p>
                       <p className="mt-0.5 text-[11px] text-sky-300/70">
                         {conversacionComunicacionLabel(c.tipo)}
