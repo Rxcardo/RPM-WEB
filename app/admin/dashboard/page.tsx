@@ -161,6 +161,32 @@ type AlertaSistema = {
   mensaje: string;
   sub: string;
 };
+type SolicitudComunicacion = {
+  id: string;
+  conversacion_id?: string | null;
+  cita_id?: string | null;
+  cliente_id?: string | null;
+  fisio_id?: string | null;
+  tipo?: string | null;
+  estado?: string | null;
+  titulo?: string | null;
+  descripcion?: string | null;
+  created_at?: string | null;
+  clientes?: { nombre?: string | null; telefono?: string | null } | { nombre?: string | null; telefono?: string | null }[] | null;
+  fisios?: { nombre?: string | null; rol?: string | null } | { nombre?: string | null; rol?: string | null }[] | null;
+};
+type ConversacionComunicacion = {
+  id: string;
+  tipo?: string | null;
+  titulo?: string | null;
+  cliente_id?: string | null;
+  fisio_id?: string | null;
+  recepcionista_id?: string | null;
+  ultimo_mensaje?: string | null;
+  ultima_actividad_at?: string | null;
+  clientes?: { nombre?: string | null; telefono?: string | null } | { nombre?: string | null; telefono?: string | null }[] | null;
+  fisios?: { nombre?: string | null; rol?: string | null } | { nombre?: string | null; rol?: string | null }[] | null;
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -426,6 +452,121 @@ function citaDot(estado: string | null | undefined) {
   }
 }
 
+function solicitudComunicacionLabel(tipo: string | null | undefined) {
+  switch ((tipo || "").toLowerCase()) {
+    case "solicitar_cita":
+      return "Solicitud de cita";
+    case "reagendar_cita":
+      return "Reagendar cita";
+    case "cancelar_cita":
+      return "Cancelar cita";
+    case "cambio_horario":
+      return "Cambio de horario";
+    case "cambio_fisio":
+      return "Cambio de fisio";
+    case "aviso_no_asistencia_cliente":
+      return "Aviso no asistencia";
+    case "ausencia_fisio":
+      return "Ausencia fisio";
+    case "bloqueo_horario":
+      return "Bloqueo horario";
+    case "consulta_pago":
+      return "Consulta pago";
+    case "consulta_clinica":
+      return "Consulta clínica";
+    default:
+      return tipo || "Solicitud";
+  }
+}
+
+function solicitudEstadoColor(estado: string | null | undefined) {
+  switch ((estado || "").toLowerCase()) {
+    case "pendiente":
+      return "amber";
+    case "en_revision":
+      return "sky";
+    case "aprobada":
+    case "resuelta":
+      return "emerald";
+    case "rechazada":
+    case "cancelada":
+      return "rose";
+    default:
+      return "white";
+  }
+}
+
+function conversacionComunicacionLabel(tipo: string | null | undefined) {
+  switch ((tipo || "").toLowerCase()) {
+    case "cliente_recepcion":
+      return "Cliente ↔ Recepción";
+    case "cliente_fisio":
+      return "Cliente ↔ Fisio";
+    case "fisio_recepcion":
+      return "Fisio ↔ Recepción";
+    default:
+      return tipo || "Comunicación";
+  }
+}
+
+function comunicacionDateValue(value: string | null | undefined) {
+  if (!value) return 0;
+  const n = new Date(value).getTime();
+  return Number.isFinite(n) ? n : 0;
+}
+
+function comunicacionGroupKey(c: ConversacionComunicacion) {
+  const tipo = (c.tipo || "").toLowerCase();
+
+  if (tipo === "cliente_recepcion") {
+    return `cliente_recepcion:${c.cliente_id || "none"}`;
+  }
+
+  if (tipo === "cliente_fisio") {
+    return `cliente_fisio:${c.cliente_id || "none"}:${c.fisio_id || "none"}`;
+  }
+
+  if (tipo === "fisio_recepcion") {
+    return `fisio_recepcion:${c.fisio_id || "none"}:${c.recepcionista_id || "none"}`;
+  }
+
+  return `${tipo || "conversacion"}:${c.id}`;
+}
+
+function pickBetterConversacionComunicacion(
+  a: ConversacionComunicacion,
+  b: ConversacionComunicacion,
+) {
+  const aHasMessage = Boolean((a.ultimo_mensaje || "").trim());
+  const bHasMessage = Boolean((b.ultimo_mensaje || "").trim());
+
+  if (aHasMessage !== bHasMessage) return aHasMessage ? a : b;
+
+  const aTime = comunicacionDateValue(a.ultima_actividad_at);
+  const bTime = comunicacionDateValue(b.ultima_actividad_at);
+
+  if (aTime !== bTime) return aTime > bTime ? a : b;
+
+  return a;
+}
+
+function dedupeConversacionesComunicacion(rows: ConversacionComunicacion[]) {
+  const map = new Map<string, ConversacionComunicacion>();
+
+  rows.forEach((row) => {
+    const key = comunicacionGroupKey(row);
+    const existing = map.get(key);
+    map.set(key, existing ? pickBetterConversacionComunicacion(existing, row) : row);
+  });
+
+  return Array.from(map.values()).sort(
+    (a, b) =>
+      comunicacionDateValue(b.ultima_actividad_at) -
+      comunicacionDateValue(a.ultima_actividad_at),
+  );
+}
+
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function PillBadge({
@@ -666,6 +807,13 @@ export default function DashboardPage() {
   const [cuentasPorCobrar, setCuentasPorCobrar] = useState<CuentaPorCobrar[]>(
     [],
   );
+  const [solicitudesComunicacion, setSolicitudesComunicacion] = useState<
+    SolicitudComunicacion[]
+  >([]);
+  const [conversacionesComunicacion, setConversacionesComunicacion] = useState<
+    ConversacionComunicacion[]
+  >([]);
+  const [comunicacionFilter, setComunicacionFilter] = useState("pendiente");
   const [empleadoActualId, setEmpleadoActualId] = useState<string>("");
 
   // Alertas sistema descartadas
@@ -675,7 +823,14 @@ export default function DashboardPage() {
 
   // Panels
   const [panelOpen, setPanelOpen] = useState<
-    "citas" | "sesiones" | "personal" | "planes" | "saldos" | "ingresos" | null
+    | "citas"
+    | "sesiones"
+    | "personal"
+    | "planes"
+    | "saldos"
+    | "ingresos"
+    | "comunicacion"
+    | null
   >(null);
 
   // Filters & pages
@@ -789,6 +944,8 @@ export default function DashboardPage() {
         empleadosAsistenciaRes,
         estadosCuentaRes,
         cuentasPorCobrarRes,
+        solicitudesComunicacionRes,
+        conversacionesComunicacionRes,
       ] = await Promise.all([
         supabase.from("clientes").select("id, estado, created_at"),
         supabase
@@ -837,6 +994,16 @@ export default function DashboardPage() {
           .gt("saldo_usd", 0)
           .neq("estado", "pagado")
           .order("created_at", { ascending: false }),
+        supabase
+          .from("solicitudes_comunicacion")
+          .select(`*, clientes:cliente_id(nombre,telefono), fisios:fisio_id(nombre,rol)`)
+          .order("created_at", { ascending: false })
+          .limit(60),
+        supabase
+          .from("conversaciones")
+          .select(`*, clientes:cliente_id(nombre,telefono), fisios:fisio_id(nombre,rol)`)
+          .order("ultima_actividad_at", { ascending: false })
+          .limit(40),
       ]);
 
       if (clientesRes.error) throw clientesRes.error;
@@ -848,6 +1015,8 @@ export default function DashboardPage() {
       if (empleadosAsistenciaRes.error) throw empleadosAsistenciaRes.error;
       if (estadosCuentaRes.error) throw estadosCuentaRes.error;
       if (cuentasPorCobrarRes.error) throw cuentasPorCobrarRes.error;
+      if (solicitudesComunicacionRes.error) throw solicitudesComunicacionRes.error;
+      if (conversacionesComunicacionRes.error) throw conversacionesComunicacionRes.error;
 
       setClientes((clientesRes.data || []) as Cliente[]);
       setCitas((citasRes.data || []) as CitaRaw[]);
@@ -866,6 +1035,14 @@ export default function DashboardPage() {
       );
       setCuentasPorCobrar(
         (cuentasPorCobrarRes.data || []) as CuentaPorCobrar[],
+      );
+      setSolicitudesComunicacion(
+        (solicitudesComunicacionRes.data || []) as unknown as SolicitudComunicacion[],
+      );
+      setConversacionesComunicacion(
+        dedupeConversacionesComunicacion(
+          (conversacionesComunicacionRes.data || []) as unknown as ConversacionComunicacion[],
+        ),
       );
     } catch (err: any) {
       setError(err?.message || "No se pudo cargar el dashboard.");
@@ -937,6 +1114,12 @@ export default function DashboardPage() {
           .map((c) => c.cliente_id),
       ),
     ).length;
+    const solicitudesPendientes = solicitudesComunicacion.filter(
+      (s) => (s.estado || "").toLowerCase() === "pendiente",
+    ).length;
+    const solicitudesRevision = solicitudesComunicacion.filter(
+      (s) => (s.estado || "").toLowerCase() === "en_revision",
+    ).length;
 
     return {
       clientesActivos,
@@ -951,6 +1134,8 @@ export default function DashboardPage() {
       totalSesionesDisponibles,
       sesionesPlanPendientes,
       clientesDeudores,
+      solicitudesPendientes,
+      solicitudesRevision,
     };
   }, [
     clientes,
@@ -960,6 +1145,7 @@ export default function DashboardPage() {
     clientesPlanes,
     entrenamientosPlan,
     cuentasPorCobrar,
+    solicitudesComunicacion,
     today,
     hoy,
     asistenciaFilterFecha,
@@ -1326,6 +1512,45 @@ export default function DashboardPage() {
         ),
     [cuentasPorCobrarPorCliente, mapaEstadoCuenta],
   );
+
+  const conversacionesComunicacionUnicas = useMemo(
+    () => dedupeConversacionesComunicacion(conversacionesComunicacion),
+    [conversacionesComunicacion],
+  );
+
+  const solicitudesComunicacionFiltradas = useMemo(() => {
+    return solicitudesComunicacion.filter((s) => {
+      const estado = (s.estado || "").toLowerCase();
+      return comunicacionFilter === "todas" || estado === comunicacionFilter;
+    });
+  }, [solicitudesComunicacion, comunicacionFilter]);
+
+  async function actualizarSolicitudComunicacion(
+    solicitudId: string,
+    estado: "pendiente" | "en_revision" | "aprobada" | "rechazada" | "resuelta" | "cancelada",
+  ) {
+    try {
+      let auditorId = empleadoActualId || (await resolveEmpleadoActualId());
+      if (!empleadoActualId && auditorId) setEmpleadoActualId(auditorId);
+      const { error } = await supabase
+        .from("solicitudes_comunicacion")
+        .update({
+          estado,
+          resuelto_at: ["aprobada", "rechazada", "resuelta", "cancelada"].includes(estado)
+            ? new Date().toISOString()
+            : null,
+          resuelto_por: auditorId || null,
+        })
+        .eq("id", solicitudId);
+      if (error) throw error;
+      setSolicitudesComunicacion((prev) =>
+        prev.map((s) => (s.id === solicitudId ? { ...s, estado } : s)),
+      );
+      showAlert("success", "Listo", "Solicitud actualizada.");
+    } catch (err: any) {
+      showAlert("error", "Error", err?.message || "No se pudo actualizar.");
+    }
+  }
 
   const mapaAsistenciaPersonalHoy = useMemo(() => {
     const map = new Map<string, EmpleadoAsistenciaRow>();
@@ -1960,7 +2185,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Metrics grid ── */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
         <MetricTile
           label="Clientes activos"
           value={stats.clientesActivos}
@@ -2013,6 +2238,18 @@ export default function DashboardPage() {
           onClick={() => setPanelOpen("sesiones")}
           active={panelOpen === "sesiones"}
         />
+        <MetricTile
+          label="Comunicación"
+          value={stats.solicitudesPendientes}
+          sub={`${stats.solicitudesRevision} en revisión`}
+          accent={
+            stats.solicitudesPendientes > 0
+              ? "text-amber-400"
+              : "text-sky-400"
+          }
+          onClick={() => setPanelOpen("comunicacion")}
+          active={panelOpen === "comunicacion"}
+        />
       </div>
 
       {/* ── Date filter bar ── */}
@@ -2061,6 +2298,63 @@ export default function DashboardPage() {
           ))}
         </div>
       )}
+
+      {/* ── Comunicación interna ── */}
+      <div className="rounded-3xl border border-sky-400/10 bg-sky-400/[0.035] p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <SectionLabel>Comunicación interna</SectionLabel>
+            <p className="text-sm text-white/55">
+              {stats.solicitudesPendientes} solicitud(es) pendiente(s) · {conversacionesComunicacionUnicas.length} conversación(es) activas
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <GhostBtn onClick={() => setPanelOpen("comunicacion")}>
+              Abrir bandeja
+            </GhostBtn>
+            <Link
+              href="/admin/personas/comunicacion"
+              className="rounded-xl border border-sky-400/20 bg-sky-400/10 px-3 py-1.5 text-xs font-medium text-sky-200 transition hover:bg-sky-400/15"
+            >
+              Ir al chat completo
+            </Link>
+          </div>
+        </div>
+        {solicitudesComunicacion.filter((s) => (s.estado || "").toLowerCase() === "pendiente").length > 0 ? (
+          <div className="mt-3 grid gap-2 lg:grid-cols-3">
+            {solicitudesComunicacion
+              .filter((s) => (s.estado || "").toLowerCase() === "pendiente")
+              .slice(0, 3)
+              .map((s) => {
+                const cliente = firstOrNull(s.clientes);
+                const fisio = firstOrNull(s.fisios);
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => setPanelOpen("comunicacion")}
+                    className="rounded-2xl border border-white/[0.06] bg-white/[0.025] px-4 py-3 text-left transition hover:bg-white/[0.04]"
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-semibold text-white">
+                        {solicitudComunicacionLabel(s.tipo)}
+                      </p>
+                      <PillBadge color={solicitudEstadoColor(s.estado)}>
+                        {s.estado || "pendiente"}
+                      </PillBadge>
+                    </div>
+                    <p className="truncate text-[11px] text-white/40">
+                      {cliente?.nombre || "Sin cliente"}{fisio?.nombre ? ` · ${fisio.nombre}` : ""}
+                    </p>
+                    <p className="mt-1 line-clamp-2 text-xs text-white/50">
+                      {s.descripcion || s.titulo || "Sin descripción"}
+                    </p>
+                  </button>
+                );
+              })}
+          </div>
+        ) : null}
+      </div>
 
       {/* ── Three columns ── */}
       <div className="grid gap-5 lg:grid-cols-3">
@@ -2908,6 +3202,163 @@ export default function DashboardPage() {
               </div>
             ))
           )}
+        </div>
+      </SlidePanel>
+
+      {/* Panel — Comunicación */}
+      <SlidePanel
+        open={panelOpen === "comunicacion"}
+        onClose={() => setPanelOpen(null)}
+        title="Comunicación interna"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-1">
+            {[
+              { key: "pendiente", label: "Pend." },
+              { key: "en_revision", label: "Rev." },
+              { key: "todas", label: "Todas" },
+            ].map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setComunicacionFilter(item.key)}
+                className={`rounded-lg px-2 py-1.5 text-[11px] font-semibold transition ${
+                  comunicacionFilter === item.key
+                    ? "bg-sky-400/15 text-sky-200"
+                    : "text-white/35 hover:bg-white/[0.04] hover:text-white/60"
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          <div>
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-white/30">
+              Solicitudes
+            </p>
+            {solicitudesComunicacionFiltradas.length === 0 ? (
+              <p className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-4 text-center text-sm text-white/30">
+                Sin solicitudes en este filtro
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {solicitudesComunicacionFiltradas.map((s) => {
+                  const cliente = firstOrNull(s.clientes);
+                  const fisio = firstOrNull(s.fisios);
+                  return (
+                    <div
+                      key={s.id}
+                      className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-white">
+                            {solicitudComunicacionLabel(s.tipo)}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-white/35">
+                            {cliente?.nombre || "Sin cliente"}
+                            {fisio?.nombre ? ` · ${fisio.nombre}` : ""}
+                          </p>
+                        </div>
+                        <PillBadge color={solicitudEstadoColor(s.estado)}>
+                          {s.estado || "pendiente"}
+                        </PillBadge>
+                      </div>
+                      <p className="mt-2 whitespace-pre-wrap text-xs text-white/50">
+                        {s.descripcion || s.titulo || "Sin descripción"}
+                      </p>
+                      <p className="mt-2 text-[10px] text-white/25">
+                        {s.created_at ? new Date(s.created_at).toLocaleString("es-ES") : "—"}
+                      </p>
+                      <div className="mt-3 grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void actualizarSolicitudComunicacion(s.id, "en_revision")
+                          }
+                          className="rounded-lg border border-sky-400/20 bg-sky-400/10 px-2 py-1.5 text-[11px] font-semibold text-sky-200 transition hover:bg-sky-400/15"
+                        >
+                          Revisar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void actualizarSolicitudComunicacion(s.id, "resuelta")
+                          }
+                          className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2 py-1.5 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-400/15"
+                        >
+                          Resolver
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void actualizarSolicitudComunicacion(s.id, "aprobada")
+                          }
+                          className="rounded-lg border border-violet-400/20 bg-violet-400/10 px-2 py-1.5 text-[11px] font-semibold text-violet-200 transition hover:bg-violet-400/15"
+                        >
+                          Aprobar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void actualizarSolicitudComunicacion(s.id, "rechazada")
+                          }
+                          className="rounded-lg border border-rose-400/20 bg-rose-400/10 px-2 py-1.5 text-[11px] font-semibold text-rose-300 transition hover:bg-rose-400/15"
+                        >
+                          Rechazar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <Divider />
+
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-white/30">
+                Conversaciones
+              </p>
+              <Link
+                href="/admin/comunicacion"
+                className="text-[11px] text-sky-300 underline underline-offset-2 transition hover:text-sky-200"
+              >
+                Abrir chat
+              </Link>
+            </div>
+            {conversacionesComunicacionUnicas.length === 0 ? (
+              <p className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-4 text-center text-sm text-white/30">
+                Sin conversaciones
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {conversacionesComunicacionUnicas.slice(0, 12).map((c) => {
+                  const cliente = firstOrNull(c.clientes);
+                  const fisio = firstOrNull(c.fisios);
+                  return (
+                    <div
+                      key={c.id}
+                      className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-3"
+                    >
+                      <p className="truncate text-sm font-medium text-white">
+                        {cliente?.nombre || fisio?.nombre || c.titulo || "Conversación"}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-sky-300/70">
+                        {conversacionComunicacionLabel(c.tipo)}
+                      </p>
+                      <p className="mt-1 truncate text-[11px] text-white/35">
+                        {c.ultimo_mensaje || "Sin mensajes"}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </SlidePanel>
 

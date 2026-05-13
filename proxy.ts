@@ -70,7 +70,23 @@ export async function proxy(req: NextRequest) {
     .eq('auth_user_id', user.id)
     .maybeSingle()
 
-  const rol = getRolNombre(empleado)
+  let rol = getRolNombre(empleado)
+
+  if (!rol) {
+    const { data: cliente } = await supabase
+      .from('clientes')
+      .select('id, auth_user_id, acceso_portal, estado')
+      .eq('auth_user_id', user.id)
+      .maybeSingle()
+
+    if (
+      cliente &&
+      cliente.acceso_portal === true &&
+      cliente.estado !== 'eliminado'
+    ) {
+      rol = 'cliente'
+    }
+  }
 
   if (!rol && (isAdminArea || isClienteArea || isEmpleadoArea)) {
     const redirectUrl = req.nextUrl.clone()
@@ -104,7 +120,9 @@ export async function proxy(req: NextRequest) {
   }
 
   if (isEmpleadoArea) {
-    if (rol === 'terapeuta' || rol === 'admin' || rol === 'recepcionista') return res
+    if (rol === 'terapeuta' || rol === 'admin' || rol === 'recepcionista') {
+      return res
+    }
 
     const redirectUrl = req.nextUrl.clone()
     redirectUrl.pathname = '/sin-acceso'

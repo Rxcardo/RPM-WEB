@@ -1,1108 +1,1078 @@
-'use client'
-export const dynamic = 'force-dynamic'
+"use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+export const dynamic = "force-dynamic";
+
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Search, SlidersHorizontal, MessageCircle, CheckCircle2,
-  FileEdit, AlertCircle, CreditCard, CalendarClock,
-  ChevronRight, X, Zap,
-} from 'lucide-react'
-import { supabase } from '@/lib/supabase/client'
+  AlertCircle,
+  ArrowLeft,
+  Bell,
+  CheckCircle2,
+  ChevronRight,
+  Clock3,
+  MessageCircle,
+  Phone,
+  RefreshCcw,
+  Search,
+  Send,
+  UserRound,
+  UsersRound,
+  XCircle,
+  Inbox,
+  Hash,
+  Plus,
+} from "lucide-react";
+import { supabase } from "@/lib/supabase/client";
 
-/* ─────────────────────────────────────────────────────
-   TYPES
-───────────────────────────────────────────────────── */
-type Cliente = {
-  id: string; nombre: string; telefono: string | null
-  email: string | null; estado: string; terapeuta_id?: string | null
-}
-type AuditorRef = { id: string; nombre: string | null } | null
-type Comunicacion = {
-  id: string; titulo: string; asunto: string | null; mensaje: string
-  tipo: string; canal: 'whatsapp'; estado: string; destino: string | null
-  cliente_id: string | null; created_at: string; updated_at: string | null
-  enviado_at: string | null; created_by: string | null; updated_by: string | null
-  sent_by: string | null; creado_por: AuditorRef; editado_por: AuditorRef; enviado_por: AuditorRef
-}
-type PlantillaWhatsApp = 'pago_deuda' | 'bienvenida_cliente' | 'plan_por_vencer'
-type FormState = {
-  titulo: string; mensaje: string; tipo: string; cliente_id: string
-  destino_manual: string; plantilla: PlantillaWhatsApp | ''
-}
-type DatosPlantilla = {
-  nombre: string; telefono?: string; terapeuta?: string
-  saldo?: string; concepto?: string; plan?: string; fecha?: string; sesiones?: number
-}
-type EmpleadoRow = { id: string; nombre: string }
-type DeudaReal = {
-  id: string; cliente_id: string | null; cliente_nombre: string | null
-  concepto: string | null; saldo_usd: number | string | null; saldo_bs: number | string | null
-  moneda: string | null; estado: string | null; fecha_vencimiento: string | null
-  clientes: Cliente | Cliente[] | null
-}
-type PlanReal = {
-  id: string; cliente_id: string | null; fecha_inicio: string | null; fecha_fin: string | null
-  sesiones_totales: number | null; sesiones_usadas: number | null; estado: string | null
-  clientes: Cliente | Cliente[] | null
-  plan: { id: string; nombre?: string | null } | { id: string; nombre?: string | null }[] | null
-}
-type AlertVariant = 'error' | 'success' | 'info' | 'warning'
-type AlertState  = { type: AlertVariant; title: string; message: string } | null
-type FiltroCliente = { clienteId: string; nombre: string } | null
-type EstadoFiltro = 'todos' | 'enviado' | 'borrador' | 'cancelado'
-type DrawerPanel  = 'deudas' | 'planes' | null
+type ParticipanteTipo = "cliente" | "fisio" | "recepcion" | "admin" | "sistema";
+type ConversacionTipo =
+  | "cliente_fisio"
+  | "cliente_recepcion"
+  | "fisio_recepcion"
+  | "grupo";
+type MensajeTipo =
+  | "texto"
+  | "imagen"
+  | "video"
+  | "audio"
+  | "archivo"
+  | "sistema"
+  | "solicitud";
+type SolicitudEstado =
+  | "pendiente"
+  | "en_revision"
+  | "aprobada"
+  | "rechazada"
+  | "resuelta"
+  | "cancelada";
+type SolicitudTipo =
+  | "solicitar_cita"
+  | "reagendar_cita"
+  | "cancelar_cita"
+  | "cambio_horario"
+  | "cambio_fisio"
+  | "aviso_no_asistencia_cliente"
+  | "ausencia_fisio"
+  | "bloqueo_horario"
+  | "consulta_pago"
+  | "consulta_clinica"
+  | "otro";
 
-/* ─────────────────────────────────────────────────────
-   CONSTANTS
-───────────────────────────────────────────────────── */
-const INITIAL_FORM: FormState = {
-  titulo: '', mensaje: '', tipo: 'recordatorio', cliente_id: '', destino_manual: '', plantilla: '',
-}
-const PLANTILLA_LABELS: Record<PlantillaWhatsApp, string> = {
-  pago_deuda: 'Pago deuda', bienvenida_cliente: 'Bienvenida', plan_por_vencer: 'Plan por vencer',
-}
-const PLANTILLAS: Record<PlantillaWhatsApp, (d: DatosPlantilla) => string> = {
-  pago_deuda: d =>
-    `Hola *${d.nombre}*, te escribimos de Recovery RPM para recordarte que tienes una deuda pendiente.\n\n💰 Saldo: *${d.saldo || 'Pendiente'}*\n📝 Concepto: ${d.concepto || 'Cuenta por cobrar'}\n\nPuedes confirmar tu pago por este medio. Gracias.`,
-  bienvenida_cliente: d =>
-    `¡Bienvenido/a a Recovery RPM, *${d.nombre}*! 🎉\n\nEstamos felices de acompañarte en tu proceso de recuperación y bienestar.\n\n👨‍⚕️ Terapeuta asignado: *${d.terapeuta || 'Recovery RPM'}*\n\nCualquier duda, estamos a tu disposición.`,
-  plan_por_vencer: d =>
-    `Hola *${d.nombre}*, tu plan *${d.plan || 'activo'}* está próximo a vencer${d.fecha ? ` el *${d.fecha}*` : ''}.\n\n📊 Sesiones restantes: *${d.sesiones ?? 0}*\n\n¿Deseas renovar o coordinar tus próximas sesiones?`,
-}
+type ClienteMini = { id?: string | null; nombre?: string | null; telefono?: string | null; email?: string | null };
+type EmpleadoMini = { id?: string | null; nombre?: string | null; rol?: string | null; telefono?: string | null; email?: string | null };
+type EmpleadoActual = { id: string; nombre: string | null; rol: string | null; auth_user_id: string | null };
 
-/* ─────────────────────────────────────────────────────
-   HELPERS
-───────────────────────────────────────────────────── */
-function asSingle<T>(v: T | T[] | null | undefined): T | null {
-  if (!v) return null; return Array.isArray(v) ? (v[0] ?? null) : v
-}
-function formatWhatsAppPhone(v: string) {
-  const l = v.replace(/\D/g, ''); if (!l) return ''
-  if (l.startsWith('58')) return l; if (l.startsWith('0')) return `58${l.slice(1)}`
-  if (l.length === 10) return `58${l}`; return l
-}
-function formatFechaLarga(f: string | null | undefined) {
-  if (!f) return ''; return new Date(`${f}T12:00:00`).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })
-}
-function formatFechaCorta(f: string | null | undefined) {
-  if (!f) return '—'; return new Date(`${f}T12:00:00`).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
-}
-function formatUsd(v: number | string | null | undefined) {
-  const n = Number(v || 0); return Number.isFinite(n) ? `$${n.toFixed(2)}` : '$0.00'
-}
-function getTipoFromPlantilla(p: PlantillaWhatsApp) { return p === 'bienvenida_cliente' ? 'aviso' : 'recordatorio' }
-function formatDateTime(v: string | null | undefined) {
-  if (!v) return '—'
-  try { return new Date(v).toLocaleString('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) }
-  catch { return v }
-}
-function getAuditLines(item: Comunicacion) {
-  const lines = [`Creó: ${item.creado_por?.nombre || '–'} · ${formatDateTime(item.created_at)}`]
-  if (item.updated_at && item.updated_at !== item.created_at && item.updated_by)
-    lines.push(`Editó: ${item.editado_por?.nombre || '–'} · ${formatDateTime(item.updated_at)}`)
-  if (item.estado === 'enviado' || item.enviado_at || item.sent_by)
-    lines.push(`Envió: ${item.enviado_por?.nombre || '–'} · ${formatDateTime(item.enviado_at)}`)
-  return lines
-}
-function normalizeSearch(v: string) {
-  return v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
-}
+type Conversacion = {
+  id: string; tipo: ConversacionTipo; titulo: string | null; cliente_id: string | null;
+  fisio_id: string | null; recepcionista_id: string | null; ultima_actividad_at: string | null;
+  ultimo_mensaje: string | null; archivada: boolean | null; fijada: boolean | null;
+  created_at: string | null;
+  clientes?: ClienteMini | ClienteMini[] | null;
+  fisios?: EmpleadoMini | EmpleadoMini[] | null;
+  recepcionistas?: EmpleadoMini | EmpleadoMini[] | null;
+};
 
-/* ─────────────────────────────────────────────────────
-   SHARED STYLES
-───────────────────────────────────────────────────── */
-const inp = 'w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-white/20 focus:bg-white/[0.05]'
+type Mensaje = {
+  id: string; conversacion_id: string; remitente_id: string; remitente_tipo: ParticipanteTipo;
+  mensaje: string | null; tipo: MensajeTipo; archivo_url: string | null; archivo_nombre: string | null;
+  solicitud_id: string | null; editado: boolean | null; eliminado: boolean | null;
+  created_at: string; updated_at: string | null;
+};
 
-/* ─────────────────────────────────────────────────────
-   MetricCard
-───────────────────────────────────────────────────── */
-function MetricCard({ icon: Icon, label, value, color, active, onClick }: {
-  icon: any; label: string; value: number; color?: string; active?: boolean; onClick?: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`group flex flex-col gap-2 rounded-2xl border p-4 text-left transition-all duration-200 ${
-        active
-          ? 'border-violet-400/30 bg-violet-400/[0.08]'
-          : 'border-white/[0.06] bg-white/[0.025] hover:border-white/10 hover:bg-white/[0.04]'
-      }`}
-    >
-      <div className={`flex h-8 w-8 items-center justify-center rounded-xl border ${active ? 'border-violet-400/30 bg-violet-400/15' : 'border-white/10 bg-white/[0.04]'}`}>
-        <Icon className={`h-4 w-4 ${color || 'text-white/50'}`} />
-      </div>
-      <div>
-        <p className={`text-2xl font-bold tabular-nums tracking-tight ${color || 'text-white'}`}>{value}</p>
-        <p className="mt-0.5 text-[11px] font-medium uppercase tracking-wider text-white/35">{label}</p>
-      </div>
-    </button>
-  )
+type Solicitud = {
+  id: string; conversacion_id: string | null; cita_id: string | null; cliente_id: string | null;
+  fisio_id: string | null; tipo: SolicitudTipo; estado: SolicitudEstado; origen_tipo: ParticipanteTipo;
+  origen_id: string; destino_tipo: ParticipanteTipo; destino_id: string | null; titulo: string;
+  descripcion: string; comentario_resolucion: string | null; created_at: string; updated_at: string | null;
+  resuelto_at: string | null; resuelto_por: string | null;
+  clientes?: ClienteMini | ClienteMini[] | null;
+  fisios?: EmpleadoMini | EmpleadoMini[] | null;
+};
+
+type AlertState = { type: "success" | "error" | "info" | "warning"; title: string; message: string } | null;
+type NuevaSolicitudState = { tipo: SolicitudTipo; cliente_id: string; fisio_id: string; titulo: string; descripcion: string };
+
+// Vista actual en móvil: "list" | "chat" | "solicitudes"
+type VistaMovil = "list" | "chat" | "solicitudes";
+
+const NUEVA_SOLICITUD_INICIAL: NuevaSolicitudState = { tipo: "otro", cliente_id: "", fisio_id: "", titulo: "", descripcion: "" };
+
+const SOLICITUD_LABELS: Record<SolicitudTipo, string> = {
+  solicitar_cita: "Solicitud de cita", reagendar_cita: "Reagendar cita", cancelar_cita: "Cancelar cita",
+  cambio_horario: "Cambio de horario", cambio_fisio: "Cambio de fisio",
+  aviso_no_asistencia_cliente: "Aviso no asistencia", ausencia_fisio: "Ausencia fisio",
+  bloqueo_horario: "Bloqueo horario", consulta_pago: "Consulta pago",
+  consulta_clinica: "Consulta clínica", otro: "General",
+};
+
+const TIPOS_SOLICITUD: SolicitudTipo[] = [
+  "solicitar_cita","reagendar_cita","cancelar_cita","cambio_horario","cambio_fisio",
+  "aviso_no_asistencia_cliente","ausencia_fisio","bloqueo_horario","consulta_pago","consulta_clinica","otro",
+];
+
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
 }
 
-/* ─────────────────────────────────────────────────────
-   StatePill
-───────────────────────────────────────────────────── */
-function StatePill({ estado }: { estado: string }) {
-  const map: Record<string, string> = {
-    enviado:  'border-emerald-400/20 bg-emerald-400/10 text-emerald-300',
-    borrador: 'border-amber-400/20 bg-amber-400/10 text-amber-300',
-    cancelado:'border-rose-400/20 bg-rose-400/10 text-rose-300',
+function normalize(value: string | null | undefined) {
+  return (value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "—";
+  try { return new Date(value).toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); }
+  catch { return value; }
+}
+
+function formatHour(value: string | null | undefined) {
+  if (!value) return "";
+  try { return new Date(value).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" }); }
+  catch { return ""; }
+}
+
+function formatRelative(value: string | null | undefined) {
+  if (!value) return "";
+  try {
+    const d = new Date(value);
+    const now = new Date();
+    const diff = now.getTime() - d.getTime();
+    const days = Math.floor(diff / 86400000);
+    if (days === 0) return d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+    if (days === 1) return "Ayer";
+    if (days < 7) return d.toLocaleDateString("es-ES", { weekday: "short" });
+    return d.toLocaleDateString("es-ES", { day: "2-digit", month: "2-digit" });
+  } catch { return ""; }
+}
+
+function initials(name?: string | null) {
+  const parts = (name || "RPM").trim().split(/\s+/).slice(0, 2);
+  return parts.map((p) => p[0]?.toUpperCase()).join("") || "R";
+}
+
+function wa(phone?: string | null) {
+  const clean = (phone || "").replace(/[^0-9]/g, "");
+  return clean ? `https://wa.me/${clean}` : "#";
+}
+
+function estadoClass(estado: SolicitudEstado | string) {
+  switch (estado) {
+    case "pendiente": return "bg-amber-400/15 text-amber-300 border-amber-400/20";
+    case "en_revision": return "bg-sky-400/15 text-sky-300 border-sky-400/20";
+    case "aprobada": case "resuelta": return "bg-emerald-400/15 text-emerald-300 border-emerald-400/20";
+    case "rechazada": case "cancelada": return "bg-rose-400/15 text-rose-300 border-rose-400/20";
+    default: return "bg-white/5 text-white/40 border-white/10";
   }
-  const labels: Record<string, string> = {
-    enviado: 'Enviado', borrador: 'Borrador', cancelado: 'Cancelado',
-  }
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${map[estado] || 'border-white/10 bg-white/[0.05] text-white/45'}`}>
-      {labels[estado] || estado}
-    </span>
-  )
 }
 
-/* ─────────────────────────────────────────────────────
-   AlertBanner
-───────────────────────────────────────────────────── */
-function AlertBanner({ alert, contexto, onClose }: { alert: AlertState; contexto?: string; onClose: () => void }) {
-  if (!alert) return null
-  const bar:  Record<string, string> = { success: 'bg-emerald-400', error: 'bg-rose-400', warning: 'bg-amber-400', info: 'bg-sky-400' }
-  const text: Record<string, string> = { success: 'text-emerald-300', error: 'text-rose-300', warning: 'text-amber-300', info: 'text-sky-300' }
+function tipoConversacionLabel(tipo: ConversacionTipo) {
+  if (tipo === "cliente_recepcion") return "Cliente · Recepción";
+  if (tipo === "cliente_fisio") return "Cliente · Fisio";
+  if (tipo === "fisio_recepcion") return "Fisio · Recepción";
+  return "Grupo";
+}
+
+function roleToSender(rol: string | null | undefined): ParticipanteTipo {
+  if ((rol || "").toLowerCase() === "admin") return "admin";
+  if ((rol || "").toLowerCase() === "recepcionista") return "recepcion";
+  return "fisio";
+}
+
+function dateValue(value?: string | null) {
+  if (!value) return 0;
+  const n = new Date(value).getTime();
+  return Number.isFinite(n) ? n : 0;
+}
+
+function isTempId(id: string) { return id.startsWith("temp-"); }
+
+function samePendingMessage(a: Mensaje, b: Mensaje) {
+  if (!isTempId(a.id)) return false;
+  if (a.conversacion_id !== b.conversacion_id) return false;
+  if (a.remitente_id !== b.remitente_id) return false;
+  if (a.remitente_tipo !== b.remitente_tipo) return false;
+  if (a.tipo !== b.tipo) return false;
+  if ((a.mensaje || "").trim() !== (b.mensaje || "").trim()) return false;
+  return Math.abs(new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) < 15000;
+}
+
+function mergeMensaje(prev: Mensaje[], msg: Mensaje) {
+  if (prev.some((m) => m.id === msg.id)) return prev;
+  const tempIndex = prev.findIndex((m) => samePendingMessage(m, msg));
+  if (tempIndex >= 0) { const next = [...prev]; next[tempIndex] = msg; return next; }
+  return [...prev, msg];
+}
+
+function conversationGroupKey(c: Conversacion) {
+  if (c.tipo === "cliente_recepcion") return `cliente_recepcion:${c.cliente_id || "none"}`;
+  if (c.tipo === "cliente_fisio") return `cliente_fisio:${c.cliente_id || "none"}:${c.fisio_id || "none"}`;
+  if (c.tipo === "fisio_recepcion") return `fisio_recepcion:${c.fisio_id || "none"}:${c.recepcionista_id || "none"}`;
+  return `${c.tipo}:${c.id}`;
+}
+
+function pickBetterConversation(a: Conversacion, b: Conversacion) {
+  const aHasMessage = Boolean((a.ultimo_mensaje || "").trim());
+  const bHasMessage = Boolean((b.ultimo_mensaje || "").trim());
+  if (aHasMessage !== bHasMessage) return aHasMessage ? a : b;
+  const aTime = dateValue(a.ultima_actividad_at || a.created_at);
+  const bTime = dateValue(b.ultima_actividad_at || b.created_at);
+  if (aTime !== bTime) return aTime > bTime ? a : b;
+  return a;
+}
+
+function dedupeConversaciones(rows: Conversacion[]) {
+  const map = new Map<string, Conversacion>();
+  rows.forEach((row) => {
+    const key = conversationGroupKey(row);
+    const existing = map.get(key);
+    map.set(key, existing ? pickBetterConversation(existing, row) : row);
+  });
+  return Array.from(map.values()).sort((a, b) =>
+    dateValue(b.ultima_actividad_at || b.created_at) - dateValue(a.ultima_actividad_at || a.created_at),
+  );
+}
+
+// Avatar con color hash basado en nombre
+function avatarColor(name?: string | null) {
+  const colors = [
+    "from-violet-500 to-purple-600",
+    "from-sky-500 to-blue-600",
+    "from-emerald-500 to-teal-600",
+    "from-rose-500 to-pink-600",
+    "from-amber-500 to-orange-600",
+    "from-indigo-500 to-violet-600",
+  ];
+  const s = name || "?";
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) & 0xffff;
+  return colors[hash % colors.length];
+}
+
+function Avatar({ name, size = "md" }: { name?: string | null; size?: "sm" | "md" | "lg" }) {
+  const sz = size === "sm" ? "h-9 w-9 text-xs" : size === "lg" ? "h-14 w-14 text-base" : "h-11 w-11 text-sm";
   return (
-    <div className="flex items-stretch overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.025]">
-      <div className={`w-1 shrink-0 ${bar[alert.type]}`} />
-      <div className="flex flex-1 items-start justify-between gap-4 px-4 py-3">
-        <div>
-          <p className={`text-sm font-semibold ${text[alert.type]}`}>{alert.title}</p>
-          <p className="mt-0.5 text-sm text-white/55">{alert.message}</p>
-          {contexto && <p className="mt-1 text-[11px] text-white/35">{contexto}</p>}
-        </div>
-        <button onClick={onClose} className="mt-0.5 shrink-0 text-white/30 hover:text-white transition">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
+    <div className={`${sz} shrink-0 rounded-full bg-gradient-to-br ${avatarColor(name)} flex items-center justify-center font-black text-white shadow-lg`}>
+      {initials(name)}
     </div>
-  )
+  );
 }
-
-/* ─────────────────────────────────────────────────────
-   ComunicacionCard — colapsable
-───────────────────────────────────────────────────── */
-function ComunicacionCard({ item, expanded, onToggle, onReenviar, sending }: {
-  item: Comunicacion; expanded: boolean; onToggle: () => void
-  onReenviar: () => void; sending: boolean
-}) {
-  const isEnviado  = item.estado === 'enviado'
-  const isBorrador = item.estado === 'borrador'
-
-  return (
-    <div className={`overflow-hidden rounded-2xl border transition-all duration-200 ${
-      expanded
-        ? 'border-violet-400/15 bg-violet-400/[0.02]'
-        : isBorrador
-          ? 'border-amber-400/10 bg-amber-400/[0.02] hover:border-amber-400/20'
-          : 'border-white/[0.06] bg-white/[0.015] hover:border-white/10'
-    }`}>
-      {/* franja top */}
-      <div className={`h-0.5 w-full ${
-        isEnviado  ? 'bg-gradient-to-r from-emerald-400/50 via-violet-400/30 to-transparent'
-        : isBorrador ? 'bg-gradient-to-r from-amber-400/40 to-transparent'
-        : 'bg-white/[0.06]'
-      }`} />
-
-      {/* fila visible */}
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.025]"
-      >
-        <span className={`h-2 w-2 shrink-0 rounded-full ${
-          isEnviado  ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]'
-          : isBorrador ? 'bg-amber-400/80'
-          : 'bg-white/15'
-        }`} />
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-white/90">{item.titulo}</span>
-        <div className="hidden shrink-0 items-center gap-2 sm:flex">
-          <StatePill estado={item.estado} />
-          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-            item.tipo === 'recordatorio'
-              ? 'border-sky-400/20 bg-sky-400/10 text-sky-300'
-              : 'border-white/10 bg-white/[0.05] text-white/45'
-          }`}>{item.tipo}</span>
-        </div>
-        <span className="shrink-0 text-[11px] tabular-nums text-white/30">{formatDateTime(item.created_at)}</span>
-        <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-white/20 transition-transform duration-200 ${expanded ? 'rotate-90 text-violet-400/60' : ''}`} />
-      </button>
-
-      {/* detalle */}
-      {expanded && (
-        <div className="border-t border-white/[0.05] px-4 pb-4 pt-3">
-          <div className="space-y-2.5">
-            {item.destino && (
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] text-white/30">Destino</span>
-                <span className="font-mono text-[11px] text-white/60">{item.destino}</span>
-              </div>
-            )}
-            <div className="h-px bg-white/[0.05]" />
-            <div>
-              <p className="mb-1.5 text-[11px] text-white/30">Mensaje</p>
-              <p className="whitespace-pre-wrap rounded-xl border border-white/[0.05] bg-white/[0.025] px-3 py-2.5 text-[12px] leading-relaxed text-white/65">
-                {item.mensaje}
-              </p>
-            </div>
-            <div className="h-px bg-white/[0.05]" />
-            <div className="space-y-0.5">
-              {getAuditLines(item).map((line, i) => (
-                <p key={i} className="text-[10px] text-white/30 leading-4">{line}</p>
-              ))}
-            </div>
-            <div className="h-px bg-white/[0.05]" />
-            <div className="flex items-center justify-end pt-0.5">
-              <button
-                type="button"
-                onClick={onReenviar}
-                disabled={sending}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/15 bg-emerald-400/[0.06] px-2.5 py-1 text-[11px] font-medium text-emerald-400/70 transition hover:bg-emerald-400/15 hover:text-emerald-300 disabled:opacity-40"
-              >
-                <Zap className="h-3 w-3" />
-                {sending ? 'Reenviando...' : 'Reenviar por WhatsApp'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/* ─────────────────────────────────────────────────────
-   DRAWER — panel lateral para deudas / planes
-───────────────────────────────────────────────────── */
-function Drawer({
-  panel, deudas, planes, loading, filtroCliente,
-  onToggleFiltro, onUsar, onClose,
-}: {
-  panel: DrawerPanel
-  deudas: DeudaReal[]
-  planes: PlanReal[]
-  loading: boolean
-  filtroCliente: FiltroCliente
-  onToggleFiltro: (clienteId: string, nombre: string) => void
-  onUsar: (plantilla: PlantillaWhatsApp, cli: Cliente) => void
-  onClose: () => void
-}) {
-  if (!panel) return null
-
-  const isDeudas = panel === 'deudas'
-  const title    = isDeudas ? 'Deudas pendientes' : 'Planes por vencer'
-  const accent   = isDeudas ? 'text-rose-300' : 'text-sky-300'
-  const countCls = isDeudas
-    ? 'border-rose-400/20 bg-rose-400/10 text-rose-300'
-    : 'border-sky-400/20 bg-sky-400/10 text-sky-300'
-  const count    = isDeudas ? deudas.length : planes.length
-
-  return (
-    <>
-      {/* overlay */}
-      <div
-        className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm"
-        onClick={onClose}
-      />
-
-      {/* panel */}
-      <div className="fixed right-0 top-0 z-40 flex h-full w-full max-w-md flex-col border-l border-white/[0.07] bg-[#0f1018] shadow-2xl">
-
-        {/* header del drawer */}
-        <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-4">
-          <div className="flex items-center gap-3">
-            <div className={`h-4 w-0.5 rounded-full ${isDeudas ? 'bg-rose-400' : 'bg-sky-400'}`} />
-            <div>
-              <p className="text-sm font-semibold text-white">{title}</p>
-              <p className="text-[11px] text-white/35">
-                {isDeudas ? 'saldo_usd › 0 en cuentas_por_cobrar' : 'Vencen en los próximos 7 días'}
-              </p>
-            </div>
-            <span className={`ml-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${countCls}`}>
-              {count}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-white/10 bg-white/[0.03] p-1.5 text-white/50 transition hover:bg-white/[0.06] hover:text-white"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* cuerpo del drawer */}
-        <div className="flex-1 overflow-y-auto px-4 py-4">
-          {loading ? (
-            <p className="text-xs text-white/30">Cargando…</p>
-          ) : count === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <p className="text-sm text-white/30">
-                {isDeudas ? 'Sin deudas pendientes' : 'Sin planes próximos a vencer'}
-              </p>
-            </div>
-          ) : isDeudas ? (
-            <div className="space-y-2">
-              {deudas.map(d => {
-                const cli    = asSingle(d.clientes)
-                const cliId  = cli?.id || d.cliente_id || ''
-                const nombre = cli?.nombre || d.cliente_nombre || 'Sin nombre'
-                const active = filtroCliente?.clienteId === cliId
-
-                return (
-                  <div
-                    key={d.id}
-                    className={`overflow-hidden rounded-2xl border transition-all duration-200 ${
-                      active
-                        ? 'border-rose-400/25 bg-rose-400/[0.04]'
-                        : 'border-white/[0.06] bg-white/[0.015] hover:border-white/10'
-                    }`}
-                  >
-                    <div className={`h-0.5 w-full ${active ? 'bg-rose-400/60' : 'bg-gradient-to-r from-rose-400/25 to-transparent'}`} />
-                    <div className="flex items-start gap-3 px-4 py-3">
-                      <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-rose-400/60" />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold leading-snug text-white/90">{nombre}</p>
-                        <p className="mt-0.5 text-[11px] leading-snug text-white/40">{d.concepto || 'Cuenta por cobrar'}</p>
-                        <p className="mt-1.5 font-mono text-sm font-bold tabular-nums text-rose-300">{formatUsd(d.saldo_usd)}</p>
-                      </div>
-                      <div className="flex shrink-0 flex-col gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => cliId && onToggleFiltro(cliId, nombre)}
-                          className={`rounded-lg border px-2.5 py-1 text-[10px] font-medium transition ${
-                            active
-                              ? 'border-rose-400/30 bg-rose-400/15 text-rose-300'
-                              : 'border-white/10 bg-white/[0.03] text-white/40 hover:bg-white/[0.06] hover:text-white/70'
-                          }`}
-                        >
-                          {active ? 'Quitar filtro' : 'Filtrar historial'}
-                        </button>
-                        {cli && (
-                          <button
-                            type="button"
-                            onClick={() => onUsar('pago_deuda', cli)}
-                            className="rounded-lg border border-emerald-400/15 bg-emerald-400/[0.06] px-2.5 py-1 text-[10px] font-medium text-emerald-400/70 transition hover:bg-emerald-400/15 hover:text-emerald-300"
-                          >
-                            Usar plantilla
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {planes.map(p => {
-                const cli    = asSingle(p.clientes)
-                const pr     = asSingle(p.plan)
-                const cliId  = cli?.id || p.cliente_id || ''
-                const nombre = cli?.nombre || 'Sin nombre'
-                const rest   = Math.max(0, Number(p.sesiones_totales || 0) - Number(p.sesiones_usadas || 0))
-                const total  = Number(p.sesiones_totales || 0)
-                const pct    = total > 0 ? Math.min(100, ((total - rest) / total) * 100) : 0
-                const active = filtroCliente?.clienteId === cliId
-
-                return (
-                  <div
-                    key={p.id}
-                    className={`overflow-hidden rounded-2xl border transition-all duration-200 ${
-                      active
-                        ? 'border-sky-400/25 bg-sky-400/[0.04]'
-                        : 'border-white/[0.06] bg-white/[0.015] hover:border-white/10'
-                    }`}
-                  >
-                    <div className={`h-0.5 w-full ${active ? 'bg-sky-400/60' : 'bg-gradient-to-r from-sky-400/25 to-transparent'}`} />
-                    <div className="px-4 pt-3 pb-2">
-                      <div className="flex items-start gap-3">
-                        <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-sky-400/60" />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold leading-snug text-white/90">{nombre}</p>
-                          <p className="mt-0.5 text-[11px] leading-snug text-white/40">
-                            {pr?.nombre || 'Plan activo'} · vence {formatFechaCorta(p.fecha_fin)}
-                          </p>
-                          <p className="mt-1.5 font-mono text-sm font-bold tabular-nums text-sky-300">
-                            {rest} <span className="text-[10px] text-white/30">/ {total} ses.</span>
-                          </p>
-                        </div>
-                        <div className="flex shrink-0 flex-col gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => cliId && onToggleFiltro(cliId, nombre)}
-                            className={`rounded-lg border px-2.5 py-1 text-[10px] font-medium transition ${
-                              active
-                                ? 'border-sky-400/30 bg-sky-400/15 text-sky-300'
-                                : 'border-white/10 bg-white/[0.03] text-white/40 hover:bg-white/[0.06] hover:text-white/70'
-                            }`}
-                          >
-                            {active ? 'Quitar filtro' : 'Filtrar historial'}
-                          </button>
-                          {cli && (
-                            <button
-                              type="button"
-                              onClick={() => onUsar('plan_por_vencer', cli)}
-                              className="rounded-lg border border-emerald-400/15 bg-emerald-400/[0.06] px-2.5 py-1 text-[10px] font-medium text-emerald-400/70 transition hover:bg-emerald-400/15 hover:text-emerald-300"
-                            >
-                              Usar plantilla
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      {/* barra progreso */}
-                      {total > 0 && (
-                        <div className="ml-5 mt-2 h-1 w-full overflow-hidden rounded-full bg-white/[0.06]">
-                          <div className="h-full rounded-full bg-sky-400/60 transition-all" style={{ width: `${pct}%` }} />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* footer del drawer */}
-        <div className="border-t border-white/[0.06] px-5 py-3">
-          <p className="text-[11px] text-white/30">
-            {filtroCliente
-              ? `Historial filtrado por: ${filtroCliente.nombre}`
-              : 'Haz clic en "Filtrar historial" para ver los mensajes de un cliente'}
-          </p>
-        </div>
-      </div>
-    </>
-  )
-}
-
-/* ─────────────────────────────────────────────────────
-   PAGE
-───────────────────────────────────────────────────── */
-const PAGE_SIZE = 20
 
 export default function ComunicacionPage() {
-  const [clientes,       setClientes]       = useState<Cliente[]>([])
-  const [comunicaciones, setComunicaciones] = useState<Comunicacion[]>([])
-  const [deudas,         setDeudas]         = useState<DeudaReal[]>([])
-  const [planes,         setPlanes]         = useState<PlanReal[]>([])
-  const [form,           setForm]           = useState<FormState>(INITIAL_FORM)
+  const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  const [loading,          setLoading]          = useState(true)
-  const [saving,           setSaving]           = useState(false)
-  const [sending,          setSending]          = useState(false)
-  const [reSendingId,      setReSendingId]      = useState<string | null>(null)
-  const [plantillaLoading, setPlantillaLoading] = useState(false)
-  const [empleadoActualId, setEmpleadoActualId] = useState('')
-  const [alert,            setAlert]            = useState<AlertState>(null)
-  const [ultimoContexto,   setUltimoContexto]   = useState('')
+  const [loading, setLoading] = useState(true);
+  const [loadingChat, setLoadingChat] = useState(false);
+  const [alert, setAlert] = useState<AlertState>(null);
+  const [empleado, setEmpleado] = useState<EmpleadoActual | null>(null);
 
-  const [search,       setSearch]       = useState('')
-  const [estadoFiltro, setEstadoFiltro] = useState<EstadoFiltro>('todos')
-  const [filtersOpen,  setFiltersOpen]  = useState(false)
-  const [page,         setPage]         = useState(1)
-  const [expandedIds,  setExpandedIds]  = useState<Set<string>>(new Set())
+  const [conversaciones, setConversaciones] = useState<Conversacion[]>([]);
+  const [mensajes, setMensajes] = useState<Mensaje[]>([]);
+  const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
+  const [clientes, setClientes] = useState<ClienteMini[]>([]);
+  const [fisios, setFisios] = useState<EmpleadoMini[]>([]);
 
-  // Drawer lateral (deudas o planes)
-  const [drawerPanel,   setDrawerPanel]   = useState<DrawerPanel>(null)
-  // Filtro de historial por cliente (desde el drawer)
-  const [filtroCliente, setFiltroCliente] = useState<FiltroCliente>(null)
+  const [selectedId, setSelectedId] = useState("");
+  const [texto, setTexto] = useState("");
+  const [busqueda, setBusqueda] = useState("");
+  const [estadoFiltro, setEstadoFiltro] = useState<"pendiente" | "en_revision" | "todas">("pendiente");
+  const [tipoFiltro, setTipoFiltro] = useState<"todas" | ConversacionTipo>("todas");
+  const [showNuevaSolicitud, setShowNuevaSolicitud] = useState(false);
+  const [nuevaSolicitud, setNuevaSolicitud] = useState<NuevaSolicitudState>(NUEVA_SOLICITUD_INICIAL);
+  const [savingSolicitud, setSavingSolicitud] = useState(false);
 
-  // Formulario
-  const [clienteSearch, setClienteSearch] = useState('')
-  const [showDropdown,  setShowDropdown]  = useState(false)
+  // Vista móvil: list = lista de chats, chat = conversación, solicitudes = bandeja
+  const [vistaMovil, setVistaMovil] = useState<VistaMovil>("list");
 
-  function showAlert(type: AlertVariant, title: string, message: string) { setAlert({ type, title, message }) }
-  function clearAlert() { setAlert(null) }
+  const selected = conversaciones.find((c) => c.id === selectedId) || null;
+  const selectedCliente = firstOrNull(selected?.clientes);
+  const selectedFisio = firstOrNull(selected?.fisios);
 
-  useEffect(() => { void loadData(); void loadEmpleadoActual() }, [])
+  useEffect(() => { void boot(); }, []);
 
-  /* ── resolve employee ── */
-  async function resolveEmpleadoActualId(): Promise<string> {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user?.id) return ''
-      const { data: e1 } = await supabase.from('empleados').select('id').eq('auth_user_id', user.id).maybeSingle()
-      if (e1?.id) return String(e1.id)
-      const { data: e2 } = await supabase.from('empleados').select('id').eq('id', user.id).maybeSingle()
-      return e2?.id ? String(e2.id) : ''
-    } catch { return '' }
+  useEffect(() => {
+    if (!empleado?.id) return;
+    const channel = supabase
+      .channel("rpm-comunicacion-admin")
+      .on("postgres_changes", { event: "*", schema: "public", table: "mensajes" }, (payload) => {
+        const row = payload.new as Mensaje;
+        if (!row?.id) return;
+        setMensajes((prev) => {
+          if (row.conversacion_id !== selectedId) return prev;
+          return mergeMensaje(prev, row);
+        });
+        void loadConversaciones();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "conversaciones" }, () => { void loadConversaciones(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "solicitudes_comunicacion" }, () => { void loadSolicitudes(); })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [empleado?.id, selectedId]);
+
+  useEffect(() => { if (selectedId) void loadMensajes(selectedId); }, [selectedId]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [mensajes.length, selectedId]);
+
+  function showAlert(type: NonNullable<AlertState>["type"], title: string, message: string) {
+    setAlert({ type, title, message });
+    window.setTimeout(() => setAlert(null), 4200);
   }
-  async function loadEmpleadoActual() { setEmpleadoActualId(await resolveEmpleadoActualId()) }
 
-  /* ── load data ── */
-  async function loadData() {
+  async function boot() {
+    setLoading(true);
     try {
-      setLoading(true); clearAlert()
-      const hoy    = new Date().toISOString().slice(0, 10)
-      const limite = new Date(); limite.setDate(limite.getDate() + 7)
-
-      const [cliRes, comRes, deudasRes, planesRes] = await Promise.all([
-        supabase.from('clientes').select('id,nombre,telefono,email,estado,terapeuta_id').eq('estado', 'activo').order('nombre', { ascending: true }),
-        supabase.from('comunicaciones').select(`id,titulo,asunto,mensaje,tipo,canal,estado,destino,cliente_id,created_at,updated_at,enviado_at,created_by,updated_by,sent_by,creado_por:created_by(id,nombre),editado_por:updated_by(id,nombre),enviado_por:sent_by(id,nombre)`).eq('canal', 'whatsapp').order('created_at', { ascending: false }),
-        supabase.from('cuentas_por_cobrar').select(`id,cliente_id,cliente_nombre,concepto,saldo_usd,saldo_bs,moneda,estado,fecha_vencimiento,clientes(id,nombre,telefono,email,estado,terapeuta_id)`).gt('saldo_usd', 0).neq('estado', 'pagado').order('fecha_vencimiento', { ascending: true, nullsFirst: false }),
-        supabase.from('clientes_planes').select(`id,cliente_id,fecha_inicio,fecha_fin,sesiones_totales,sesiones_usadas,estado,clientes(id,nombre,telefono,email,estado,terapeuta_id),plan:planes(id,nombre)`).in('estado', ['activo', 'vigente', 'por_vencer']).gte('fecha_fin', hoy).lte('fecha_fin', limite.toISOString().slice(0, 10)).order('fecha_fin', { ascending: true }),
-      ])
-
-      if (cliRes.error)    throw cliRes.error
-      if (comRes.error)    throw comRes.error
-      if (deudasRes.error) throw deudasRes.error
-      if (planesRes.error) throw planesRes.error
-
-      setClientes((cliRes.data    || []) as Cliente[])
-      setComunicaciones((comRes.data   || []) as unknown as Comunicacion[])
-      setDeudas((deudasRes.data  || []) as unknown as DeudaReal[])
-      setPlanes((planesRes.data  || []) as unknown as PlanReal[])
+      const { data: auth, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
+      const userId = auth.user?.id;
+      if (!userId) throw new Error("No hay usuario autenticado.");
+      const { data: emp, error: empError } = await supabase.from("empleados").select("id,nombre,rol,auth_user_id").eq("auth_user_id", userId).maybeSingle();
+      if (empError) throw empError;
+      if (!emp) throw new Error("Este usuario no tiene empleado vinculado.");
+      setEmpleado(emp as EmpleadoActual);
+      await Promise.all([loadCatalogos(), loadConversaciones(), loadSolicitudes()]);
     } catch (err: any) {
-      showAlert('error', 'Error de carga', err?.message || 'No se pudo cargar la información.')
-    } finally { setLoading(false) }
+      showAlert("error", "Error", err?.message || "No se pudo cargar comunicación.");
+    } finally { setLoading(false); }
   }
 
-  /* ── computed ── */
-  const clienteSeleccionado = useMemo(
-    () => clientes.find(c => c.id === form.cliente_id) || null,
-    [form.cliente_id, clientes],
-  )
-  const destinoFinal = useMemo(
-    () => form.destino_manual.trim() || clienteSeleccionado?.telefono || '',
-    [form.destino_manual, clienteSeleccionado],
-  )
-  const clientesFiltrados = useMemo(() => {
-    const q = normalizeSearch(clienteSearch)
-    if (!q) return []
-    return clientes.filter(c =>
-      normalizeSearch(`${c.nombre} ${c.telefono || ''} ${c.email || ''}`).includes(q)
-    ).slice(0, 12)
-  }, [clientes, clienteSearch])
+  async function loadCatalogos() {
+    const [clientesRes, fisiosRes] = await Promise.all([
+      supabase.from("clientes").select("id,nombre,telefono,email").neq("estado", "eliminado").order("nombre"),
+      supabase.from("empleados").select("id,nombre,rol,telefono,email").in("rol", ["terapeuta", "recepcionista", "admin"]).eq("estado", "activo").order("nombre"),
+    ]);
+    if (clientesRes.error) throw clientesRes.error;
+    if (fisiosRes.error) throw fisiosRes.error;
+    setClientes((clientesRes.data || []) as ClienteMini[]);
+    setFisios((fisiosRes.data || []) as EmpleadoMini[]);
+  }
 
-  const comunicacionesFiltradas = useMemo(() => {
-    let list = comunicaciones
-    if (filtroCliente) list = list.filter(c => c.cliente_id === filtroCliente.clienteId)
-    if (estadoFiltro !== 'todos') list = list.filter(c => c.estado === estadoFiltro)
-    const q = normalizeSearch(search)
-    if (q) {
-      list = list.filter(c =>
-        [c.titulo, c.mensaje, c.tipo, c.estado, c.destino, c.creado_por?.nombre, c.enviado_por?.nombre]
-          .some(v => normalizeSearch(v || '').includes(q))
-      )
+  async function loadConversaciones() {
+    const { data, error } = await supabase
+      .from("conversaciones")
+      .select("*, clientes:cliente_id(id,nombre,telefono,email), fisios:fisio_id(id,nombre,rol,telefono,email), recepcionistas:recepcionista_id(id,nombre,rol)")
+      .eq("archivada", false)
+      .order("ultima_actividad_at", { ascending: false });
+    if (error) throw error;
+    const rows = dedupeConversaciones((data || []) as Conversacion[]);
+    setConversaciones(rows);
+    setSelectedId((prev) => {
+      if (prev && rows.some((r) => r.id === prev)) return prev;
+      return rows[0]?.id || "";
+    });
+  }
+
+  async function loadMensajes(conversacionId: string) {
+    setLoadingChat(true);
+    try {
+      const { data, error } = await supabase.from("mensajes").select("*").eq("conversacion_id", conversacionId).order("created_at", { ascending: true });
+      if (error) throw error;
+      setMensajes((data || []) as Mensaje[]);
+    } catch (err: any) {
+      showAlert("error", "Error", err?.message || "No se pudo cargar el chat.");
+    } finally { setLoadingChat(false); }
+  }
+
+  async function loadSolicitudes() {
+    const { data, error } = await supabase.from("solicitudes_comunicacion")
+      .select("*, clientes:cliente_id(id,nombre,telefono,email), fisios:fisio_id(id,nombre,rol,telefono,email)")
+      .order("created_at", { ascending: false }).limit(150);
+    if (error) throw error;
+    setSolicitudes((data || []) as Solicitud[]);
+  }
+
+  async function enviarMensaje() {
+    if (!empleado || !selected || !texto.trim()) return;
+    const body = texto.trim();
+    const remitenteTipo = roleToSender(empleado.rol);
+    setTexto("");
+    const temp: Mensaje = {
+      id: `temp-${Date.now()}`, conversacion_id: selected.id, remitente_id: empleado.id,
+      remitente_tipo: remitenteTipo, mensaje: body, tipo: "texto", archivo_url: null,
+      archivo_nombre: null, solicitud_id: null, editado: false, eliminado: false,
+      created_at: new Date().toISOString(), updated_at: null,
+    };
+    setMensajes((prev) => mergeMensaje(prev, temp));
+    const { data, error } = await supabase.from("mensajes")
+      .insert({ conversacion_id: selected.id, remitente_id: empleado.id, remitente_tipo: remitenteTipo, mensaje: body, tipo: "texto" })
+      .select().single();
+    if (error) {
+      setMensajes((prev) => prev.filter((m) => m.id !== temp.id));
+      setTexto(body);
+      showAlert("error", "Error", error.message);
+    } else if (data) {
+      setMensajes((prev) => mergeMensaje(prev, data as Mensaje));
+      void loadConversaciones();
     }
-    return list
-  }, [comunicaciones, search, estadoFiltro, filtroCliente])
+  }
+
+  async function actualizarSolicitud(id: string, estado: SolicitudEstado) {
+    if (!empleado) return;
+    const { error } = await supabase.from("solicitudes_comunicacion")
+      .update({ estado, resuelto_at: ["aprobada","rechazada","resuelta","cancelada"].includes(estado) ? new Date().toISOString() : null, resuelto_por: empleado.id })
+      .eq("id", id);
+    if (error) { showAlert("error", "Error", error.message); return; }
+    setSolicitudes((prev) => prev.map((s) => s.id === id ? { ...s, estado, resuelto_por: empleado.id } : s));
+    showAlert("success", "Listo", "Solicitud actualizada.");
+  }
+
+  async function crearConversacionParaSolicitud(form: NuevaSolicitudState) {
+    const tipo: ConversacionTipo = form.cliente_id && form.fisio_id ? "cliente_fisio" : form.cliente_id ? "cliente_recepcion" : "fisio_recepcion";
+    let query = supabase.from("conversaciones").select("id").eq("tipo", tipo).eq("archivada", false);
+    if (form.cliente_id) query = query.eq("cliente_id", form.cliente_id); else query = query.is("cliente_id", null);
+    if (form.fisio_id) query = query.eq("fisio_id", form.fisio_id); else query = query.is("fisio_id", null);
+    const { data: existente } = await query.order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (existente?.id) return existente.id as string;
+    const cliente = clientes.find((c) => c.id === form.cliente_id);
+    const fisio = fisios.find((f) => f.id === form.fisio_id);
+    const { data, error } = await supabase.from("conversaciones")
+      .insert({ tipo, titulo: cliente?.nombre || fisio?.nombre || "Comunicación interna", cliente_id: form.cliente_id || null, fisio_id: form.fisio_id || null, recepcionista_id: empleado?.id || null, created_by: empleado?.id || null })
+      .select("id").single();
+    if (error) throw error;
+    return data.id as string;
+  }
+
+  async function crearSolicitud() {
+    if (!empleado) return;
+    if (!nuevaSolicitud.descripcion.trim()) { showAlert("warning", "Falta información", "Escribe el detalle de la solicitud."); return; }
+    setSavingSolicitud(true);
+    try {
+      const conversacionId = await crearConversacionParaSolicitud(nuevaSolicitud);
+      const titulo = nuevaSolicitud.titulo.trim() || SOLICITUD_LABELS[nuevaSolicitud.tipo];
+      const { data: solicitud, error } = await supabase.from("solicitudes_comunicacion")
+        .insert({ conversacion_id: conversacionId, cliente_id: nuevaSolicitud.cliente_id || null, fisio_id: nuevaSolicitud.fisio_id || null, tipo: nuevaSolicitud.tipo, estado: "pendiente", origen_tipo: roleToSender(empleado.rol), origen_id: empleado.id, destino_tipo: "recepcion", destino_id: null, titulo, descripcion: nuevaSolicitud.descripcion.trim() })
+        .select("id").single();
+      if (error) throw error;
+      await supabase.from("mensajes").insert({ conversacion_id: conversacionId, remitente_id: empleado.id, remitente_tipo: roleToSender(empleado.rol), tipo: "solicitud", solicitud_id: solicitud.id, mensaje: `${titulo}: ${nuevaSolicitud.descripcion.trim()}` });
+      setNuevaSolicitud(NUEVA_SOLICITUD_INICIAL);
+      setShowNuevaSolicitud(false);
+      setSelectedId(conversacionId);
+      await Promise.all([loadSolicitudes(), loadConversaciones(), loadMensajes(conversacionId)]);
+      showAlert("success", "Listo", "Solicitud creada.");
+      setVistaMovil("chat");
+    } catch (err: any) {
+      showAlert("error", "Error", err?.message || "No se pudo crear la solicitud.");
+    } finally { setSavingSolicitud(false); }
+  }
+
+  const conversacionesFiltradas = useMemo(() => {
+    const q = normalize(busqueda);
+    return conversaciones.filter((c) => {
+      const cliente = firstOrNull(c.clientes);
+      const fisio = firstOrNull(c.fisios);
+      const matchTipo = tipoFiltro === "todas" || c.tipo === tipoFiltro;
+      const matchQ = !q || [c.titulo, c.ultimo_mensaje, cliente?.nombre, cliente?.telefono, fisio?.nombre].some((v) => normalize(v).includes(q));
+      return matchTipo && matchQ;
+    });
+  }, [conversaciones, busqueda, tipoFiltro]);
+
+  const solicitudesFiltradas = useMemo(() => {
+    const q = normalize(busqueda);
+    return solicitudes.filter((s) => {
+      const cliente = firstOrNull(s.clientes);
+      const fisio = firstOrNull(s.fisios);
+      const matchEstado = estadoFiltro === "todas" || s.estado === estadoFiltro;
+      const matchQ = !q || [s.titulo, s.descripcion, SOLICITUD_LABELS[s.tipo], cliente?.nombre, cliente?.telefono, fisio?.nombre].some((v) => normalize(v).includes(q));
+      return matchEstado && matchQ;
+    });
+  }, [solicitudes, busqueda, estadoFiltro]);
 
   const stats = useMemo(() => ({
-    total:      comunicaciones.length,
-    enviadas:   comunicaciones.filter(x => x.estado === 'enviado').length,
-    borradores: comunicaciones.filter(x => x.estado === 'borrador').length,
-    deudas:     deudas.length,
-    planes:     planes.length,
-  }), [comunicaciones, deudas, planes])
+    pendientes: solicitudes.filter((s) => s.estado === "pendiente").length,
+    revision: solicitudes.filter((s) => s.estado === "en_revision").length,
+    resueltas: solicitudes.filter((s) => s.estado === "resuelta" || s.estado === "aprobada").length,
+    chatsActivos: conversaciones.length,
+  }), [solicitudes, conversaciones]);
 
-  const totalPages     = Math.max(1, Math.ceil(comunicacionesFiltradas.length / PAGE_SIZE))
-  const comunicsPagina = useMemo(
-    () => comunicacionesFiltradas.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
-    [comunicacionesFiltradas, page],
-  )
-  const hayFiltros = search || estadoFiltro !== 'todos' || !!filtroCliente
+  const tituloChat = selected
+    ? selected.tipo === "fisio_recepcion"
+      ? firstOrNull(selected.fisios)?.nombre || selected.titulo || "Fisio"
+      : firstOrNull(selected.clientes)?.nombre || selected.titulo || "Cliente"
+    : "Chat";
 
-  function toggleCard(id: string) {
-    setExpandedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
-  }
+  const subtituloChat = selected ? tipoConversacionLabel(selected.tipo) : "";
 
-  /* ── toggle filtro desde drawer ── */
-  function handleToggleFiltro(clienteId: string, nombre: string) {
-    setFiltroCliente(prev => prev?.clienteId === clienteId ? null : { clienteId, nombre })
-    setPage(1)
-  }
-
-  /* ── abrir drawer ── */
-  function openDrawer(panel: DrawerPanel) {
-    // si ya está abierto el mismo, lo cierra
-    setDrawerPanel(prev => prev === panel ? null : panel)
-  }
-
-  /* ── form ── */
-  function seleccionarCliente(c: Cliente) {
-    setForm(p => ({ ...p, cliente_id: c.id, destino_manual: '', plantilla: '' }))
-    setClienteSearch(c.nombre); setShowDropdown(false); setUltimoContexto(''); clearAlert()
-  }
-  function resetForm() {
-    setForm(INITIAL_FORM); setClienteSearch(''); setShowDropdown(false); setUltimoContexto(''); clearAlert()
-  }
-  function validateForm() {
-    if (!form.titulo.trim())                           return 'Título requerido.'
-    if (!form.mensaje.trim())                          return 'Mensaje requerido.'
-    if (!destinoFinal)                                 return 'Destino requerido.'
-    if (formatWhatsAppPhone(destinoFinal).length < 10) return 'Número inválido.'
-    return ''
-  }
-
-  async function getTerapeutaCliente(c: Cliente) {
-    if (!c.terapeuta_id) return null
-    const { data, error } = await supabase.from('empleados').select('id,nombre').eq('id', c.terapeuta_id).maybeSingle()
-    if (error) throw error; return data as EmpleadoRow | null
-  }
-  async function getDeudaPendiente(clienteId: string) {
-    const { data, error } = await supabase.from('cuentas_por_cobrar')
-      .select(`id,cliente_id,cliente_nombre,concepto,saldo_usd,saldo_bs,moneda,estado,fecha_vencimiento,clientes(id,nombre,telefono,email,estado,terapeuta_id)`)
-      .eq('cliente_id', clienteId).gt('saldo_usd', 0).neq('estado', 'pagado')
-      .order('fecha_vencimiento', { ascending: true, nullsFirst: false }).limit(1).maybeSingle()
-    if (error) throw error; return (data || null) as unknown as DeudaReal | null
-  }
-  async function getPlanPorVencer(clienteId: string) {
-    const hoy = new Date().toISOString().slice(0, 10)
-    const lim = new Date(); lim.setDate(lim.getDate() + 7)
-    const { data, error } = await supabase.from('clientes_planes')
-      .select(`id,cliente_id,fecha_inicio,fecha_fin,sesiones_totales,sesiones_usadas,estado,clientes(id,nombre,telefono,email,estado,terapeuta_id),plan:planes(id,nombre)`)
-      .eq('cliente_id', clienteId).in('estado', ['activo', 'vigente', 'por_vencer'])
-      .gte('fecha_fin', hoy).lte('fecha_fin', lim.toISOString().slice(0, 10))
-      .order('fecha_fin', { ascending: true }).limit(1).maybeSingle()
-    if (error) throw error; return (data || null) as unknown as PlanReal | null
-  }
-
-  async function construirDatos(cliente: Cliente, plantilla: PlantillaWhatsApp): Promise<{ datos: DatosPlantilla; contexto: string }> {
-    const base: DatosPlantilla = { nombre: cliente.nombre, telefono: cliente.telefono || '' }
-    switch (plantilla) {
-      case 'bienvenida_cliente': {
-        const t = await getTerapeutaCliente(cliente)
-        return { datos: { ...base, terapeuta: t?.nombre || 'Recovery RPM' }, contexto: t ? `Terapeuta: ${t.nombre}` : 'Sin terapeuta — usando Recovery RPM.' }
-      }
-      case 'pago_deuda': {
-        const d = await getDeudaPendiente(cliente.id)
-        if (!d) throw new Error('Sin deuda pendiente.')
-        return { datos: { ...base, saldo: formatUsd(d.saldo_usd), concepto: d.concepto || 'Cuenta por cobrar' }, contexto: `Deuda: ${formatUsd(d.saldo_usd)}` }
-      }
-      case 'plan_por_vencer': {
-        const p = await getPlanPorVencer(cliente.id)
-        if (!p) throw new Error('Sin plan que venza en los próximos 7 días.')
-        const pr   = asSingle(p.plan)
-        const rest = Math.max(0, Number(p.sesiones_totales || 0) - Number(p.sesiones_usadas || 0))
-        return { datos: { ...base, fecha: p.fecha_fin ? formatFechaLarga(p.fecha_fin) : 'próximamente', plan: pr?.nombre || 'Plan activo', sesiones: rest }, contexto: `Plan: ${pr?.nombre || '—'} · vence ${p.fecha_fin || '—'}` }
-      }
-      default: return { datos: base, contexto: '' }
-    }
-  }
-
-  async function aplicarPlantilla(plantilla: PlantillaWhatsApp, clienteOverride?: Cliente) {
-    clearAlert(); setUltimoContexto('')
-    const cli = clienteOverride || clienteSeleccionado
-    if (!cli) { showAlert('warning', 'Atención', 'Selecciona un cliente primero.'); return }
-    if (clienteOverride) seleccionarCliente(clienteOverride)
-    try {
-      setPlantillaLoading(true)
-      const { datos, contexto } = await construirDatos(cli, plantilla)
-      setForm(prev => ({ ...prev, plantilla, titulo: PLANTILLA_LABELS[plantilla], tipo: getTipoFromPlantilla(plantilla), mensaje: PLANTILLAS[plantilla](datos) }))
-      setUltimoContexto(contexto)
-      showAlert('success', 'Plantilla cargada', 'Con datos reales del cliente.')
-      // cerrar drawer al usar plantilla
-      setDrawerPanel(null)
-    } catch (err: any) {
-      showAlert('warning', 'No disponible', err?.message || 'No se pudo cargar la plantilla.')
-    } finally { setPlantillaLoading(false) }
-  }
-
-  async function guardarHistorial(estado: 'borrador' | 'enviado', destinoOverride?: string) {
-    let auditorId = empleadoActualId || await resolveEmpleadoActualId()
-    setEmpleadoActualId(auditorId)
-    const payload: Record<string, any> = {
-      titulo: form.titulo.trim(), asunto: null, mensaje: form.mensaje.trim(),
-      tipo: form.tipo, canal: 'whatsapp', estado,
-      destino: destinoOverride || destinoFinal || null,
-      cliente_id: form.cliente_id || null,
-      created_by: auditorId || null, updated_by: auditorId || null,
-    }
-    if (estado === 'enviado') { payload.enviado_at = new Date().toISOString(); payload.sent_by = auditorId || null }
-    const { error } = await supabase.from('comunicaciones').insert(payload)
-    if (error) throw new Error(error.message)
-  }
-
-  async function handleGuardar(e: React.FormEvent) {
-    e.preventDefault(); clearAlert()
-    const err = validateForm(); if (err) { showAlert('warning', 'Incompleto', err); return }
-    try { setSaving(true); await guardarHistorial('borrador'); showAlert('success', 'Guardado', 'Guardado como borrador.'); resetForm(); await loadData() }
-    catch (err: any) { showAlert('error', 'Error', err?.message || 'No se pudo guardar.') }
-    finally { setSaving(false) }
-  }
-
-  function abrirWhatsApp(destino: string, mensaje: string) {
-    const t = formatWhatsAppPhone(destino); if (!t) throw new Error('Número inválido.')
-    window.open(`https://wa.me/${t}?text=${encodeURIComponent(mensaje)}`, '_blank')
-  }
-
-  async function handleEnviar() {
-    clearAlert(); const err = validateForm(); if (err) { showAlert('warning', 'Incompleto', err); return }
-    try { setSending(true); abrirWhatsApp(destinoFinal, form.mensaje); await guardarHistorial('enviado', destinoFinal); showAlert('success', 'Enviado', 'Abierto en WhatsApp y registrado.'); resetForm(); await loadData() }
-    catch (err: any) { showAlert('error', 'Error', err?.message || 'No se pudo enviar.') }
-    finally { setSending(false) }
-  }
-
-  async function reenviar(item: Comunicacion) {
-    try {
-      setReSendingId(item.id); clearAlert()
-      if (!item.destino) { showAlert('warning', 'Sin destino', 'Esta comunicación no tiene número.'); return }
-      abrirWhatsApp(item.destino, item.mensaje)
-      showAlert('success', 'Reenviado', 'Mensaje abierto en WhatsApp.')
-    } catch (err: any) { showAlert('error', 'Error', err?.message || 'No se pudo reenviar.') }
-    finally { setReSendingId(null) }
-  }
-
-  function limpiarFiltros() { setSearch(''); setEstadoFiltro('todos'); setFiltroCliente(null); setPage(1) }
-
-  /* ──────────────────────────────────────────────────
-     RENDER
-  ────────────────────────────────────────────────── */
-  return (
-    <div className="min-h-screen space-y-6 px-4 pb-12 md:px-6">
-
-      {/* Drawer lateral */}
-      <Drawer
-        panel={drawerPanel}
-        deudas={deudas}
-        planes={planes}
-        loading={loading}
-        filtroCliente={filtroCliente}
-        onToggleFiltro={handleToggleFiltro}
-        onUsar={(plantilla, cli) => void aplicarPlantilla(plantilla, cli)}
-        onClose={() => setDrawerPanel(null)}
-      />
-
-      {/* ── Header ── */}
-      <div className="flex flex-col gap-4 pt-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-[11px] font-medium uppercase tracking-widest text-white/30">Administración</p>
-          <h1 className="mt-1.5 text-2xl font-bold tracking-tight text-white sm:text-3xl">Comunicación</h1>
-          <p className="mt-1 text-sm text-white/35">
-            {loading ? 'Cargando…' : `${stats.total} mensajes registrados · ${stats.enviadas} enviados`}
-          </p>
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#0d0d12]">
+        <div className="text-center">
+          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-violet-400/20 border-t-violet-400" />
+          <p className="text-sm text-white/35">Cargando comunicación…</p>
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-screen flex-col overflow-hidden bg-[#0d0d12] text-white">
+      {/* Toast alert */}
+      {alert && (
         <button
           type="button"
-          onClick={() => void loadData()}
-          disabled={loading}
-          className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-2.5 text-sm font-medium text-white/60 transition hover:bg-white/[0.05] hover:text-white disabled:opacity-40"
+          onClick={() => setAlert(null)}
+          className={`fixed bottom-24 left-1/2 z-[60] -translate-x-1/2 rounded-2xl border px-5 py-3 text-sm font-bold shadow-2xl backdrop-blur-xl md:bottom-auto md:right-4 md:top-4 md:left-auto md:translate-x-0 ${
+            alert.type === "error" ? "border-rose-400/30 bg-rose-950/90 text-rose-200"
+            : alert.type === "success" ? "border-emerald-400/30 bg-emerald-950/90 text-emerald-200"
+            : alert.type === "warning" ? "border-amber-400/30 bg-amber-950/90 text-amber-200"
+            : "border-sky-400/30 bg-sky-950/90 text-sky-200"
+          }`}
         >
-          <span className={loading ? 'inline-block animate-spin' : ''}>↻</span>
-          Actualizar
+          <span className="font-black">{alert.title}</span>
+          <span className="ml-2 opacity-70">{alert.message}</span>
         </button>
-      </div>
-
-      {/* ── Alert ── */}
-      {alert && <AlertBanner alert={alert} contexto={ultimoContexto} onClose={clearAlert} />}
-
-      {/* ── Metric cards ── */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <MetricCard
-          icon={MessageCircle} label="Total" value={stats.total}
-          active={estadoFiltro === 'todos' && !filtroCliente}
-          onClick={() => { setEstadoFiltro('todos'); setFiltroCliente(null); setPage(1) }}
-        />
-        <MetricCard
-          icon={CheckCircle2} label="Enviados" value={stats.enviadas}
-          color="text-emerald-400" active={estadoFiltro === 'enviado'}
-          onClick={() => { setEstadoFiltro('enviado'); setPage(1) }}
-        />
-        <MetricCard
-          icon={FileEdit} label="Borradores" value={stats.borradores}
-          color="text-amber-300" active={estadoFiltro === 'borrador'}
-          onClick={() => { setEstadoFiltro('borrador'); setPage(1) }}
-        />
-        {/* Deudas — abre drawer */}
-        <MetricCard
-          icon={CreditCard} label="Deudas" value={stats.deudas}
-          color="text-rose-300" active={drawerPanel === 'deudas'}
-          onClick={() => openDrawer('deudas')}
-        />
-        {/* Por vencer — abre drawer */}
-        <MetricCard
-          icon={CalendarClock} label="Por vencer" value={stats.planes}
-          color="text-sky-400" active={drawerPanel === 'planes'}
-          onClick={() => openDrawer('planes')}
-        />
-      </div>
-
-      {/* indicador de filtro activo por cliente */}
-      {filtroCliente && (
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] text-white/40">Historial filtrado por:</span>
-          <button
-            type="button"
-            onClick={() => { setFiltroCliente(null); setPage(1) }}
-            className="flex items-center gap-1.5 rounded-xl border border-violet-400/20 bg-violet-400/[0.06] px-3 py-1 text-[11px] font-medium text-violet-300 transition hover:bg-violet-400/10"
-          >
-            {filtroCliente.nombre}
-            <X className="h-3 w-3" />
-          </button>
-        </div>
       )}
 
-      {/* ── Layout: formulario izq | historial der ── */}
-      <div className="grid gap-6 lg:grid-cols-[340px_1fr]">
-
-        {/* ════ FORMULARIO ════ */}
-        <div className="space-y-0">
-          <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-5">
-            <p className="mb-1 text-sm font-semibold text-white">Nuevo mensaje</p>
-            <p className="mb-4 text-xs text-white/35">Busca cliente → aplica plantilla → envía</p>
-
-            <div className="space-y-3.5">
-
-              {/* Buscar cliente */}
-              <div>
-                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-widest text-white/35">Cliente</label>
-                <div className="relative">
-                  <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/25" />
-                  <input
-                    value={clienteSearch}
-                    onChange={e => {
-                      setClienteSearch(e.target.value)
-                      setShowDropdown(true)
-                      setForm(p => ({ ...p, cliente_id: '', destino_manual: '', plantilla: '' }))
-                    }}
-                    onFocus={() => clienteSearch && setShowDropdown(true)}
-                    placeholder="Nombre, teléfono o email..."
-                    className="w-full rounded-2xl border border-white/10 bg-white/[0.03] py-2.5 pl-10 pr-4 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-white/20 focus:bg-white/[0.05]"
-                  />
-                </div>
-
-                {showDropdown && clientesFiltrados.length > 0 && (
-                  <div className="mt-1 overflow-hidden rounded-2xl border border-white/10 bg-[#0d0e14] shadow-xl">
-                    {clientesFiltrados.map(c => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => seleccionarCliente(c)}
-                        className={`flex w-full items-center gap-2.5 border-b border-white/[0.05] px-4 py-2.5 text-left last:border-0 transition hover:bg-white/[0.04] ${form.cliente_id === c.id ? 'bg-emerald-400/[0.06]' : ''}`}
-                      >
-                        <span className={`h-2 w-2 shrink-0 rounded-full ${form.cliente_id === c.id ? 'bg-emerald-400' : 'bg-white/15'}`} />
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-white/90">{c.nombre}</p>
-                          <p className="text-[10px] text-white/35">{c.telefono || 'Sin tel.'}</p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {clienteSeleccionado && (
-                  <div className="mt-2 flex items-center justify-between gap-2 rounded-xl border border-emerald-400/15 bg-emerald-400/[0.05] px-3 py-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]" />
-                      <p className="truncate text-sm font-semibold text-emerald-200">{clienteSeleccionado.nombre}</p>
+      {/* ─── LAYOUT DESKTOP: tres columnas ─── */}
+      <div className="hidden h-full md:flex">
+        {/* Col 1: lista de conversaciones */}
+        <div className="flex w-[320px] shrink-0 flex-col border-r border-white/[0.06]">
+          <div className="border-b border-white/[0.06] px-4 pt-5 pb-3">
+            <div className="flex items-center justify-between">
+              <h1 className="text-xl font-black tracking-tight">Mensajes</h1>
+              <div className="flex gap-1">
+                <button type="button" onClick={() => void Promise.all([loadConversaciones(), loadSolicitudes()])}
+                  className="flex h-8 w-8 items-center justify-center rounded-xl text-white/35 transition hover:bg-white/[0.06] hover:text-white">
+                  <RefreshCcw className="h-4 w-4" />
+                </button>
+                <button type="button" onClick={() => setShowNuevaSolicitud(true)}
+                  className="flex h-8 w-8 items-center justify-center rounded-xl bg-violet-500/20 text-violet-300 transition hover:bg-violet-500/30">
+                  <Plus className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="mt-3 flex items-center gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.03] px-3 py-2">
+              <Search className="h-4 w-4 shrink-0 text-white/25" />
+              <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)}
+                placeholder="Buscar…"
+                className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/25" />
+            </div>
+            <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1">
+              {([["todas","Todos"],["cliente_recepcion","Recep."],["cliente_fisio","Cl/Fisio"],["fisio_recepcion","Fi/Rec"]] as const).map(([k, l]) => (
+                <button key={k} type="button" onClick={() => setTipoFiltro(k)}
+                  className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-black transition ${tipoFiltro === k ? "bg-violet-500 text-white" : "bg-white/[0.04] text-white/40 hover:bg-white/[0.07] hover:text-white/70"}`}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {conversacionesFiltradas.length === 0 ? (
+              <div className="p-6 text-center text-sm text-white/25">Sin conversaciones</div>
+            ) : conversacionesFiltradas.map((c) => {
+              const active = selectedId === c.id;
+              const cliente = firstOrNull(c.clientes);
+              const fisio = firstOrNull(c.fisios);
+              const title = c.tipo === "fisio_recepcion" ? fisio?.nombre || c.titulo || "Fisio" : cliente?.nombre || c.titulo || "Cliente";
+              return (
+                <button key={c.id} type="button" onClick={() => setSelectedId(c.id)}
+                  className={`flex w-full items-center gap-3 px-4 py-3.5 text-left transition ${active ? "bg-violet-500/10" : "hover:bg-white/[0.03]"}`}>
+                  <Avatar name={title} size="md" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <p className={`truncate text-sm font-bold ${active ? "text-violet-200" : "text-white"}`}>{title}</p>
+                      <span className="shrink-0 text-[10px] text-white/25">{formatRelative(c.ultima_actividad_at)}</span>
                     </div>
-                    <button type="button" onClick={resetForm} className="shrink-0 text-white/30 hover:text-white transition">
-                      <X className="h-3.5 w-3.5" />
-                    </button>
+                    <p className="mt-0.5 truncate text-[11px] text-white/35">{c.ultimo_mensaje || "Sin mensajes"}</p>
                   </div>
+                  {active && <div className="h-2 w-2 shrink-0 rounded-full bg-violet-400" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Col 2: chat */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* Header chat */}
+          <div className="flex items-center gap-3 border-b border-white/[0.06] px-5 py-3.5">
+            {selected ? (
+              <>
+                <Avatar name={tituloChat} size="md" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-black text-white">{tituloChat}</p>
+                  <p className="text-xs text-white/35">{subtituloChat}</p>
+                </div>
+                {selectedCliente?.telefono && (
+                  <a href={wa(selectedCliente.telefono)} target="_blank"
+                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-emerald-400/20 bg-emerald-400/10 text-emerald-300 transition hover:bg-emerald-400/15">
+                    <Phone className="h-4 w-4" />
+                  </a>
                 )}
-              </div>
+              </>
+            ) : (
+              <p className="text-sm text-white/35">Selecciona una conversación</p>
+            )}
+          </div>
 
-              {/* Plantillas */}
-              <div>
-                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-widest text-white/35">Plantilla</label>
-                <div className="space-y-1">
-                  {[
-                    { p: 'pago_deuda'        as PlantillaWhatsApp, icon: '💰', label: 'Pago deuda',      active: 'border-rose-400/25 bg-rose-400/[0.07] text-rose-300',     inactive: 'border-white/[0.06] bg-white/[0.015] text-white/55 hover:border-white/10 hover:text-white/80' },
-                    { p: 'bienvenida_cliente' as PlantillaWhatsApp, icon: '👋', label: 'Bienvenida',      active: 'border-violet-400/25 bg-violet-400/[0.07] text-violet-300', inactive: 'border-white/[0.06] bg-white/[0.015] text-white/55 hover:border-white/10 hover:text-white/80' },
-                    { p: 'plan_por_vencer'   as PlantillaWhatsApp, icon: '📉', label: 'Plan por vencer', active: 'border-sky-400/25 bg-sky-400/[0.07] text-sky-300',         inactive: 'border-white/[0.06] bg-white/[0.015] text-white/55 hover:border-white/10 hover:text-white/80' },
-                  ].map(opt => (
-                    <button
-                      key={opt.p}
-                      type="button"
-                      disabled={plantillaLoading}
-                      onClick={() => void aplicarPlantilla(opt.p)}
-                      className={`flex w-full items-center gap-2.5 rounded-xl border px-3.5 py-2 text-sm font-medium transition disabled:opacity-50 ${form.plantilla === opt.p ? opt.active : opt.inactive}`}
-                    >
-                      <span className="text-base">{opt.icon}</span>
-                      <span className="flex-1 text-left">{opt.label}</span>
-                      {form.plantilla === opt.p && !plantillaLoading && <span className="text-[10px] opacity-60">✓ activa</span>}
-                      {plantillaLoading && form.plantilla === opt.p && <span className="text-[10px] opacity-50">cargando…</span>}
-                    </button>
-                  ))}
+          {/* Mensajes */}
+          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
+            {loadingChat ? (
+              <div className="flex h-full items-center justify-center text-sm text-white/35">Cargando…</div>
+            ) : !selected ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
+                  <MessageCircle className="h-7 w-7" />
                 </div>
+                <p className="text-sm text-white/35">Selecciona una conversación para ver los mensajes</p>
               </div>
-
-              <div className="h-px bg-white/[0.05]" />
-
-              {/* Título */}
-              <div>
-                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-widest text-white/35">Título</label>
-                <input value={form.titulo} onChange={e => setForm(p => ({ ...p, titulo: e.target.value }))} placeholder="Ej: Recordatorio de pago" className={inp} />
-              </div>
-
-              {/* Destino manual */}
-              <div>
-                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-widest text-white/35">Destino manual</label>
-                <p className="mb-1.5 text-[11px] text-white/30">Opcional — sobreescribe el teléfono del cliente</p>
-                <input value={form.destino_manual} onChange={e => setForm(p => ({ ...p, destino_manual: e.target.value }))} placeholder="+58 412 000 0000" className={inp} />
-              </div>
-
-              {/* Destino final */}
-              <div>
-                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-widest text-white/35">Destino final</label>
-                <div className="rounded-2xl border border-dashed border-white/[0.08] bg-white/[0.02] px-4 py-2.5 font-mono text-sm text-white/45">
-                  {destinoFinal || <span className="italic text-white/20">sin destino configurado</span>}
+            ) : mensajes.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/[0.04] text-white/25">
+                  <MessageCircle className="h-7 w-7" />
                 </div>
+                <p className="text-sm text-white/35">Sin mensajes todavía</p>
               </div>
+            ) : (
+              mensajes.map((m) => {
+                const mine = m.remitente_id === empleado?.id;
+                return (
+                  <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+                    <div className={`group relative max-w-[72%] ${mine ? "items-end" : "items-start"} flex flex-col gap-1`}>
+                      {m.tipo === "solicitud" && (
+                        <span className="self-start rounded-full bg-amber-400/15 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wide text-amber-300">
+                          Solicitud
+                        </span>
+                      )}
+                      <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${mine ? "rounded-br-md bg-violet-500/25 text-white" : "rounded-bl-md bg-white/[0.06] text-white/85"}`}>
+                        {m.eliminado ? <span className="italic text-white/35">Mensaje eliminado</span> : m.mensaje}
+                      </div>
+                      <span className={`text-[10px] ${mine ? "text-violet-300/40 self-end" : "text-white/25 self-start"}`}>
+                        {isTempId(m.id) ? "Enviando…" : formatHour(m.created_at)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+            <div ref={bottomRef} />
+          </div>
 
-              {/* Mensaje */}
-              <div>
-                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-widest text-white/35">Mensaje</label>
-                <textarea
-                  rows={7}
-                  value={form.mensaje}
-                  onChange={e => setForm(p => ({ ...p, mensaje: e.target.value }))}
-                  placeholder="Escribe o aplica una plantilla arriba..."
-                  className={`${inp} resize-none`}
-                />
-              </div>
-
-              {/* Botones */}
-              <div className="flex gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handleGuardar as any}
-                  disabled={saving}
-                  className="flex-1 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-white/70 transition hover:bg-white/[0.07] hover:text-white disabled:opacity-50"
-                >
-                  {saving ? 'Guardando…' : 'Guardar borrador'}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleEnviar}
-                  disabled={sending}
-                  className="flex-1 rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-4 py-2.5 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-400/15 disabled:opacity-50"
-                >
-                  {sending ? 'Enviando…' : '↗ Enviar'}
-                </button>
-              </div>
+          {/* Input */}
+          <div className="border-t border-white/[0.06] px-4 py-3">
+            <div className="flex items-center gap-2 rounded-2xl border border-white/[0.08] bg-white/[0.04] px-4 py-2">
+              <input value={texto} onChange={(e) => setTexto(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void enviarMensaje(); } }}
+                disabled={!selected}
+                placeholder={selected ? "Escribe un mensaje…" : "Selecciona una conversación"}
+                className="min-w-0 flex-1 bg-transparent py-1.5 text-sm text-white outline-none placeholder:text-white/25 disabled:opacity-40" />
+              <button type="button" onClick={() => void enviarMensaje()} disabled={!selected || !texto.trim()}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-500 text-white shadow-md shadow-violet-950/40 transition hover:bg-violet-400 disabled:opacity-35">
+                <Send className="h-4 w-4" />
+              </button>
             </div>
           </div>
         </div>
 
-        {/* ════ HISTORIAL ════ */}
-        <div className="space-y-4">
-
-          {/* búsqueda + filtros */}
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1">
-                <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/30" />
-                <input
-                  value={search}
-                  onChange={e => { setSearch(e.target.value); setPage(1) }}
-                  placeholder="Buscar en historial…"
-                  className="w-full rounded-2xl border border-white/10 bg-white/[0.03] py-2.5 pl-10 pr-4 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-white/20 focus:bg-white/[0.05]"
-                />
+        {/* Col 3: solicitudes */}
+        <div className="flex w-[360px] shrink-0 flex-col border-l border-white/[0.06]">
+          <div className="border-b border-white/[0.06] px-4 pt-5 pb-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-black text-white">Solicitudes</h2>
+                <p className="text-xs text-white/30">Bandeja operativa</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setFiltersOpen(v => !v)}
-                className={`flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-sm font-medium transition ${
-                  filtersOpen || estadoFiltro !== 'todos'
-                    ? 'border-violet-400/25 bg-violet-400/10 text-violet-300'
-                    : 'border-white/10 bg-white/[0.03] text-white/60 hover:bg-white/[0.05] hover:text-white/80'
-                }`}
-              >
-                <SlidersHorizontal className="h-4 w-4" />
-                Filtros
-              </button>
-              {hayFiltros && (
-                <button type="button" onClick={limpiarFiltros} className="rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white/50 transition hover:text-white/80">
-                  Limpiar
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-400/15 text-amber-300">
+                <Bell className="h-4 w-4" />
+              </div>
+            </div>
+            {/* Stats row */}
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <div className="rounded-xl bg-amber-400/10 px-2 py-2 text-center">
+                <p className="text-lg font-black text-amber-300">{stats.pendientes}</p>
+                <p className="text-[10px] text-amber-300/60 uppercase font-black tracking-wide">Pend.</p>
+              </div>
+              <div className="rounded-xl bg-sky-400/10 px-2 py-2 text-center">
+                <p className="text-lg font-black text-sky-300">{stats.revision}</p>
+                <p className="text-[10px] text-sky-300/60 uppercase font-black tracking-wide">Rev.</p>
+              </div>
+              <div className="rounded-xl bg-emerald-400/10 px-2 py-2 text-center">
+                <p className="text-lg font-black text-emerald-300">{stats.resueltas}</p>
+                <p className="text-[10px] text-emerald-300/60 uppercase font-black tracking-wide">OK</p>
+              </div>
+            </div>
+            <div className="mt-3 flex gap-1.5">
+              {([["pendiente","Pendientes"],["en_revision","Revisión"],["todas","Todas"]] as const).map(([k, l]) => (
+                <button key={k} type="button" onClick={() => setEstadoFiltro(k)}
+                  className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-black transition ${estadoFiltro === k ? "bg-white text-slate-950" : "bg-white/[0.04] text-white/40 hover:text-white/70"}`}>
+                  {l}
                 </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex-1 space-y-3 overflow-y-auto p-4">
+            {solicitudesFiltradas.length === 0 ? (
+              <div className="rounded-2xl border border-white/[0.06] p-5 text-center text-sm text-white/25">Sin solicitudes</div>
+            ) : solicitudesFiltradas.map((s) => {
+              const cliente = firstOrNull(s.clientes);
+              const fisio = firstOrNull(s.fisios);
+              return (
+                <article key={s.id} className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-white">{SOLICITUD_LABELS[s.tipo] || s.titulo}</p>
+                      <p className="mt-0.5 truncate text-[11px] text-white/35">
+                        {cliente?.nombre || "—"}{fisio?.nombre ? ` · ${fisio.nombre}` : ""}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wide ${estadoClass(s.estado)}`}>
+                      {s.estado.replace("_", " ")}
+                    </span>
+                  </div>
+                  <p className="mt-2.5 line-clamp-2 text-xs leading-relaxed text-white/55">{s.descripcion}</p>
+                  <p className="mt-1.5 text-[10px] text-white/25">{formatDateTime(s.created_at)}</p>
+                  <div className="mt-3 grid grid-cols-4 gap-1.5">
+                    <button type="button" onClick={() => void actualizarSolicitud(s.id, "en_revision")}
+                      className="flex items-center justify-center gap-1 rounded-xl border border-sky-400/20 bg-sky-400/10 py-2 text-[10px] font-black text-sky-300 transition hover:bg-sky-400/15">
+                      <Clock3 className="h-3 w-3" />
+                    </button>
+                    <button type="button" onClick={() => void actualizarSolicitud(s.id, "resuelta")}
+                      className="flex items-center justify-center gap-1 rounded-xl border border-emerald-400/20 bg-emerald-400/10 py-2 text-[10px] font-black text-emerald-300 transition hover:bg-emerald-400/15">
+                      <CheckCircle2 className="h-3 w-3" />
+                    </button>
+                    <button type="button" onClick={() => void actualizarSolicitud(s.id, "rechazada")}
+                      className="flex items-center justify-center gap-1 rounded-xl border border-rose-400/20 bg-rose-400/10 py-2 text-[10px] font-black text-rose-300 transition hover:bg-rose-400/15">
+                      <XCircle className="h-3 w-3" />
+                    </button>
+                    <button type="button" disabled={!s.conversacion_id}
+                      onClick={() => s.conversacion_id && setSelectedId(s.conversacion_id)}
+                      className="flex items-center justify-center gap-1 rounded-xl border border-white/10 bg-white/[0.04] py-2 text-[10px] font-black text-white/45 transition hover:bg-white/[0.07] disabled:opacity-30">
+                      <MessageCircle className="h-3 w-3" />
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* ─── LAYOUT MÓVIL: pantalla única con navegación ─── */}
+      <div className="flex h-full flex-col md:hidden">
+
+        {/* Vista: Lista de chats */}
+        {vistaMovil === "list" && (
+          <div className="flex h-full flex-col">
+            {/* Header */}
+            <div className="border-b border-white/[0.06] px-4 pt-12 pb-3 safe-top">
+              <div className="flex items-center justify-between">
+                <h1 className="text-2xl font-black tracking-tight">Chats</h1>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => void Promise.all([loadConversaciones(), loadSolicitudes()])}
+                    className="flex h-9 w-9 items-center justify-center rounded-xl text-white/35 transition hover:bg-white/[0.06]">
+                    <RefreshCcw className="h-4 w-4" />
+                  </button>
+                  <button type="button" onClick={() => setShowNuevaSolicitud(true)}
+                    className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-500/20 text-violet-300">
+                    <Plus className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              {/* Buscador */}
+              <div className="mt-3 flex items-center gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.04] px-4 py-3">
+                <Search className="h-4 w-4 shrink-0 text-white/25" />
+                <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder="Buscar…"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/25" />
+              </div>
+              {/* Filtros scrollables */}
+              <div className="mt-3 flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+                {([["todas","Todos"],["cliente_recepcion","Recepción"],["cliente_fisio","Cl/Fisio"],["fisio_recepcion","Fi/Recep"]] as const).map(([k, l]) => (
+                  <button key={k} type="button" onClick={() => setTipoFiltro(k)}
+                    className={`shrink-0 rounded-full px-4 py-1.5 text-xs font-black transition ${tipoFiltro === k ? "bg-violet-500 text-white" : "border border-white/[0.08] bg-white/[0.03] text-white/40"}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Lista */}
+            <div className="flex-1 overflow-y-auto">
+              {conversacionesFiltradas.length === 0 ? (
+                <div className="flex h-40 items-center justify-center text-sm text-white/25">Sin conversaciones</div>
+              ) : conversacionesFiltradas.map((c) => {
+                const cliente = firstOrNull(c.clientes);
+                const fisio = firstOrNull(c.fisios);
+                const title = c.tipo === "fisio_recepcion" ? fisio?.nombre || c.titulo || "Fisio" : cliente?.nombre || c.titulo || "Cliente";
+                return (
+                  <button key={c.id} type="button"
+                    onClick={() => { setSelectedId(c.id); setVistaMovil("chat"); }}
+                    className="flex w-full items-center gap-3.5 border-b border-white/[0.04] px-4 py-4 text-left transition active:bg-white/[0.04]">
+                    <Avatar name={title} size="md" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="truncate text-sm font-bold text-white">{title}</p>
+                        <span className="shrink-0 text-[10px] text-white/25">{formatRelative(c.ultima_actividad_at)}</span>
+                      </div>
+                      <p className="mt-0.5 text-[11px] text-violet-300/50 font-semibold">{tipoConversacionLabel(c.tipo)}</p>
+                      <p className="mt-0.5 truncate text-xs text-white/30">{c.ultimo_mensaje || "Sin mensajes"}</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-white/15" />
+                  </button>
+                );
+              })}
+              <div className="h-24" />
+            </div>
+          </div>
+        )}
+
+        {/* Vista: Chat activo */}
+        {vistaMovil === "chat" && (
+          <div className="flex h-full flex-col">
+            {/* Header */}
+            <div className="flex items-center gap-3 border-b border-white/[0.06] px-3 pt-12 pb-3 safe-top">
+              <button type="button" onClick={() => setVistaMovil("list")}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white/50 transition active:bg-white/[0.06]">
+                <ArrowLeft className="h-5 w-5" />
+              </button>
+              {selected && <Avatar name={tituloChat} size="sm" />}
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-black text-white leading-tight">{tituloChat}</p>
+                <p className="text-[11px] text-white/35">{subtituloChat}</p>
+              </div>
+              {selectedCliente?.telefono && (
+                <a href={wa(selectedCliente.telefono)} target="_blank"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-emerald-400/20 bg-emerald-400/10 text-emerald-300">
+                  <Phone className="h-4 w-4" />
+                </a>
               )}
             </div>
 
-            {filtersOpen && (
-              <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-4">
-                <div>
-                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-white/35">Estado</label>
-                  <select value={estadoFiltro} onChange={e => { setEstadoFiltro(e.target.value as EstadoFiltro); setPage(1) }} className={inp}>
-                    <option value="todos"     className="bg-[#11131a]">Todos</option>
-                    <option value="enviado"   className="bg-[#11131a]">Enviado</option>
-                    <option value="borrador"  className="bg-[#11131a]">Borrador</option>
-                    <option value="cancelado" className="bg-[#11131a]">Cancelado</option>
-                  </select>
+            {/* Mensajes */}
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2">
+              {loadingChat ? (
+                <div className="flex h-full items-center justify-center">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-violet-400/20 border-t-violet-400" />
                 </div>
-              </div>
-            )}
+              ) : mensajes.length === 0 ? (
+                <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[0.04] text-white/20">
+                    <MessageCircle className="h-6 w-6" />
+                  </div>
+                  <p className="text-sm text-white/30">Sin mensajes todavía</p>
+                </div>
+              ) : (
+                mensajes.map((m) => {
+                  const mine = m.remitente_id === empleado?.id;
+                  return (
+                    <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+                      <div className={`flex max-w-[78%] flex-col gap-1 ${mine ? "items-end" : "items-start"}`}>
+                        {m.tipo === "solicitud" && (
+                          <span className="rounded-full bg-amber-400/15 px-2.5 py-0.5 text-[10px] font-black uppercase text-amber-300">
+                            Solicitud
+                          </span>
+                        )}
+                        <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${mine ? "rounded-br-sm bg-violet-500/25 text-white" : "rounded-bl-sm bg-white/[0.07] text-white/85"}`}>
+                          {m.eliminado ? <span className="italic text-white/30">Mensaje eliminado</span> : m.mensaje}
+                        </div>
+                        <span className="text-[10px] text-white/20">
+                          {isTempId(m.id) ? "Enviando…" : formatHour(m.created_at)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+              <div ref={bottomRef} />
+              <div className="h-4" />
+            </div>
 
-            <div className="flex items-center justify-between">
-              <p className="text-[11px] text-white/30">
-                {comunicacionesFiltradas.length === comunicaciones.length
-                  ? `${comunicaciones.length} mensajes`
-                  : `${comunicacionesFiltradas.length} de ${comunicaciones.length} mensajes`}
-                {hayFiltros && <span className="ml-1 text-violet-400/70">· filtrado</span>}
-              </p>
+            {/* Input flotante */}
+            <div className="border-t border-white/[0.06] bg-[#0d0d12] px-3 py-3 safe-bottom">
+              <div className="flex items-center gap-2 rounded-2xl border border-white/[0.09] bg-white/[0.05] px-4 py-2">
+                <input value={texto} onChange={(e) => setTexto(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void enviarMensaje(); } }}
+                  placeholder="Escribe un mensaje…"
+                  className="min-w-0 flex-1 bg-transparent py-1.5 text-sm text-white outline-none placeholder:text-white/25" />
+                <button type="button" onClick={() => void enviarMensaje()} disabled={!texto.trim()}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-500 text-white shadow-md shadow-violet-950/40 transition active:bg-violet-400 disabled:opacity-35">
+                  <Send className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
+        )}
 
-          {/* lista */}
-          {loading ? (
-            <div className="flex min-h-[20vh] items-center justify-center">
-              <div className="text-center">
-                <div className="mx-auto mb-3 h-7 w-7 animate-spin rounded-full border-2 border-white/10 border-t-white/60" />
-                <p className="text-sm text-white/30">Cargando historial…</p>
+        {/* Vista: Solicitudes */}
+        {vistaMovil === "solicitudes" && (
+          <div className="flex h-full flex-col">
+            <div className="border-b border-white/[0.06] px-4 pt-12 pb-3 safe-top">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-black">Solicitudes</h2>
+                  <p className="text-xs text-white/30">Bandeja operativa interna</p>
+                </div>
+                <button type="button" onClick={() => setShowNuevaSolicitud(true)}
+                  className="flex h-9 items-center gap-1.5 rounded-xl border border-violet-400/25 bg-violet-500/15 px-3 text-xs font-black text-violet-200">
+                  <Plus className="h-3.5 w-3.5" /> Nueva
+                </button>
               </div>
-            </div>
-          ) : comunicacionesFiltradas.length === 0 ? (
-            <div className="flex min-h-[16vh] items-center justify-center rounded-2xl border border-white/[0.06] bg-white/[0.01]">
-              <div className="text-center">
-                <p className="text-sm font-medium text-white/40">Sin resultados</p>
-                <p className="mt-1 text-xs text-white/25">
-                  {filtroCliente ? `No hay mensajes para ${filtroCliente.nombre}` : 'Intenta con otros filtros'}
-                </p>
-                {hayFiltros && (
-                  <button type="button" onClick={limpiarFiltros} className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-medium text-white/60 transition hover:bg-white/[0.06]">
-                    Limpiar filtros
+              {/* Stats mini */}
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <div className="rounded-xl bg-amber-400/10 px-3 py-2 text-center">
+                  <p className="text-xl font-black text-amber-300">{stats.pendientes}</p>
+                  <p className="text-[10px] font-black uppercase text-amber-300/50">Pend.</p>
+                </div>
+                <div className="rounded-xl bg-sky-400/10 px-3 py-2 text-center">
+                  <p className="text-xl font-black text-sky-300">{stats.revision}</p>
+                  <p className="text-[10px] font-black uppercase text-sky-300/50">Rev.</p>
+                </div>
+                <div className="rounded-xl bg-emerald-400/10 px-3 py-2 text-center">
+                  <p className="text-xl font-black text-emerald-300">{stats.resueltas}</p>
+                  <p className="text-[10px] font-black uppercase text-emerald-300/50">OK</p>
+                </div>
+              </div>
+              {/* Filtros */}
+              <div className="mt-3 flex gap-1.5">
+                {([["pendiente","Pendientes"],["en_revision","Revisión"],["todas","Todas"]] as const).map(([k, l]) => (
+                  <button key={k} type="button" onClick={() => setEstadoFiltro(k)}
+                    className={`rounded-full px-3 py-1.5 text-[11px] font-black transition ${estadoFiltro === k ? "bg-white text-slate-950" : "border border-white/[0.08] bg-white/[0.03] text-white/40"}`}>
+                    {l}
                   </button>
-                )}
+                ))}
               </div>
             </div>
-          ) : (
-            <div className="space-y-1.5">
-              {comunicsPagina.map(c => (
-                <ComunicacionCard
-                  key={c.id}
-                  item={c}
-                  expanded={expandedIds.has(c.id)}
-                  onToggle={() => toggleCard(c.id)}
-                  onReenviar={() => void reenviar(c)}
-                  sending={reSendingId === c.id}
-                />
-              ))}
+            <div className="flex-1 space-y-3 overflow-y-auto p-4">
+              {solicitudesFiltradas.length === 0 ? (
+                <div className="flex h-32 items-center justify-center text-sm text-white/25">Sin solicitudes</div>
+              ) : solicitudesFiltradas.map((s) => {
+                const cliente = firstOrNull(s.clientes);
+                const fisio = firstOrNull(s.fisios);
+                return (
+                  <article key={s.id} className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black text-white">{SOLICITUD_LABELS[s.tipo] || s.titulo}</p>
+                        <p className="mt-0.5 truncate text-xs text-white/35">
+                          {cliente?.nombre || "—"}{fisio?.nombre ? ` · ${fisio.nombre}` : ""}
+                        </p>
+                      </div>
+                      <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${estadoClass(s.estado)}`}>
+                        {s.estado.replace("_"," ")}
+                      </span>
+                    </div>
+                    <p className="mt-2.5 line-clamp-3 text-xs leading-relaxed text-white/55">{s.descripcion}</p>
+                    <p className="mt-1.5 text-[10px] text-white/25">{formatDateTime(s.created_at)}</p>
+                    <div className="mt-3 grid grid-cols-4 gap-2">
+                      <button type="button" onClick={() => void actualizarSolicitud(s.id, "en_revision")}
+                        className="flex items-center justify-center gap-1 rounded-xl border border-sky-400/20 bg-sky-400/10 py-2.5 text-xs font-black text-sky-300 transition active:bg-sky-400/15">
+                        <Clock3 className="h-3.5 w-3.5" />
+                      </button>
+                      <button type="button" onClick={() => void actualizarSolicitud(s.id, "resuelta")}
+                        className="flex items-center justify-center gap-1 rounded-xl border border-emerald-400/20 bg-emerald-400/10 py-2.5 text-xs font-black text-emerald-300 transition active:bg-emerald-400/15">
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                      </button>
+                      <button type="button" onClick={() => void actualizarSolicitud(s.id, "rechazada")}
+                        className="flex items-center justify-center gap-1 rounded-xl border border-rose-400/20 bg-rose-400/10 py-2.5 text-xs font-black text-rose-300 transition active:bg-rose-400/15">
+                        <XCircle className="h-3.5 w-3.5" />
+                      </button>
+                      <button type="button" disabled={!s.conversacion_id}
+                        onClick={() => { if (s.conversacion_id) { setSelectedId(s.conversacion_id); setVistaMovil("chat"); } }}
+                        className="flex items-center justify-center gap-1 rounded-xl border border-white/10 bg-white/[0.04] py-2.5 text-xs font-black text-white/45 transition active:bg-white/[0.07] disabled:opacity-30">
+                        <MessageCircle className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+              <div className="h-24" />
             </div>
-          )}
+          </div>
+        )}
 
-          {/* paginación */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between pt-2">
-              <p className="text-[11px] text-white/30">{comunicacionesFiltradas.length} mensajes · página {page}/{totalPages}</p>
-              <div className="flex items-center gap-1.5">
-                <button type="button" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
-                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/60 transition hover:bg-white/[0.06] disabled:opacity-30">←</button>
-                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  const start = Math.max(1, Math.min(page - 2, totalPages - 4))
-                  const n = start + i
-                  return n <= totalPages ? (
-                    <button key={n} type="button" onClick={() => setPage(n)}
-                      className={`rounded-xl border px-3 py-1.5 text-xs font-medium transition ${
-                        n === page
-                          ? 'border-violet-400/25 bg-violet-400/10 text-violet-300'
-                          : 'border-white/10 bg-white/[0.03] text-white/50 hover:bg-white/[0.06]'
-                      }`}>{n}</button>
-                  ) : null
-                })}
-                <button type="button" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
-                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-white/60 transition hover:bg-white/[0.06] disabled:opacity-30">→</button>
-              </div>
+        {/* Tab bar inferior — solo en móvil */}
+        {vistaMovil !== "chat" && (
+          <nav className="safe-bottom border-t border-white/[0.06] bg-[#0d0d12]/95 backdrop-blur-xl">
+            <div className="grid grid-cols-2">
+              <button type="button" onClick={() => setVistaMovil("list")}
+                className={`flex flex-col items-center gap-1 py-3 text-[10px] font-black uppercase tracking-wider transition ${vistaMovil === "list" ? "text-violet-300" : "text-white/30"}`}>
+                <MessageCircle className="h-5 w-5" />
+                Chats
+                {vistaMovil !== "list" && conversaciones.length > 0 && (
+                  <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-violet-500 text-[9px] font-black text-white flex items-center justify-center">
+                    {conversaciones.length}
+                  </span>
+                )}
+              </button>
+              <button type="button" onClick={() => setVistaMovil("solicitudes")}
+                className={`relative flex flex-col items-center gap-1 py-3 text-[10px] font-black uppercase tracking-wider transition ${vistaMovil === "solicitudes" ? "text-amber-300" : "text-white/30"}`}>
+                <div className="relative">
+                  <Inbox className="h-5 w-5" />
+                  {stats.pendientes > 0 && (
+                    <span className="absolute -top-1.5 -right-2 flex h-4 w-4 items-center justify-center rounded-full bg-amber-400 text-[9px] font-black text-black">
+                      {stats.pendientes}
+                    </span>
+                  )}
+                </div>
+                Solicitudes
+              </button>
             </div>
-          )}
-        </div>
+          </nav>
+        )}
       </div>
+
+      {/* ─── Modal: Nueva solicitud ─── */}
+      {showNuevaSolicitud && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm md:items-center">
+          <div className="w-full max-w-xl rounded-t-[2rem] border border-white/10 bg-[#0f1117] p-5 shadow-2xl md:rounded-[2rem]">
+            <div className="mb-1 flex h-1 w-10 mx-auto rounded-full bg-white/15 md:hidden" />
+            <div className="mt-4 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-lg font-black text-white">Nueva solicitud</p>
+                <p className="text-xs text-white/35">Queda registrada en el chat correspondiente.</p>
+              </div>
+              <button type="button" onClick={() => setShowNuevaSolicitud(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-xl text-white/35 transition hover:bg-white/[0.06]">
+                ✕
+              </button>
+            </div>
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-white/35">Tipo</span>
+                <select value={nuevaSolicitud.tipo} onChange={(e) => setNuevaSolicitud((p) => ({ ...p, tipo: e.target.value as SolicitudTipo }))}
+                  className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3 text-sm text-white outline-none">
+                  {TIPOS_SOLICITUD.map((t) => <option key={t} value={t} className="bg-[#0f1117]">{SOLICITUD_LABELS[t]}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-white/35">Cliente</span>
+                <select value={nuevaSolicitud.cliente_id} onChange={(e) => setNuevaSolicitud((p) => ({ ...p, cliente_id: e.target.value }))}
+                  className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3 text-sm text-white outline-none">
+                  <option value="" className="bg-[#0f1117]">Sin cliente específico</option>
+                  {clientes.map((c) => <option key={c.id} value={c.id || ""} className="bg-[#0f1117]">{c.nombre}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-white/35">Fisio</span>
+                <select value={nuevaSolicitud.fisio_id} onChange={(e) => setNuevaSolicitud((p) => ({ ...p, fisio_id: e.target.value }))}
+                  className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3 text-sm text-white outline-none">
+                  <option value="" className="bg-[#0f1117]">Sin fisio específico</option>
+                  {fisios.map((f) => <option key={f.id} value={f.id || ""} className="bg-[#0f1117]">{f.nombre} · {f.rol}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-white/35">Título (opcional)</span>
+                <input value={nuevaSolicitud.titulo} onChange={(e) => setNuevaSolicitud((p) => ({ ...p, titulo: e.target.value }))}
+                  placeholder="Ej: cambio de horario"
+                  className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3 text-sm text-white outline-none placeholder:text-white/25" />
+              </label>
+            </div>
+            <label className="mt-3 block">
+              <span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-white/35">Detalle *</span>
+              <textarea value={nuevaSolicitud.descripcion} onChange={(e) => setNuevaSolicitud((p) => ({ ...p, descripcion: e.target.value }))}
+                rows={4} placeholder="Escribe el detalle…"
+                className="w-full resize-none rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3 text-sm text-white outline-none placeholder:text-white/25" />
+            </label>
+            <div className="mt-4 flex gap-2">
+              <button type="button" onClick={() => setShowNuevaSolicitud(false)} disabled={savingSolicitud}
+                className="flex-1 rounded-2xl border border-white/10 bg-white/[0.04] py-3 text-sm font-bold text-white/55 transition hover:bg-white/[0.07] disabled:opacity-50">
+                Cancelar
+              </button>
+              <button type="button" onClick={() => void crearSolicitud()} disabled={savingSolicitud}
+                className="flex-1 rounded-2xl border border-violet-400/25 bg-violet-500/20 py-3 text-sm font-black text-violet-100 transition hover:bg-violet-500/25 disabled:opacity-50">
+                {savingSolicitud ? "Guardando…" : "Crear solicitud"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
-  )
+  );
 }

@@ -23,8 +23,12 @@ type RegistroNuevoPayload = {
 
 type Payload = RegistroExistentePayload | RegistroNuevoPayload;
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !serviceRoleKey) {
+  throw new Error("Faltan NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY");
+}
 
 const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
   auth: {
@@ -38,11 +42,46 @@ function clean(value: unknown) {
 }
 
 function normalizePhone(value: string) {
-  return value.replace(/\D/g, "");
+  return String(value ?? "").replace(/\D/g, "");
 }
 
 function normalizeCedula(value: string) {
-  return value.toUpperCase().replace(/\s+/g, "").trim();
+  return String(value ?? "")
+    .toUpperCase()
+    .replace(/\s+/g, "")
+    .replace(/[^A-Z0-9-]/g, "")
+    .trim();
+}
+
+function cedulaVariantes(value: string) {
+  const raw = normalizeCedula(value);
+  const sinPrefijo = raw.replace(/^[VEJPG]-?/i, "");
+
+  return Array.from(
+    new Set([
+      raw,
+      sinPrefijo,
+      `V${sinPrefijo}`,
+      `V-${sinPrefijo}`,
+      `E${sinPrefijo}`,
+      `E-${sinPrefijo}`,
+      `J${sinPrefijo}`,
+      `J-${sinPrefijo}`,
+      `P${sinPrefijo}`,
+      `P-${sinPrefijo}`,
+      `G${sinPrefijo}`,
+      `G-${sinPrefijo}`,
+    ].filter(Boolean))
+  );
+}
+
+function phoneMatches(dbPhone: string, inputPhone: string) {
+  const a = normalizePhone(dbPhone);
+  const b = normalizePhone(inputPhone);
+
+  if (!a || !b) return false;
+
+  return a === b || a.endsWith(b) || b.endsWith(a);
 }
 
 function isEmail(value: string) {
@@ -82,19 +121,22 @@ export async function POST(req: Request) {
         );
       }
 
-      const { data: existente } = await supabaseAdmin
-        .from("solicitudes_registro")
-        .select("id, estado")
-        .eq("email", email)
-        .in("estado", ["pendiente", "aprobada"])
-        .maybeSingle();
+      const { data: solicitudExistente, error: solicitudError } =
+        await supabaseAdmin
+          .from("solicitudes_registro")
+          .select("id, estado")
+          .eq("email", email)
+          .in("estado", ["pendiente", "aprobada"])
+          .maybeSingle();
 
-      if (existente) {
+      if (solicitudError) throw solicitudError;
+
+      if (solicitudExistente) {
         return NextResponse.json(
           {
             ok: false,
             error:
-              existente.estado === "pendiente"
+              solicitudExistente.estado === "pendiente"
                 ? "Ya tienes una solicitud pendiente."
                 : "Ya existe una solicitud aprobada con este correo.",
           },
@@ -122,8 +164,7 @@ export async function POST(req: Request) {
         ok: true,
         tipo: "nuevo",
         solicitud_id: data.id,
-        message:
-          "Solicitud enviada correctamente. Recepción revisará tus datos.",
+        message: "Solicitud enviada correctamente. Recepción revisará tus datos.",
       });
     }
 
@@ -156,18 +197,17 @@ export async function POST(req: Request) {
       );
     }
 
+    const variantes = cedulaVariantes(cedula);
+
     const { data: clientes, error: clienteError } = await supabaseAdmin
       .from("clientes")
-      .select("id, nombre, telefono, email, cedula, estado, auth_user_id")
-      .eq("cedula", cedula)
-      .limit(5);
+      .select("id, nombre, telefono, email, cedula, estado, auth_user_id, acceso_portal")
+      .in("cedula", variantes)
+      .limit(20);
 
     if (clienteError) throw clienteError;
 
-    const cliente = clientes?.find((c) => {
-      const telDb = normalizePhone(c.telefono || "");
-      return telDb === telefono;
-    });
+    const cliente = clientes?.find((c) => phoneMatches(c.telefono || "", telefono));
 
     if (!cliente) {
       return NextResponse.json(
@@ -175,6 +215,12 @@ export async function POST(req: Request) {
           ok: false,
           error:
             "Tus datos no coinciden con recepción. Verifica cédula y teléfono.",
+          debug: {
+            cedula_recibida: cedula,
+            cedulas_buscadas: variantes,
+            telefono_recibido: telefono,
+            coincidencias_cedula: clientes?.length ?? 0,
+          },
         },
         { status: 404 }
       );
@@ -194,7 +240,25 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           ok: false,
-          error: "Este cliente ya tiene acceso al portal.",
+          error: "Este cliente ya tiene acceso al portal. Inicia sesión.",
+        },
+        { status: 409 }
+      );
+    }
+
+    const { data: usuarioExistente } =
+      await supabaseAdmin.auth.admin.listUsers();
+
+    const yaExisteAuth = usuarioExistente?.users?.find(
+      (u) => u.email?.toLowerCase() === email
+    );
+
+    if (yaExisteAuth) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Ya existe una cuenta con este correo. Usa otro correo o inicia sesión.",
         },
         { status: 409 }
       );
@@ -212,11 +276,11 @@ export async function POST(req: Request) {
         },
       });
 
-    if (authError) {
+    if (authError || !createdUser.user) {
       return NextResponse.json(
         {
           ok: false,
-          error: authError.message || "No se pudo crear el usuario.",
+          error: authError?.message || "No se pudo crear el usuario.",
         },
         { status: 400 }
       );
@@ -269,7 +333,7 @@ export async function POST(req: Request) {
       tipo: "existente",
       user_id: userId,
       cliente_id: cliente.id,
-      message: "Acceso creado correctamente.",
+      message: "Acceso creado correctamente. Ya puedes iniciar sesión.",
     });
   } catch (error: any) {
     console.error("REGISTRO_ERROR:", error);
