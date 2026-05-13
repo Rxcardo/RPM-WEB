@@ -389,7 +389,9 @@ export default function ClientePlanPage() {
   }, [empleadoId, fechaVistaCal])
 
   // Reset pagoState cuando cambia plan o precio
-  useEffect(() => { setPagoState(pagoConDeudaInitial()) }, [selectedPlanId, usarPrecioPlan])
+  useEffect(() => {
+    setPagoState(pagoConDeudaInitial())
+  }, [selectedPlanId, usarPrecioPlan, montoPersonalizado])
 
   useEffect(() => {
     if (modo !== 'renovar' || !planActivo) return
@@ -1001,10 +1003,41 @@ export default function ClientePlanPage() {
             <button type="button" onClick={resetearComisionAlPlan} className="rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/60 transition hover:bg-white/[0.06]">Restaurar comisión del plan</button>
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
-            <Field label="Precio (USD)" helper={esMismoPlanRenovacion ? 'Precio automático del mismo plan.' : usarPrecioPlan ? 'Tomando el precio del plan.' : 'Precio editable.'}>
+            <Field
+              label="Precio (USD)"
+              helper={
+                usarPrecioPlan
+                  ? 'Precio automático del plan. Puedes editarlo manualmente.'
+                  : 'Precio manual para este cobro.'
+              }
+            >
               <div className="flex gap-2">
-                <input type="number" min={0} step="0.01" value={usarPrecioPlan ? String(selectedPlan?.precio ?? '') : montoPersonalizado} readOnly={usarPrecioPlan || esMismoPlanRenovacion} onChange={(e) => setMontoPersonalizado(e.target.value)} className={`${inputCls} ${usarPrecioPlan || esMismoPlanRenovacion ? 'cursor-not-allowed opacity-70' : ''}`} placeholder="0.00" />
-                <button type="button" onClick={() => { if (!esMismoPlanRenovacion) setUsarPrecioPlan((p) => !p) }} disabled={esMismoPlanRenovacion} className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.03] px-3 text-xs text-white/60 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50">{esMismoPlanRenovacion ? 'Auto' : usarPrecioPlan ? 'Editar' : 'Plan'}</button>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={usarPrecioPlan ? String(selectedPlan?.precio ?? '') : montoPersonalizado}
+                  readOnly={usarPrecioPlan}
+                  onChange={(e) => setMontoPersonalizado(e.target.value)}
+                  className={`${inputCls} ${usarPrecioPlan ? 'cursor-not-allowed opacity-70' : ''}`}
+                  placeholder="0.00"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (usarPrecioPlan) {
+                      setMontoPersonalizado(String(selectedPlan?.precio ?? ''))
+                      setUsarPrecioPlan(false)
+                    } else {
+                      setUsarPrecioPlan(true)
+                      setMontoPersonalizado('')
+                    }
+                  }}
+                  className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.03] px-3 text-xs text-white/60 hover:bg-white/[0.06]"
+                >
+                  {usarPrecioPlan ? 'Editar' : 'Plan'}
+                </button>
               </div>
             </Field>
             <Field label="Base comisión"><input type="number" value={String(baseComisionAplicada)} readOnly className={`${inputCls} cursor-not-allowed opacity-80`} /></Field>
