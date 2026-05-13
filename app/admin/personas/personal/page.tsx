@@ -63,6 +63,10 @@ type ComisionResumen = {
   nombre: string
   total_base_usd: number
   total_base_bs: number
+  total_profesional_bruto_usd: number
+  total_profesional_bruto_bs: number
+  total_descuento_deuda_usd: number
+  total_descuento_deuda_bs: number
   total_profesional_usd: number
   total_profesional_bs: number
   total_rpm_usd: number
@@ -97,6 +101,18 @@ function generarPasswordTemporal() {
 function firstOrNull<T>(v: T | T[] | null | undefined): T | null {
   if (Array.isArray(v)) return v[0] ?? null
   return v ?? null
+}
+
+function r2(value: number) {
+  return Math.round(Number(value || 0) * 100) / 100
+}
+
+function normalizeEstado(value: string | null | undefined) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function esDescuentoDeudaActivo(value: string | null | undefined) {
+  return !['anulado', 'anulada', 'cancelado', 'cancelada', 'revertido', 'revertida'].includes(normalizeEstado(value))
 }
 
 function money(v: number, currency: 'USD' | 'VES' = 'USD') {
@@ -254,11 +270,13 @@ function ComisionesPendientesBlock({ comisiones }: { comisiones: ComisionResumen
     (acc, c) => ({
       profUsd: acc.profUsd + c.total_profesional_usd,
       profBs: acc.profBs + c.total_profesional_bs,
+      descuentoUsd: acc.descuentoUsd + c.total_descuento_deuda_usd,
+      descuentoBs: acc.descuentoBs + c.total_descuento_deuda_bs,
       rpmUsd: acc.rpmUsd + c.total_rpm_usd,
       rpmBs: acc.rpmBs + c.total_rpm_bs,
       registros: acc.registros + c.cantidad,
     }),
-    { profUsd: 0, profBs: 0, rpmUsd: 0, rpmBs: 0, registros: 0 }
+    { profUsd: 0, profBs: 0, descuentoUsd: 0, descuentoBs: 0, rpmUsd: 0, rpmBs: 0, registros: 0 }
   )
 
   return (
@@ -273,8 +291,13 @@ function ComisionesPendientesBlock({ comisiones }: { comisiones: ComisionResumen
           </span>
         </div>
         <div className="flex items-center gap-4 text-xs text-white/40">
+          {totales.descuentoUsd > 0 ? (
+            <span>
+              Deuda <span className="font-semibold text-rose-300">-{money(totales.descuentoUsd)}</span>
+            </span>
+          ) : null}
           <span>
-            Prof. <span className="font-semibold text-emerald-400">{money(totales.profUsd)}</span>
+            Neto prof. <span className="font-semibold text-emerald-400">{money(totales.profUsd)}</span>
           </span>
           <span>
             RPM <span className="font-semibold text-white/60">{money(totales.rpmUsd)}</span>
@@ -316,12 +339,25 @@ function ComisionesPendientesBlock({ comisiones }: { comisiones: ComisionResumen
 
               <div className="my-2 h-px bg-white/[0.06]" />
 
+              {c.total_descuento_deuda_usd > 0 || c.total_descuento_deuda_bs > 0 ? (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-white/35">Prof. bruto USD</span>
+                    <span className="text-white/55">{money(c.total_profesional_bruto_usd)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-rose-300/80">Deuda desc. USD</span>
+                    <span className="font-semibold text-rose-300">-{money(c.total_descuento_deuda_usd)}</span>
+                  </div>
+                </>
+              ) : null}
+
               <div className="flex justify-between">
-                <span className="font-semibold text-emerald-400">Prof. USD</span>
+                <span className="font-semibold text-emerald-400">Prof. neto USD</span>
                 <span className="font-bold text-emerald-400">{money(c.total_profesional_usd)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="font-semibold text-amber-400">Prof. Bs</span>
+                <span className="font-semibold text-amber-400">Prof. neto Bs</span>
                 <span className="font-bold text-amber-400">{money(c.total_profesional_bs, 'VES')}</span>
               </div>
 
@@ -418,9 +454,14 @@ export default function PersonalPage() {
   async function loadComisiones() {
     setLoadingComisiones(true)
     try {
-      const { data, error } = await supabase
+      const fechaInicioTs = `${fechaComisionInicio}T00:00:00`
+      const fechaFinTs = `${fechaComisionFin}T23:59:59.999`
+
+      // 1) Comisiones pendientes creadas dentro del rango normal del filtro.
+      const { data: comisionesPorFechaData, error: comisionesPorFechaError } = await supabase
         .from('comisiones_detalle')
         .select(`
+          id,
           empleado_id,
           monto_base_usd,
           monto_base_bs,
@@ -434,23 +475,128 @@ export default function PersonalPage() {
         .lte('fecha', fechaComisionFin)
         .eq('estado', 'pendiente')
 
-      if (error) throw error
+      if (comisionesPorFechaError) throw comisionesPorFechaError
 
-      const rows = (data || []) as any[]
+      const rowsPorFecha = (comisionesPorFechaData || []) as any[]
+      const idsPorFecha = rowsPorFecha.map((row) => String(row.id || '')).filter(Boolean)
+
+      // 2) Descuentos de deuda aplicados dentro del rango.
+      //    Esto es CLAVE: una comisión puede ser de abril, pero el descuento se aplicó en mayo.
+      //    El listado debe traer esa comisión porque ahora hay un movimiento real en el rango.
+      const { data: descuentosDelRangoData, error: descuentosDelRangoError } = await supabase
+        .from('comisiones_descuentos_deuda')
+        .select('comision_id, monto_descuento_usd, monto_descuento_bs, estado, created_at')
+        .gte('created_at', fechaInicioTs)
+        .lte('created_at', fechaFinTs)
+
+      if (descuentosDelRangoError) {
+        console.error('Error cargando descuentos de deuda del rango:', descuentosDelRangoError)
+      }
+
+      const comisionIdsConDescuentoEnRango = Array.from(
+        new Set(
+          ((descuentosDelRangoData || []) as any[])
+            .filter((descuento) => esDescuentoDeudaActivo(descuento?.estado))
+            .map((descuento) => String(descuento?.comision_id || ''))
+            .filter(Boolean)
+        )
+      )
+
+      const idsFaltantesPorDescuento = comisionIdsConDescuentoEnRango.filter(
+        (comisionId) => !idsPorFecha.includes(comisionId)
+      )
+
+      // 3) Traer las comisiones enlazadas a descuentos del rango aunque su fecha original esté fuera.
+      let rowsPorDescuento: any[] = []
+      if (idsFaltantesPorDescuento.length > 0) {
+        const { data: comisionesPorDescuentoData, error: comisionesPorDescuentoError } = await supabase
+          .from('comisiones_detalle')
+          .select(`
+            id,
+            empleado_id,
+            monto_base_usd,
+            monto_base_bs,
+            monto_profesional_usd,
+            monto_profesional_bs,
+            monto_rpm_usd,
+            monto_rpm_bs,
+            empleados:empleado_id(nombre)
+          `)
+          .in('id', idsFaltantesPorDescuento)
+          .eq('estado', 'pendiente')
+
+        if (comisionesPorDescuentoError) throw comisionesPorDescuentoError
+        rowsPorDescuento = (comisionesPorDescuentoData || []) as any[]
+      }
+
+      // 4) Unificar sin duplicados.
+      const rowsMap = new Map<string, any>()
+      ;[...rowsPorFecha, ...rowsPorDescuento].forEach((row) => {
+        const key = String(row?.id || '')
+        if (!key) return
+        rowsMap.set(key, row)
+      })
+
+      const rows = Array.from(rowsMap.values())
+      const comisionIds = rows.map((row) => String(row.id || '')).filter(Boolean)
+      const descuentosPorComision = new Map<string, { usd: number; bs: number }>()
+
+      // 5) Para esas comisiones incluidas, sumar TODOS sus descuentos activos.
+      //    No solo los del rango, porque el neto debe ser el saldo real pendiente.
+      if (comisionIds.length > 0) {
+        const { data: descuentosData, error: descuentosError } = await supabase
+          .from('comisiones_descuentos_deuda')
+          .select('comision_id, monto_descuento_usd, monto_descuento_bs, estado')
+          .in('comision_id', comisionIds)
+
+        if (descuentosError) {
+          console.error('Error cargando descuentos de deuda de comisiones:', descuentosError)
+        } else {
+          ;((descuentosData || []) as any[]).forEach((descuento) => {
+            if (!esDescuentoDeudaActivo(descuento?.estado)) return
+            const key = String(descuento?.comision_id || '')
+            if (!key) return
+
+            const previo = descuentosPorComision.get(key) || { usd: 0, bs: 0 }
+            descuentosPorComision.set(key, {
+              usd: r2(previo.usd + Number(descuento?.monto_descuento_usd || 0)),
+              bs: r2(previo.bs + Number(descuento?.monto_descuento_bs || 0)),
+            })
+          })
+        }
+      }
+
       const grouped = new Map<string, ComisionResumen>()
 
       rows.forEach((c) => {
         const nombre = firstOrNull(c?.empleados)?.nombre || 'Sin profesional'
         const key = String(c.empleado_id || `sin-empleado-${nombre}`)
+        const descuento = descuentosPorComision.get(String(c.id || '')) || { usd: 0, bs: 0 }
+
+        const baseUsd = r2(Number(c.monto_base_usd || 0))
+        const baseBs = r2(Number(c.monto_base_bs || 0))
+        const rpmUsd = r2(Number(c.monto_rpm_usd || 0))
+        const rpmBs = r2(Number(c.monto_rpm_bs || 0))
+        const brutoUsd = r2(Number(c.monto_profesional_usd || 0))
+        const brutoBs = r2(Number(c.monto_profesional_bs || 0))
+        const descuentoUsd = r2(Math.min(Math.max(descuento.usd, 0), brutoUsd))
+        const descuentoBs = r2(Math.min(Math.max(descuento.bs, 0), brutoBs))
+        const netoUsd = r2(Math.max(brutoUsd - descuentoUsd, 0))
+        const netoBs = r2(Math.max(brutoBs - descuentoBs, 0))
+
         const ex = grouped.get(key)
 
         if (ex) {
-          ex.total_base_usd += Number(c.monto_base_usd || 0)
-          ex.total_base_bs += Number(c.monto_base_bs || 0)
-          ex.total_profesional_usd += Number(c.monto_profesional_usd || 0)
-          ex.total_profesional_bs += Number(c.monto_profesional_bs || 0)
-          ex.total_rpm_usd += Number(c.monto_rpm_usd || 0)
-          ex.total_rpm_bs += Number(c.monto_rpm_bs || 0)
+          ex.total_base_usd = r2(ex.total_base_usd + baseUsd)
+          ex.total_base_bs = r2(ex.total_base_bs + baseBs)
+          ex.total_profesional_bruto_usd = r2(ex.total_profesional_bruto_usd + brutoUsd)
+          ex.total_profesional_bruto_bs = r2(ex.total_profesional_bruto_bs + brutoBs)
+          ex.total_descuento_deuda_usd = r2(ex.total_descuento_deuda_usd + descuentoUsd)
+          ex.total_descuento_deuda_bs = r2(ex.total_descuento_deuda_bs + descuentoBs)
+          ex.total_profesional_usd = r2(ex.total_profesional_usd + netoUsd)
+          ex.total_profesional_bs = r2(ex.total_profesional_bs + netoBs)
+          ex.total_rpm_usd = r2(ex.total_rpm_usd + rpmUsd)
+          ex.total_rpm_bs = r2(ex.total_rpm_bs + rpmBs)
           ex.cantidad += 1
           return
         }
@@ -458,12 +604,16 @@ export default function PersonalPage() {
         grouped.set(key, {
           empleado_id: key,
           nombre,
-          total_base_usd: Number(c.monto_base_usd || 0),
-          total_base_bs: Number(c.monto_base_bs || 0),
-          total_profesional_usd: Number(c.monto_profesional_usd || 0),
-          total_profesional_bs: Number(c.monto_profesional_bs || 0),
-          total_rpm_usd: Number(c.monto_rpm_usd || 0),
-          total_rpm_bs: Number(c.monto_rpm_bs || 0),
+          total_base_usd: baseUsd,
+          total_base_bs: baseBs,
+          total_profesional_bruto_usd: brutoUsd,
+          total_profesional_bruto_bs: brutoBs,
+          total_descuento_deuda_usd: descuentoUsd,
+          total_descuento_deuda_bs: descuentoBs,
+          total_profesional_usd: netoUsd,
+          total_profesional_bs: netoBs,
+          total_rpm_usd: rpmUsd,
+          total_rpm_bs: rpmBs,
           cantidad: 1,
         })
       })
