@@ -683,7 +683,7 @@ export default function ClienteComunicacionPage() {
                 <p style={{ margin: 0, fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>{cliente?.telefono || cliente?.email || "Portal"}</p>
               </div>
             </div>
-            <SessionCard />
+            {SessionCard()}
           </div>
 
           {/* Conversation list */}
@@ -803,7 +803,7 @@ export default function ClienteComunicacionPage() {
                 {solicitudesPendientes.length} pendiente{solicitudesPendientes.length !== 1 ? "s" : ""}
               </div>
             )}
-            <SolicitudForm />
+            {SolicitudForm()}
           </div>
 
           {/* Lista solicitudes */}
@@ -860,7 +860,7 @@ export default function ClienteComunicacionPage() {
                   )}
                 </button>
               </div>
-              <SessionCard />
+              {SessionCard()}
             </div>
 
             {/* Conversation list */}
@@ -990,7 +990,7 @@ export default function ClienteComunicacionPage() {
                   {solicitudesPendientes.length} solicitud{solicitudesPendientes.length !== 1 ? "es" : ""} pendiente{solicitudesPendientes.length !== 1 ? "s" : ""}
                 </div>
               )}
-              <SolicitudForm />
+              {SolicitudForm()}
             </div>
 
             {/* Solicitudes list */}
