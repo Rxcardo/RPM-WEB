@@ -872,7 +872,7 @@ export default function ClienteComunicacionPage() {
                 const title = c.tipo === "cliente_recepcion" ? "Recepción" : firstOrNull(c.fisios)?.nombre || "Fisio";
                 return (
                   <button key={c.id} type="button" onClick={() => { setSelectedId(c.id); setVistaMovil("chat"); }}
-                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", borderBottom: "1px solid var(--border)", textAlign: "left", border: "none", borderBottom: `1px solid var(--border)`, background: "transparent", cursor: "pointer", fontFamily: "inherit" }}>
+                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", textAlign: "left", border: "none", borderBottom: "1px solid var(--border)", background: "transparent", cursor: "pointer", fontFamily: "inherit" }}>
                     <div style={{ width: 44, height: 44, borderRadius: "50%", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--purple-glow)", border: "1px solid var(--border-strong)", color: "var(--purple2)" }}>
                       {c.tipo === "cliente_recepcion" ? <Bell size={18} /> : <UserRound size={18} />}
                     </div>

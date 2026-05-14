@@ -2,10 +2,46 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase/client'
-import ClienteHeader from '../_components/ClienteHeader'
 import { formatDate, formatHour, useClientePortal } from '../_components/ClienteData'
 
 /* ── TYPES ─────────────────────────────────────────────────────────────── */
+
+type MaybeArray<T> = T | T[] | null | undefined
+
+type EmpleadoRef = {
+  id: string
+  nombre: string | null
+  rol: string | null
+}
+
+type PlanRef = {
+  id: string
+  nombre: string | null
+}
+
+type ClientePlanRef = {
+  id: string
+  fecha_fin: string | null
+  estado: string | null
+  sesiones_totales: number | null
+  sesiones_usadas: number | null
+  planes: MaybeArray<PlanRef>
+}
+
+type ServicioRef = {
+  id: string
+  nombre: string | null
+}
+
+type EntrenamientoClienteRaw = Omit<EntrenamientoCliente, 'empleados' | 'clientes_planes'> & {
+  empleados: MaybeArray<EmpleadoRef>
+  clientes_planes: MaybeArray<ClientePlanRef>
+}
+
+type CitaClienteRaw = Omit<CitaCliente, 'empleados' | 'servicios'> & {
+  empleados: MaybeArray<EmpleadoRef>
+  servicios: MaybeArray<ServicioRef>
+}
 
 type EntrenamientoCliente = {
   id: string
@@ -21,22 +57,8 @@ type EntrenamientoCliente = {
   consume_sesion: boolean | null
   reprogramable: boolean | null
   motivo_asistencia: string | null
-  empleados: {
-    id: string
-    nombre: string | null
-    rol: string | null
-  } | null
-  clientes_planes: {
-    id: string
-    fecha_fin: string | null
-    estado: string | null
-    sesiones_totales: number | null
-    sesiones_usadas: number | null
-    planes: {
-      id: string
-      nombre: string | null
-    } | null
-  } | null
+  empleados: EmpleadoRef | null
+  clientes_planes: (Omit<ClientePlanRef, 'planes'> & { planes: PlanRef | null }) | null
 }
 
 type CitaCliente = {
@@ -49,15 +71,8 @@ type CitaCliente = {
   hora_fin: string | null
   estado: string | null
   notas: string | null
-  empleados: {
-    id: string
-    nombre: string | null
-    rol: string | null
-  } | null
-  servicios: {
-    id: string
-    nombre: string | null
-  } | null
+  empleados: EmpleadoRef | null
+  servicios: ServicioRef | null
 }
 
 type SolicitudAccion =
@@ -74,6 +89,34 @@ type SolicitudModal =
 function todayKey() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+
+function firstOrNull<T>(value: MaybeArray<T>): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function normalizarEntrenamiento(row: EntrenamientoClienteRaw): EntrenamientoCliente {
+  const plan = firstOrNull(row.clientes_planes)
+  return {
+    ...row,
+    empleados: firstOrNull(row.empleados),
+    clientes_planes: plan
+      ? {
+          ...plan,
+          planes: firstOrNull(plan.planes),
+        }
+      : null,
+  }
+}
+
+function normalizarCita(row: CitaClienteRaw): CitaCliente {
+  return {
+    ...row,
+    empleados: firstOrNull(row.empleados),
+    servicios: firstOrNull(row.servicios),
+  }
 }
 
 function sesionesRestantes(plan: EntrenamientoCliente['clientes_planes']) {
@@ -182,10 +225,10 @@ export default function ClienteAgendaPage() {
     ])
 
     if (sesionesRes.error) { setError(sesionesRes.error.message); setSesiones([]) }
-    else setSesiones((sesionesRes.data ?? []) as EntrenamientoCliente[])
+    else setSesiones(((sesionesRes.data ?? []) as unknown as EntrenamientoClienteRaw[]).map(normalizarEntrenamiento))
 
     if (citasRes.error) { setError((prev) => prev ?? citasRes.error.message); setCitas([]) }
-    else setCitas((citasRes.data ?? []) as CitaCliente[])
+    else setCitas(((citasRes.data ?? []) as unknown as CitaClienteRaw[]).map(normalizarCita))
 
     setLoading(false)
   }

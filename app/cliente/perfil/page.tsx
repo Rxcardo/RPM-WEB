@@ -73,6 +73,15 @@ type PagoCliente = {
   tasa_bcv?: number | null
 }
 
+type ClientePortalPerfilExtra = {
+  cedula?: string | null
+  fecha_nacimiento?: string | null
+  genero?: string | null
+  direccion?: string | null
+  estado?: string | null
+  acceso_portal?: boolean | null
+}
+
 /* ── HELPERS ───────────────────────────────────────────────────────────── */
 
 function toNumber(value: unknown) {
@@ -159,17 +168,19 @@ export default function ClientePerfilPage() {
   const [finanzasError, setFinanzasError]     = useState<string | null>(null)
 
   const clienteId = cliente?.id ?? null
+  const clientePerfil = cliente as (typeof cliente & ClientePortalPerfilExtra) | null
 
   useEffect(() => {
     if (!cliente) return
+    const perfil = cliente as typeof cliente & ClientePortalPerfilExtra
     setForm({
       nombre: cliente.nombre ?? '',
       telefono: cliente.telefono ?? '',
       email: cliente.email ?? '',
-      cedula: cliente.cedula ?? '',
-      fecha_nacimiento: cliente.fecha_nacimiento ?? '',
-      genero: cliente.genero ?? '',
-      direccion: cliente.direccion ?? '',
+      cedula: perfil.cedula ?? '',
+      fecha_nacimiento: perfil.fecha_nacimiento ?? '',
+      genero: perfil.genero ?? '',
+      direccion: perfil.direccion ?? '',
     })
   }, [cliente])
 
@@ -246,11 +257,15 @@ export default function ClientePerfilPage() {
 
   function cancelarEdicion() {
     if (!cliente) return
+    const perfil = clientePerfil
     setForm({
-      nombre: cliente.nombre ?? '', telefono: cliente.telefono ?? '',
-      email: cliente.email ?? '', cedula: cliente.cedula ?? '',
-      fecha_nacimiento: cliente.fecha_nacimiento ?? '',
-      genero: cliente.genero ?? '', direccion: cliente.direccion ?? '',
+      nombre: cliente.nombre ?? '',
+      telefono: cliente.telefono ?? '',
+      email: cliente.email ?? '',
+      cedula: perfil?.cedula ?? '',
+      fecha_nacimiento: perfil?.fecha_nacimiento ?? '',
+      genero: perfil?.genero ?? '',
+      direccion: perfil?.direccion ?? '',
     })
     setEditing(false)
   }
@@ -329,10 +344,10 @@ export default function ClientePerfilPage() {
               {loading ? 'Cargando…' : (cliente?.nombre ?? 'Sin nombre')}
             </h3>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              <span className={`cliente-chip ${cliente?.estado === 'activo' ? 'cliente-chip-green' : ''}`}>
-                {cliente?.estado ?? 'activo'}
+              <span className={`cliente-chip ${clientePerfil?.estado === 'activo' ? 'cliente-chip-green' : ''}`}>
+                {clientePerfil?.estado ?? 'activo'}
               </span>
-              {cliente?.acceso_portal && (
+              {clientePerfil?.acceso_portal && (
                 <span className="cliente-chip cliente-chip-purple">Portal activo</span>
               )}
             </div>
@@ -423,10 +438,10 @@ export default function ClientePerfilPage() {
               {[
                 { label: 'Correo',      value: cliente?.email           || '—' },
                 { label: 'Teléfono',    value: cliente?.telefono        || '—' },
-                { label: 'Cédula',      value: cliente?.cedula          || '—' },
-                { label: 'Nacimiento',  value: cliente?.fecha_nacimiento ? formatDate(cliente.fecha_nacimiento) : '—' },
-                { label: 'Género',      value: cliente?.genero          || '—' },
-                { label: 'Dirección',   value: cliente?.direccion       || '—' },
+                { label: 'Cédula',      value: clientePerfil?.cedula          || '—' },
+                { label: 'Nacimiento',  value: clientePerfil?.fecha_nacimiento ? formatDate(clientePerfil.fecha_nacimiento) : '—' },
+                { label: 'Género',      value: clientePerfil?.genero          || '—' },
+                { label: 'Dirección',   value: clientePerfil?.direccion       || '—' },
               ].map(({ label, value }) => (
                 <InfoRow key={label} label={label} value={value} />
               ))}

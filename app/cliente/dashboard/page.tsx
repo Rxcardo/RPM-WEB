@@ -76,6 +76,33 @@ type SesionHoyDashboard = {
 
 /* ── HELPERS ───────────────────────────────────────────────────────────── */
 
+function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+function normalizeCitaHoy(row: any): CitaHoyDashboard {
+  return {
+    ...row,
+    servicios: firstOrNull(row?.servicios),
+    empleados: firstOrNull(row?.empleados),
+  }
+}
+
+function normalizeSesionHoy(row: any): SesionHoyDashboard {
+  const clientePlan = firstOrNull(row?.clientes_planes)
+  return {
+    ...row,
+    empleados: firstOrNull(row?.empleados),
+    clientes_planes: clientePlan
+      ? {
+          ...clientePlan,
+          planes: firstOrNull(clientePlan?.planes),
+        }
+      : null,
+  }
+}
+
 function todayKey() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -214,9 +241,9 @@ export default function ClienteDashboardPage() {
         .order('hora_inicio', { ascending: true }),
     ])
     if (citasRes.error)    { setHoyError(citasRes.error.message); setCitasHoy([]) }
-    else setCitasHoy((citasRes.data ?? []) as CitaHoyDashboard[])
+    else setCitasHoy(((citasRes.data ?? []) as any[]).map(normalizeCitaHoy))
     if (sesionesRes.error) { setHoyError((p) => p ?? sesionesRes.error.message); setSesionesHoy([]) }
-    else setSesionesHoy((sesionesRes.data ?? []) as SesionHoyDashboard[])
+    else setSesionesHoy(((sesionesRes.data ?? []) as any[]).map(normalizeSesionHoy))
     setLoadingHoy(false)
   }
 
