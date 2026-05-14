@@ -7,17 +7,16 @@ import { createBrowserClient } from "@supabase/ssr";
 import {
   ArrowLeft,
   Bell,
-  CalendarClock,
   CheckCircle2,
   ChevronRight,
   Inbox,
   MessageCircle,
-  Phone,
-  Plus,
   Send,
   UserRound,
   XCircle,
 } from "lucide-react";
+
+/* ── TYPES ─────────────────────────────────────────────────────────────── */
 
 type ParticipanteTipo = "cliente" | "fisio" | "recepcion" | "admin" | "sistema";
 
@@ -42,6 +41,18 @@ type CitaHoy = {
   terapeutas?: { nombre?: string | null } | { nombre?: string | null }[] | null;
   empleados?: { nombre?: string | null } | { nombre?: string | null }[] | null;
   servicios?: { nombre?: string | null } | { nombre?: string | null }[] | null;
+};
+
+type ClientePlanActual = {
+  id: string;
+  cliente_id: string | null;
+  plan_id: string | null;
+  estado: string | null;
+  fecha_inicio: string | null;
+  fecha_fin: string | null;
+  sesiones_totales: number | null;
+  sesiones_usadas: number | null;
+  planes?: { nombre?: string | null } | { nombre?: string | null }[] | null;
 };
 
 type Conversacion = {
@@ -82,19 +93,32 @@ type Solicitud = {
 };
 
 type SolicitudRapida = { value: string; label: string; placeholder: string };
-
-// Vista móvil: "home" | "chat" | "solicitudes"
+type ServicioSolicitudCita = "banera_inmersion" | "evaluacion" | "recovery" | "terapia";
 type VistaMovil = "home" | "chat" | "solicitudes";
 
+/* ── CONSTANTS ─────────────────────────────────────────────────────────── */
+
 const SOLICITUDES_RAPIDAS: SolicitudRapida[] = [
-  { value: "solicitar_cita", label: "Solicitar cita", placeholder: "Ej: Quiero solicitar una cita para esta semana..." },
-  { value: "reagendar_cita", label: "Reagendar cita", placeholder: "Ej: Necesito cambiar mi cita para otro horario..." },
-  { value: "cambio_horario", label: "Cambio de horario", placeholder: "Ej: Quiero cambiar mi horario regular..." },
-  { value: "cambio_fisio", label: "Cambio de fisio", placeholder: "Ej: Quisiera solicitar un cambio de fisio..." },
-  { value: "consulta_pago", label: "Consulta de pago", placeholder: "Ej: Tengo una duda sobre mi pago o deuda..." },
-  { value: "consulta_clinica", label: "Consulta clínica", placeholder: "Ej: Tengo una duda sobre mi evolución o ejercicios..." },
-  { value: "otro", label: "General", placeholder: "Escribe tu solicitud..." },
+  { value: "solicitar_cita",    label: "Solicitar cita",    placeholder: "Ej: Quiero una cita esta semana en la tarde..." },
+  { value: "solicitar_plan",    label: "Solicitar plan",    placeholder: "Hola, quisiera saber los planes activos, precios y disponibilidad." },
+  { value: "renovar_plan",      label: "Renovar mi plan",   placeholder: "Hola, quisiera renovar mi plan actual o conocer opciones similares." },
+  { value: "congelar_plan",     label: "Congelar plan",     placeholder: "Explica por qué necesitas congelar tu plan..." },
+  { value: "reagendar_cita",    label: "Reagendar cita",    placeholder: "Ej: Necesito cambiar mi cita para otro horario..." },
+  { value: "cambio_horario",    label: "Cambio de horario", placeholder: "Ej: Quiero cambiar mi horario regular..." },
+  { value: "cambio_fisio",      label: "Cambio de fisio",   placeholder: "Ej: Quisiera solicitar un cambio de fisio..." },
+  { value: "consulta_pago",     label: "Consulta de pago",  placeholder: "Ej: Tengo una duda sobre mi pago o deuda..." },
+  { value: "consulta_clinica",  label: "Consulta clínica",  placeholder: "Ej: Tengo una duda sobre mi evolución o ejercicios..." },
+  { value: "otro",              label: "General",            placeholder: "Escribe tu solicitud..." },
 ];
+
+const SERVICIOS_SOLICITUD_CITA: { value: ServicioSolicitudCita; label: string }[] = [
+  { value: "banera_inmersion", label: "Bañera de inmersión" },
+  { value: "evaluacion",       label: "Evaluación" },
+  { value: "recovery",         label: "Recovery" },
+  { value: "terapia",          label: "Terapia" },
+];
+
+/* ── HELPERS ───────────────────────────────────────────────────────────── */
 
 function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
   if (Array.isArray(value)) return value[0] ?? null;
@@ -135,7 +159,9 @@ function initials(name?: string | null) {
 
 function solicitudLabel(tipo: string) {
   const map: Record<string, string> = {
-    solicitar_cita: "Solicitud de cita", reagendar_cita: "Reagendar cita", cancelar_cita: "Cancelar cita",
+    solicitar_cita: "Solicitud de cita", solicitar_plan: "Solicitar plan",
+    renovar_plan: "Renovar plan", congelar_plan: "Congelar plan",
+    reagendar_cita: "Reagendar cita", cancelar_cita: "Cancelar cita",
     cambio_horario: "Cambio de horario", cambio_fisio: "Cambio de fisio",
     aviso_no_asistencia_cliente: "Aviso no asistencia", consulta_pago: "Consulta pago",
     consulta_clinica: "Consulta clínica", otro: "General",
@@ -143,31 +169,16 @@ function solicitudLabel(tipo: string) {
   return map[tipo] || tipo;
 }
 
-function estadoStyle(estado: string) {
+function estadoChipStyle(estado: string): React.CSSProperties {
   switch (estado) {
-    case "pendiente": return "border border-amber-400/20 bg-amber-400/10 text-amber-300";
-    case "en_revision": return "border border-sky-400/20 bg-sky-400/10 text-sky-300";
-    case "aprobada": case "resuelta": return "border border-emerald-400/20 bg-emerald-400/10 text-emerald-300";
-    case "rechazada": case "cancelada": return "border border-rose-400/20 bg-rose-400/10 text-rose-300";
-    default: return "border border-white/10 bg-white/[0.04] text-white/45";
+    case "pendiente":   return { background: "rgba(251,191,36,0.12)",  border: "1px solid rgba(251,191,36,0.24)",  color: "var(--yellow)" };
+    case "en_revision": return { background: "rgba(56,189,248,0.12)",  border: "1px solid rgba(56,189,248,0.24)",  color: "#7dd3fc" };
+    case "aprobada":
+    case "resuelta":    return { background: "var(--green-soft)",       border: "1px solid rgba(52,211,153,0.24)", color: "var(--green)" };
+    case "rechazada":
+    case "cancelada":   return { background: "var(--red-soft)",         border: "1px solid rgba(248,113,113,0.24)", color: "var(--red)" };
+    default:            return { background: "var(--surface2)",         border: "1px solid var(--border)",          color: "var(--muted)" };
   }
-}
-
-function avatarColor(name?: string | null) {
-  const colors = ["from-violet-500 to-purple-600","from-sky-500 to-blue-600","from-emerald-500 to-teal-600","from-rose-500 to-pink-600","from-amber-500 to-orange-600","from-indigo-500 to-violet-600"];
-  const s = name || "?";
-  let hash = 0;
-  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) & 0xffff;
-  return colors[hash % colors.length];
-}
-
-function Avatar({ name, size = "md" }: { name?: string | null; size?: "sm" | "md" | "lg" }) {
-  const sz = size === "sm" ? "h-9 w-9 text-xs" : size === "lg" ? "h-14 w-14 text-base" : "h-11 w-11 text-sm";
-  return (
-    <div className={`${sz} shrink-0 rounded-full bg-gradient-to-br ${avatarColor(name)} flex items-center justify-center font-black text-white shadow-lg`}>
-      {initials(name)}
-    </div>
-  );
 }
 
 function isTempId(id: string) { return id.startsWith("temp-"); }
@@ -222,6 +233,8 @@ function dedupeConversaciones(rows: Conversacion[]) {
   );
 }
 
+/* ── PAGE ──────────────────────────────────────────────────────────────── */
+
 export default function ClienteComunicacionPage() {
   const supabase = useMemo(() => createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -230,30 +243,51 @@ export default function ClienteComunicacionPage() {
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  const [loading, setLoading] = useState(true);
-  const [cliente, setCliente] = useState<ClienteActual | null>(null);
-  const [citaHoy, setCitaHoy] = useState<CitaHoy | null>(null);
+  const [loading, setLoading]               = useState(true);
+  const [cliente, setCliente]               = useState<ClienteActual | null>(null);
+  const [citaHoy, setCitaHoy]               = useState<CitaHoy | null>(null);
+  const [planActual, setPlanActual]         = useState<ClientePlanActual | null>(null);
   const [conversaciones, setConversaciones] = useState<Conversacion[]>([]);
-  const [selectedId, setSelectedId] = useState("");
-  const [mensajes, setMensajes] = useState<Mensaje[]>([]);
-  const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
+  const [selectedId, setSelectedId]         = useState("");
+  const [mensajes, setMensajes]             = useState<Mensaje[]>([]);
+  const [solicitudes, setSolicitudes]       = useState<Solicitud[]>([]);
 
-  const [texto, setTexto] = useState("");
-  const [toast, setToast] = useState("");
-  const [sendingMsg, setSendingMsg] = useState(false);
+  const [texto, setTexto]                   = useState("");
+  const [toast, setToast]                   = useState("");
+  const [sendingMsg, setSendingMsg]         = useState(false);
 
-  const [modalNoAsiste, setModalNoAsiste] = useState(false);
+  const [modalNoAsiste, setModalNoAsiste]   = useState(false);
   const [motivoNoAsiste, setMotivoNoAsiste] = useState("");
   const [sendingAsistencia, setSendingAsistencia] = useState(false);
 
-  const [tipoSolicitud, setTipoSolicitud] = useState("solicitar_cita");
+  const [tipoSolicitud, setTipoSolicitud]   = useState("solicitar_cita");
   const [mensajeSolicitud, setMensajeSolicitud] = useState("");
+  const [servicioSolicitud, setServicioSolicitud] = useState<ServicioSolicitudCita>("terapia");
+  const [fechaSolicitud, setFechaSolicitud] = useState("");
+  const [horaSolicitud, setHoraSolicitud]   = useState("");
+  const [fechaCongelarDesde, setFechaCongelarDesde] = useState("");
+  const [fechaCongelarHasta, setFechaCongelarHasta] = useState("");
   const [sendingSolicitud, setSendingSolicitud] = useState(false);
 
-  const [vistaMovil, setVistaMovil] = useState<VistaMovil>("home");
+  const [vistaMovil, setVistaMovil]         = useState<VistaMovil>("home");
 
-  const selected = conversaciones.find((c) => c.id === selectedId) || null;
-  const solicitudActual = SOLICITUDES_RAPIDAS.find((s) => s.value === tipoSolicitud) || SOLICITUDES_RAPIDAS[0];
+  const selected          = conversaciones.find((c) => c.id === selectedId) || null;
+  const solicitudActual   = SOLICITUDES_RAPIDAS.find((s) => s.value === tipoSolicitud) || SOLICITUDES_RAPIDAS[0];
+  const esSolicitudCita   = tipoSolicitud === "solicitar_cita";
+  const esCongelarPlan    = tipoSolicitud === "congelar_plan";
+  const esSolicitudPlan   = ["solicitar_plan", "renovar_plan", "congelar_plan"].includes(tipoSolicitud);
+  const planInicio        = planActual?.fecha_inicio || "";
+  const planFin           = planActual?.fecha_fin || "";
+
+  const servicioSolicitudLabel = SERVICIOS_SOLICITUD_CITA.find((s) => s.value === servicioSolicitud)?.label || "Terapia";
+
+  const diasCongelar = useMemo(() => {
+    if (!fechaCongelarDesde || !fechaCongelarHasta) return 0;
+    const desde = new Date(`${fechaCongelarDesde}T00:00:00`);
+    const hasta = new Date(`${fechaCongelarHasta}T00:00:00`);
+    const diff = Math.floor((hasta.getTime() - desde.getTime()) / 86400000) + 1;
+    return Number.isFinite(diff) && diff > 0 ? diff : 0;
+  }, [fechaCongelarDesde, fechaCongelarHasta]);
 
   const selectedTitle = selected?.tipo === "cliente_recepcion"
     ? "Recepción"
@@ -265,10 +299,10 @@ export default function ClienteComunicacionPage() {
     firstOrNull(conversaciones.find((c) => c.tipo === "cliente_fisio")?.fisios)?.nombre ||
     "Fisio";
 
-  const servicioNombre = firstOrNull(citaHoy?.servicios)?.nombre || "Sesión";
-  const solicitudesPendientes = solicitudes.filter((s) => s.estado === "pendiente");
+  const servicioNombre          = firstOrNull(citaHoy?.servicios)?.nombre || "Sesión";
+  const solicitudesPendientes   = solicitudes.filter((s) => s.estado === "pendiente");
 
-  useEffect(() => { void boot(); }, []);
+  useEffect(() => { void boot(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!cliente?.id) return;
@@ -291,8 +325,9 @@ export default function ClienteComunicacionPage() {
   }, [cliente?.id, selectedId, supabase]);
 
   useEffect(() => { if (selectedId) void loadMensajes(selectedId); }, [selectedId]);
-
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [mensajes.length, selectedId]);
+
+  /* ── DATA ── */
 
   async function boot() {
     setLoading(true);
@@ -322,6 +357,15 @@ export default function ClienteComunicacionPage() {
       const citaActual = (cita || null) as CitaHoy | null;
       setCitaHoy(citaActual);
 
+      const { data: plan, error: planError } = await supabase
+        .from("clientes_planes")
+        .select("id,cliente_id,plan_id,estado,fecha_inicio,fecha_fin,sesiones_totales,sesiones_usadas,planes:plan_id(nombre)")
+        .eq("cliente_id", clienteActual.id)
+        .in("estado", ["activo", "vigente", "pendiente"])
+        .order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (planError) throw planError;
+      setPlanActual((plan || null) as ClientePlanActual | null);
+
       await ensureConversaciones(clienteActual, citaActual);
       await loadSolicitudes(clienteActual.id);
     } catch (err: any) {
@@ -338,7 +382,7 @@ export default function ClienteComunicacionPage() {
 
     const rows = dedupeConversaciones((existentes || []) as Conversacion[]);
     const hasRecep = rows.some((r) => r.tipo === "cliente_recepcion");
-    const fisioId = cita?.terapeuta_id || cli.terapeuta_id || null;
+    const fisioId  = cita?.terapeuta_id || cli.terapeuta_id || null;
     const hasFisio = rows.some((r) => r.tipo === "cliente_fisio" && r.fisio_id === fisioId);
     const inserts: any[] = [];
 
@@ -349,7 +393,6 @@ export default function ClienteComunicacionPage() {
       const { error: insertError } = await supabase.from("conversaciones").insert(inserts);
       if (insertError) throw insertError;
     }
-
     await loadConversaciones(cli.id);
   }
 
@@ -384,8 +427,7 @@ export default function ClienteComunicacionPage() {
   async function enviarMensaje() {
     if (!cliente || !selected || !texto.trim() || sendingMsg) return;
     const body = texto.trim();
-    setTexto("");
-    setSendingMsg(true);
+    setTexto(""); setSendingMsg(true);
     const temp: Mensaje = {
       id: `temp-${Date.now()}`, conversacion_id: selected.id, remitente_id: cliente.id,
       remitente_tipo: "cliente", mensaje: body, tipo: "texto", solicitud_id: null,
@@ -445,22 +487,54 @@ export default function ClienteComunicacionPage() {
     finally { setSendingAsistencia(false); }
   }
 
+  function cambiarTipoSolicitud(value: string) {
+    setTipoSolicitud(value);
+    setMensajeSolicitud(
+      value === "solicitar_plan" ? "Hola, quisiera saber los planes activos, precios y disponibilidad."
+      : value === "renovar_plan" ? "Hola, quisiera renovar mi plan actual."
+      : ""
+    );
+    setFechaSolicitud(""); setHoraSolicitud("");
+    setFechaCongelarDesde(""); setFechaCongelarHasta("");
+    setServicioSolicitud("terapia");
+  }
+
+  function construirDescripcionSolicitud() {
+    const detalle = mensajeSolicitud.trim();
+    if (tipoSolicitud === "solicitar_cita") return ["El cliente solicita una nueva cita.", "", `Servicio solicitado: ${servicioSolicitudLabel}`, `Fecha deseada: ${fechaSolicitud || "No indicada"}`, `Hora deseada: ${horaSolicitud || "No indicada"}`, "", `Mensaje: ${detalle}`].join("\n");
+    if (tipoSolicitud === "solicitar_plan") return ["El cliente solicita información de planes activos.", "", "Quiere conocer precios, disponibilidad y opciones vigentes.", "", `Mensaje: ${detalle}`].join("\n");
+    if (tipoSolicitud === "renovar_plan")   return ["El cliente solicita renovar su plan.", "", "Quiere renovar el plan actual o conocer opciones similares.", "", `Mensaje: ${detalle}`].join("\n");
+    if (tipoSolicitud === "congelar_plan")  return ["El cliente solicita congelar su plan.", "", `Plan actual: ${firstOrNull(planActual?.planes)?.nombre || "Plan no detectado"}`, `Plan ID: ${planActual?.id || "No detectado"}`, `Vigencia del plan: ${planActual?.fecha_inicio || "Sin inicio"} hasta ${planActual?.fecha_fin || "Sin fin"}`, `Rango solicitado: ${fechaCongelarDesde || "No indicado"} hasta ${fechaCongelarHasta || "No indicado"}`, `Días a congelar: ${diasCongelar || "No calculado"}`, "", `Motivo obligatorio: ${detalle}`].join("\n");
+    return detalle;
+  }
+
   async function enviarSolicitudRapida() {
-    if (!cliente || mensajeSolicitud.trim().length < 3 || sendingSolicitud) { setToast("Escribe el detalle de la solicitud."); return; }
+    if (!cliente || sendingSolicitud) return;
+    const detalle = mensajeSolicitud.trim();
+    if (detalle.length < 3) { setToast(esCongelarPlan ? "El motivo para congelar el plan es obligatorio." : "Escribe el detalle de la solicitud."); return; }
+    if (esCongelarPlan) {
+      if (!planActual) { setToast("No se detectó un plan activo para congelar."); return; }
+      if (!fechaCongelarDesde || !fechaCongelarHasta) { setToast("Selecciona desde cuándo y hasta cuándo quieres congelar el plan."); return; }
+      if (planInicio && fechaCongelarDesde < planInicio) { setToast("La fecha de inicio no puede ser antes del inicio del plan."); return; }
+      if (planFin && fechaCongelarHasta > planFin) { setToast("La fecha final no puede pasar la fecha de vencimiento del plan."); return; }
+      if (fechaCongelarHasta < fechaCongelarDesde) { setToast("La fecha final no puede ser menor que la fecha inicial."); return; }
+    }
     setSendingSolicitud(true);
     try {
       const conversacionRecepcion = conversaciones.find((c) => c.tipo === "cliente_recepcion") || null;
+      const descripcionSolicitud  = construirDescripcionSolicitud();
       const { data: solicitud, error } = await supabase.from("solicitudes_comunicacion")
-        .insert({ conversacion_id: conversacionRecepcion?.id || null, cita_id: citaHoy?.id || null, cliente_id: cliente.id, fisio_id: citaHoy?.terapeuta_id || cliente.terapeuta_id || null, tipo: tipoSolicitud, estado: "pendiente", origen_tipo: "cliente", origen_id: cliente.id, destino_tipo: "recepcion", destino_id: null, titulo: solicitudLabel(tipoSolicitud), descripcion: mensajeSolicitud.trim() })
+        .insert({ conversacion_id: conversacionRecepcion?.id || null, cita_id: ["reagendar_cita", "cancelar_cita"].includes(tipoSolicitud) ? citaHoy?.id || null : null, cliente_id: cliente.id, fisio_id: citaHoy?.terapeuta_id || cliente.terapeuta_id || null, tipo: tipoSolicitud, estado: "pendiente", origen_tipo: "cliente", origen_id: cliente.id, destino_tipo: "recepcion", destino_id: null, titulo: solicitudLabel(tipoSolicitud), descripcion: descripcionSolicitud })
         .select().single();
       if (error) throw error;
       if (conversacionRecepcion?.id) {
         const { data: msg } = await supabase.from("mensajes")
-          .insert({ conversacion_id: conversacionRecepcion.id, remitente_id: cliente.id, remitente_tipo: "cliente", tipo: "solicitud", solicitud_id: solicitud.id, mensaje: `${solicitudLabel(tipoSolicitud)}: ${mensajeSolicitud.trim()}` })
+          .insert({ conversacion_id: conversacionRecepcion.id, remitente_id: cliente.id, remitente_tipo: "cliente", tipo: "solicitud", solicitud_id: solicitud.id, mensaje: `${solicitudLabel(tipoSolicitud)}: ${descripcionSolicitud}` })
           .select().single();
         if (msg && selectedId === conversacionRecepcion.id) setMensajes((prev) => mergeMensaje(prev, msg as Mensaje));
       }
-      setMensajeSolicitud("");
+      setMensajeSolicitud(""); setFechaSolicitud(""); setHoraSolicitud("");
+      setFechaCongelarDesde(""); setFechaCongelarHasta(""); setServicioSolicitud("terapia");
       setToast("Solicitud enviada a recepción.");
       await loadSolicitudes(cliente.id);
       await loadConversaciones(cliente.id);
@@ -468,91 +542,176 @@ export default function ClienteComunicacionPage() {
     finally { setSendingSolicitud(false); }
   }
 
+  /* ── LOADING ── */
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0d0d12]">
-        <div className="text-center">
-          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-violet-400/20 border-t-violet-400" />
-          <p className="text-sm text-white/35">Cargando comunicación…</p>
+      <div style={{ display: "flex", minHeight: "100dvh", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ width: 32, height: 32, borderRadius: "50%", border: "2.5px solid var(--border)", borderTopColor: "var(--purple2)", animation: "spin 0.8s linear infinite", margin: "0 auto 14px" }} />
+          <p style={{ fontSize: 13, color: "var(--muted)" }}>Cargando comunicación…</p>
         </div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     );
   }
 
+  /* ── SHARED SUB-COMPONENTS ── */
+
+  const SessionCard = () => citaHoy ? (
+    <div style={{ marginTop: 14, borderRadius: 16, background: "var(--surface2)", border: "1px solid var(--border)", padding: "14px" }}>
+      <p style={{ margin: "0 0 2px", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.16em", color: "var(--muted2)" }}>Sesión de hoy</p>
+      <p style={{ margin: "0 0 2px", fontSize: 14, fontWeight: 900, color: "var(--text)" }}>{servicioNombre}</p>
+      <p style={{ margin: "0 0 12px", fontSize: 11.5, color: "var(--muted)", fontWeight: 600 }}>{formatTime(citaHoy.hora_inicio)} – {formatTime(citaHoy.hora_fin)} · {fisioNombre}</p>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <button type="button" disabled={sendingAsistencia} onClick={() => void confirmarAsistenciaCliente()} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, borderRadius: 14, border: "1px solid rgba(52,211,153,0.24)", background: "var(--green-soft)", color: "var(--green)", padding: "10px 0", cursor: "pointer", opacity: sendingAsistencia ? 0.5 : 1 }}>
+          <CheckCircle2 size={16} /><span style={{ fontSize: 10, fontWeight: 900 }}>Voy</span>
+        </button>
+        <button type="button" disabled={sendingAsistencia} onClick={() => setModalNoAsiste(true)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, borderRadius: 14, border: "1px solid rgba(248,113,113,0.24)", background: "var(--red-soft)", color: "var(--red)", padding: "10px 0", cursor: "pointer", opacity: sendingAsistencia ? 0.5 : 1 }}>
+          <XCircle size={16} /><span style={{ fontSize: 10, fontWeight: 900 }}>No puedo</span>
+        </button>
+      </div>
+    </div>
+  ) : (
+    <div style={{ marginTop: 14, borderRadius: 14, background: "var(--surface2)", border: "1px solid var(--border)", padding: "12px 14px" }}>
+      <p style={{ margin: 0, fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>No tienes sesión programada hoy.</p>
+    </div>
+  );
+
+  const SolicitudForm = () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {/* Selector tipo */}
+      <select value={tipoSolicitud} onChange={(e) => cambiarTipoSolicitud(e.target.value)}
+        style={{ width: "100%", borderRadius: 14, border: "1.5px solid var(--border)", background: "var(--surface2)", color: "var(--text)", padding: "11px 14px", fontSize: 13, fontFamily: "inherit", fontWeight: 700, outline: "none" }}>
+        {SOLICITUDES_RAPIDAS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+      </select>
+
+      {/* Cita extra fields */}
+      {esSolicitudCita && (
+        <div style={{ borderRadius: 14, border: "1px solid var(--border)", background: "var(--surface2)", padding: "12px" }}>
+          <p style={{ margin: "0 0 8px", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--muted2)" }}>Tipo de cita</p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 10 }}>
+            {SERVICIOS_SOLICITUD_CITA.map((srv) => (
+              <button key={srv.value} type="button" onClick={() => setServicioSolicitud(srv.value)}
+                style={{ borderRadius: 10, border: "none", padding: "8px", fontSize: 11.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", background: servicioSolicitud === srv.value ? "var(--purple)" : "var(--border)", color: servicioSolicitud === srv.value ? "white" : "var(--muted)" }}>
+                {srv.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            <input type="date" value={fechaSolicitud} onChange={(e) => setFechaSolicitud(e.target.value)}
+              style={{ borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--surface)", color: "var(--text)", padding: "8px 10px", fontSize: 12, outline: "none", fontFamily: "inherit" }} />
+            <input type="time" value={horaSolicitud} onChange={(e) => setHoraSolicitud(e.target.value)}
+              style={{ borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--surface)", color: "var(--text)", padding: "8px 10px", fontSize: 12, outline: "none", fontFamily: "inherit" }} />
+          </div>
+        </div>
+      )}
+
+      {/* Plan info banner */}
+      {esSolicitudPlan && !esCongelarPlan && (
+        <div style={{ borderRadius: 12, background: "var(--purple-glow)", border: "1px solid var(--border-strong)", padding: "10px 14px", fontSize: 12, color: "var(--purple2)", fontWeight: 600, lineHeight: 1.5 }}>
+          {tipoSolicitud === "renovar_plan" ? "Recepción recibirá que quieres renovar tu plan actual." : "Recepción recibirá que quieres conocer planes activos, precios y disponibilidad."}
+        </div>
+      )}
+
+      {/* Congelar plan */}
+      {esCongelarPlan && (
+        <div style={{ borderRadius: 14, border: "1px solid var(--border)", background: "var(--surface2)", padding: "12px", display: "flex", flexDirection: "column", gap: 10 }}>
+          <div>
+            <p style={{ margin: "0 0 4px", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--muted2)" }}>Plan actual</p>
+            <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 800, color: "var(--text)" }}>{firstOrNull(planActual?.planes)?.nombre || "No se detectó un plan activo"}</p>
+            <p style={{ margin: 0, fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>Vigencia: {planInicio || "Sin inicio"} — {planFin || "Sin fin"}</p>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            <input type="date" value={fechaCongelarDesde} min={planInicio || undefined} max={planFin || undefined} onChange={(e) => setFechaCongelarDesde(e.target.value)}
+              style={{ borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--surface)", color: "var(--text)", padding: "8px 10px", fontSize: 12, outline: "none", fontFamily: "inherit" }} />
+            <input type="date" value={fechaCongelarHasta} min={fechaCongelarDesde || planInicio || undefined} max={planFin || undefined} onChange={(e) => setFechaCongelarHasta(e.target.value)}
+              style={{ borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--surface)", color: "var(--text)", padding: "8px 10px", fontSize: 12, outline: "none", fontFamily: "inherit" }} />
+          </div>
+          <div style={{ borderRadius: 10, background: diasCongelar > 0 ? "var(--yellow-soft)" : "var(--surface)", border: `1px solid ${diasCongelar > 0 ? "rgba(251,191,36,0.22)" : "var(--border)"}`, padding: "8px 12px", fontSize: 12, fontWeight: 700, color: diasCongelar > 0 ? "var(--yellow)" : "var(--muted)" }}>
+            {diasCongelar > 0 ? `Solicitas congelar ${diasCongelar} día${diasCongelar === 1 ? "" : "s"}.` : "Selecciona el rango de fechas que quieres congelar."}
+          </div>
+        </div>
+      )}
+
+      {/* Message input + send */}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+        <input value={mensajeSolicitud} onChange={(e) => setMensajeSolicitud(e.target.value)}
+          placeholder={solicitudActual.placeholder}
+          style={{ flex: 1, minWidth: 0, borderRadius: 14, border: "1.5px solid var(--border)", background: "var(--surface2)", color: "var(--text)", padding: "11px 14px", fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+        <button type="button" disabled={sendingSolicitud} onClick={() => void enviarSolicitudRapida()}
+          style={{ flexShrink: 0, width: 46, height: 46, borderRadius: 14, border: "none", background: "linear-gradient(135deg, var(--purple), var(--purple2))", color: "white", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: sendingSolicitud ? 0.5 : 1 }}>
+          <Send size={16} />
+        </button>
+      </div>
+    </div>
+  );
+
+  /* ── RENDER ─────────────────────────────────────────────────────────── */
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-[radial-gradient(circle_at_top_left,#1b1f31_0%,#0b0d12_54%,#090a0f_100%)] text-white">
+    <div style={{ display: "flex", flexDirection: "column", height: "100dvh", overflow: "hidden", background: "var(--bg)", color: "var(--text)" }}>
 
       {/* Toast */}
       {toast && (
-        <button type="button" onClick={() => setToast("")}
-          className="fixed bottom-24 left-1/2 z-[60] -translate-x-1/2 rounded-2xl border border-white/10 bg-[#11131b]/95 px-5 py-3 text-sm font-semibold text-white shadow-2xl backdrop-blur-xl md:bottom-auto md:right-4 md:top-4 md:left-auto md:translate-x-0">
+        <button type="button" onClick={() => setToast("")} style={{
+          position: "fixed", bottom: 96, left: "50%", transform: "translateX(-50%)", zIndex: 60,
+          borderRadius: 16, border: "1px solid var(--border)", background: "var(--surface)",
+          padding: "12px 20px", fontSize: 13, fontWeight: 600, color: "var(--text)",
+          backdropFilter: "blur(24px)", boxShadow: "var(--shadow-lg)", cursor: "pointer",
+          whiteSpace: "nowrap",
+        }}>
           {toast}
         </button>
       )}
 
       {/* ─── DESKTOP: tres columnas ─── */}
-      <div className="hidden h-full gap-5 p-5 md:flex">
+      <div style={{ display: "none", height: "100%", gap: 16, padding: 16 }} className="comm-desktop">
+        <style>{`.comm-desktop { display: none; } @media (min-width: 768px) { .comm-desktop { display: flex !important; } .comm-mobile { display: none !important; } }`}</style>
 
-        {/* Col 1: perfil + sesión + lista de chats */}
-        <div className="flex w-[320px] shrink-0 flex-col overflow-hidden rounded-[2rem] bg-[#0c0e13]/92 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04),0_24px_80px_-40px_rgba(0,0,0,0.9)] backdrop-blur-2xl">
-          {/* Perfil */}
-          <div className="border-b border-white/[0.045] px-5 pb-4 pt-5">
-            <div className="flex items-center gap-3">
-              <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br ${avatarColor(cliente?.nombre)} text-sm font-black text-white shadow-lg`}>
+        {/* Col 1: perfil + sesión + lista chats */}
+        <div style={{ width: 300, flexShrink: 0, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: 24, background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-md)" }}>
+          {/* Top strip */}
+          <div style={{ height: 3, background: "linear-gradient(90deg, var(--purple), var(--purple2))", flexShrink: 0 }} />
+
+          {/* Profile */}
+          <div style={{ padding: "16px 16px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 0 }}>
+              <div style={{ width: 44, height: 44, borderRadius: "50%", background: "linear-gradient(145deg, var(--purple), var(--purple2))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 900, color: "white", flexShrink: 0 }}>
                 {initials(cliente?.nombre)}
               </div>
-              <div className="min-w-0">
-                <p className="truncate font-black text-white">{cliente?.nombre || "Cliente"}</p>
-                <p className="truncate text-xs text-white/35">{cliente?.telefono || cliente?.email || "Portal"}</p>
+              <div style={{ minWidth: 0 }}>
+                <p style={{ margin: 0, fontSize: 14, fontWeight: 900, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cliente?.nombre || "Cliente"}</p>
+                <p style={{ margin: 0, fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>{cliente?.telefono || cliente?.email || "Portal"}</p>
               </div>
             </div>
-
-            {/* Sesión de hoy */}
-            {citaHoy ? (
-              <div className="mt-4 rounded-2xl bg-white/[0.04] p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.045)]">
-                <p className="text-[10px] font-black uppercase tracking-widest text-white/30">Sesión de hoy</p>
-                <p className="mt-2 font-black text-white">{servicioNombre}</p>
-                <p className="text-xs text-white/45">{formatTime(citaHoy.hora_inicio)} – {formatTime(citaHoy.hora_fin)} · {fisioNombre}</p>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button type="button" disabled={sendingAsistencia} onClick={() => void confirmarAsistenciaCliente()}
-                    className="flex flex-col items-center gap-1 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 py-2.5 text-emerald-300 transition hover:bg-emerald-400/15 disabled:opacity-50">
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span className="text-[10px] font-black">Voy</span>
-                  </button>
-                  <button type="button" disabled={sendingAsistencia} onClick={() => setModalNoAsiste(true)}
-                    className="flex flex-col items-center gap-1 rounded-2xl border border-rose-400/20 bg-rose-400/10 py-2.5 text-rose-300 transition hover:bg-rose-400/15 disabled:opacity-50">
-                    <XCircle className="h-4 w-4" />
-                    <span className="text-[10px] font-black">No puedo</span>
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-4 rounded-2xl bg-white/[0.03] p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.035)]">
-                <p className="text-[10px] font-black uppercase tracking-widest text-white/30">Sesión de hoy</p>
-                <p className="mt-2 text-sm text-white/35">No tienes sesión programada hoy.</p>
-              </div>
-            )}
+            <SessionCard />
           </div>
 
-          {/* Lista conversaciones */}
-          <div className="flex-1 overflow-y-auto p-3">
+          {/* Conversation list */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "8px" }}>
+            <p style={{ padding: "8px 8px 6px", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--muted2)", margin: 0 }}>Mis chats</p>
             {conversaciones.length === 0 ? (
-              <div className="p-4 text-center text-sm text-white/25">Sin conversaciones</div>
+              <p style={{ padding: 16, textAlign: "center", fontSize: 13, color: "var(--muted)" }}>Sin conversaciones</p>
             ) : conversaciones.map((c) => {
               const active = selectedId === c.id;
-              const title = c.tipo === "cliente_recepcion" ? "Recepción" : firstOrNull(c.fisios)?.nombre || "Fisio";
+              const title  = c.tipo === "cliente_recepcion" ? "Recepción" : firstOrNull(c.fisios)?.nombre || "Fisio";
               return (
-                <button key={c.id} type="button" onClick={() => setSelectedId(c.id)}
-                  className={`mb-1.5 flex w-full items-center gap-3 rounded-2xl p-3 text-left transition ${active ? "bg-gradient-to-r from-violet-500/22 to-transparent shadow-[inset_0_0_0_1px_rgba(139,92,246,0.18)]" : "hover:bg-white/[0.04]"}`}>
-                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${active ? "bg-violet-400/20 text-violet-200" : "bg-white/[0.06] text-white/45"}`}>
-                    {c.tipo === "cliente_recepcion" ? <Bell className="h-4 w-4" /> : <UserRound className="h-4 w-4" />}
+                <button key={c.id} type="button" onClick={() => setSelectedId(c.id)} style={{
+                  width: "100%", display: "flex", alignItems: "center", gap: 10,
+                  borderRadius: 16, padding: "10px 10px", textAlign: "left", border: "none", cursor: "pointer",
+                  marginBottom: 4, fontFamily: "inherit",
+                  background: active ? "var(--purple-glow)" : "transparent",
+                  outline: active ? "1px solid var(--border-strong)" : "1px solid transparent",
+                  transition: "background .15s",
+                }}>
+                  <div style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: active ? "var(--purple-glow)" : "var(--surface2)", border: "1px solid var(--border)", color: active ? "var(--purple2)" : "var(--muted)" }}>
+                    {c.tipo === "cliente_recepcion" ? <Bell size={16} /> : <UserRound size={16} />}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline justify-between">
-                      <p className={`truncate text-sm font-bold ${active ? "text-violet-200" : "text-white"}`}>{title}</p>
-                      <span className="text-[10px] text-white/25">{formatRelative(c.ultima_actividad_at)}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 2 }}>
+                      <span style={{ fontSize: 13, fontWeight: 800, color: active ? "var(--purple2)" : "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+                      <span style={{ fontSize: 10, color: "var(--muted2)", flexShrink: 0 }}>{formatRelative(c.ultima_actividad_at)}</span>
                     </div>
-                    <p className="truncate text-xs text-white/30">{c.ultimo_mensaje || "Sin mensajes"}</p>
+                    <p style={{ margin: 0, fontSize: 11.5, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.ultimo_mensaje || "Sin mensajes"}</p>
                   </div>
                 </button>
               );
@@ -561,52 +720,53 @@ export default function ClienteComunicacionPage() {
         </div>
 
         {/* Col 2: chat */}
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-[2rem] bg-[#131620]/95 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.045),0_24px_90px_-42px_rgba(0,0,0,0.95)] backdrop-blur-2xl">
-          <div className="flex items-center gap-3 border-b border-white/[0.045] bg-white/[0.015] px-5 py-4">
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: 24, background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-md)" }}>
+          <div style={{ height: 3, background: "linear-gradient(90deg, var(--purple2), var(--purple))", flexShrink: 0 }} />
+          {/* Chat header */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
             {selected ? (
               <>
-                <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-400/20 text-violet-200`}>
-                  {selected.tipo === "cliente_recepcion" ? <Bell className="h-4 w-4" /> : <UserRound className="h-4 w-4" />}
+                <div style={{ width: 38, height: 38, borderRadius: 12, background: "var(--purple-glow)", border: "1px solid var(--border-strong)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--purple2)" }}>
+                  {selected.tipo === "cliente_recepcion" ? <Bell size={16} /> : <UserRound size={16} />}
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="font-black text-white">{selectedTitle}</p>
-                  <p className="text-xs text-white/35">{selected.tipo === "cliente_recepcion" ? "Cliente · Recepción" : "Cliente · Fisio"}</p>
+                <div>
+                  <p style={{ margin: "0 0 2px", fontSize: 14, fontWeight: 900, color: "var(--text)" }}>{selectedTitle}</p>
+                  <p style={{ margin: 0, fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>{selected.tipo === "cliente_recepcion" ? "Cliente · Recepción" : "Cliente · Fisio"}</p>
                 </div>
               </>
             ) : (
-              <p className="text-sm text-white/35">Selecciona una conversación</p>
+              <p style={{ fontSize: 13, color: "var(--muted)" }}>Selecciona una conversación</p>
             )}
           </div>
 
-          <div className="flex-1 space-y-2 overflow-y-auto bg-[radial-gradient(circle_at_top_right,rgba(139,92,246,0.08),transparent_38%)] px-5 py-5">
+          {/* Messages */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 8 }}>
             {!selected ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-500/10 text-violet-300">
-                  <MessageCircle className="h-7 w-7" />
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                <div style={{ width: 56, height: 56, borderRadius: 18, background: "var(--purple-glow)", border: "1px solid var(--border-strong)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--purple2)" }}>
+                  <MessageCircle size={24} />
                 </div>
-                <p className="text-sm text-white/35">Selecciona Recepción o Fisio</p>
+                <p style={{ fontSize: 13, color: "var(--muted)" }}>Selecciona Recepción o Fisio</p>
               </div>
             ) : mensajes.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/[0.04] text-white/25">
-                  <MessageCircle className="h-7 w-7" />
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                <div style={{ width: 56, height: 56, borderRadius: 18, background: "var(--surface2)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)" }}>
+                  <MessageCircle size={24} />
                 </div>
-                <p className="text-sm text-white/35">Sin mensajes todavía</p>
+                <p style={{ fontSize: 13, color: "var(--muted)" }}>Sin mensajes todavía</p>
               </div>
             ) : mensajes.map((m) => {
               const mine = m.remitente_tipo === "cliente" && m.remitente_id === cliente?.id;
               return (
-                <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-                  <div className={`flex max-w-[78%] flex-col gap-1 ${mine ? "items-end" : "items-start"}`}>
+                <div key={m.id} style={{ display: "flex", justifyContent: mine ? "flex-end" : "flex-start" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: mine ? "flex-end" : "flex-start", maxWidth: "76%" }}>
                     {m.tipo === "solicitud" && (
-                      <span className="rounded-full bg-amber-400/15 px-2.5 py-0.5 text-[10px] font-black uppercase text-amber-300">Solicitud</span>
+                      <span style={{ borderRadius: 999, background: "var(--yellow-soft)", border: "1px solid rgba(251,191,36,0.22)", padding: "2px 10px", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", color: "var(--yellow)" }}>Solicitud</span>
                     )}
-                    <div className={`rounded-[1.35rem] px-4 py-2.5 text-sm leading-relaxed shadow-sm ${mine ? "rounded-br-md bg-violet-500/22 text-white" : "rounded-bl-md bg-[#171922] text-white/82 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.035)]"}`}>
+                    <div style={{ borderRadius: 18, padding: "10px 14px", fontSize: 13.5, lineHeight: 1.5, background: mine ? "var(--purple-glow)" : "var(--surface2)", border: `1px solid ${mine ? "var(--border-strong)" : "var(--border)"}`, color: "var(--text)", borderBottomRightRadius: mine ? 4 : 18, borderBottomLeftRadius: mine ? 18 : 4 }}>
                       {m.mensaje}
                     </div>
-                    <span className={`text-[10px] ${mine ? "text-violet-300/40 self-end" : "text-white/25 self-start"}`}>
-                      {isTempId(m.id) ? "Enviando…" : formatHour(m.created_at)}
-                    </span>
+                    <span style={{ fontSize: 10, color: "var(--muted2)" }}>{isTempId(m.id) ? "Enviando…" : formatHour(m.created_at)}</span>
                   </div>
                 </div>
               );
@@ -614,74 +774,55 @@ export default function ClienteComunicacionPage() {
             <div ref={bottomRef} />
           </div>
 
-          <div className="border-t border-white/[0.045] bg-[#11131b]/80 px-4 py-3">
-            <div className="flex items-center gap-2 rounded-2xl bg-white/[0.045] px-4 py-2 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)]">
+          {/* Input */}
+          <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", borderRadius: 16, border: "1.5px solid var(--border)", background: "var(--surface2)", padding: "6px 8px 6px 14px" }}>
               <input value={texto} onChange={(e) => setTexto(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void enviarMensaje(); } }}
                 disabled={!selected || sendingMsg}
                 placeholder={selected ? "Escribe un mensaje…" : "Selecciona una conversación"}
-                className="min-w-0 flex-1 bg-transparent py-1.5 text-sm text-white outline-none placeholder:text-white/25 disabled:opacity-40" />
+                style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", outline: "none", fontSize: 13.5, color: "var(--text)", fontFamily: "inherit", padding: "6px 0" }} />
               <button type="button" onClick={() => void enviarMensaje()} disabled={!selected || sendingMsg || !texto.trim()}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-500 text-white shadow-[0_12px_38px_-16px_rgba(139,92,246,0.9)] transition hover:bg-violet-400 disabled:opacity-35">
-                <Send className="h-4 w-4" />
+                style={{ width: 36, height: 36, borderRadius: 11, border: "none", background: "linear-gradient(135deg, var(--purple), var(--purple2))", color: "white", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, opacity: (!selected || sendingMsg || !texto.trim()) ? 0.35 : 1 }}>
+                <Send size={15} />
               </button>
             </div>
           </div>
         </div>
 
         {/* Col 3: solicitudes */}
-        <div className="flex w-[360px] shrink-0 flex-col overflow-hidden rounded-[2rem] bg-[#10131a]/88 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04),0_20px_70px_-40px_rgba(0,0,0,0.9)] backdrop-blur-2xl">
-          <div className="border-b border-white/[0.045] px-5 pb-4 pt-5">
-            <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-violet-400/15 text-violet-300">
-                <CalendarClock className="h-4 w-4" />
-              </div>
-              <div>
-                <p className="font-black text-white">Solicitudes</p>
-                <p className="text-xs text-white/30">Pide ayuda a recepción</p>
-              </div>
-            </div>
+        <div style={{ width: 300, flexShrink: 0, display: "flex", flexDirection: "column", overflow: "hidden", borderRadius: 24, background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-md)" }}>
+          <div style={{ height: 3, background: "linear-gradient(90deg, var(--orange), var(--yellow))", flexShrink: 0 }} />
+
+          {/* Nueva solicitud */}
+          <div style={{ padding: "16px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+            <p style={{ margin: "0 0 2px", fontSize: 14, fontWeight: 900, color: "var(--text)" }}>Solicitudes</p>
+            <p style={{ margin: "0 0 12px", fontSize: 11.5, color: "var(--muted)", fontWeight: 600 }}>Pide ayuda a recepción</p>
             {solicitudesPendientes.length > 0 && (
-              <div className="mt-3 rounded-xl bg-amber-400/10 px-3 py-2">
-                <p className="text-xs font-black text-amber-300">{solicitudesPendientes.length} pendiente{solicitudesPendientes.length !== 1 ? "s" : ""}</p>
+              <div style={{ marginBottom: 12, borderRadius: 10, background: "var(--yellow-soft)", border: "1px solid rgba(251,191,36,0.22)", padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "var(--yellow)" }}>
+                {solicitudesPendientes.length} pendiente{solicitudesPendientes.length !== 1 ? "s" : ""}
               </div>
             )}
+            <SolicitudForm />
           </div>
 
-          {/* Nueva solicitud form */}
-          <div className="border-b border-white/[0.045] px-5 py-4 space-y-3">
-            <p className="text-xs font-black uppercase tracking-widest text-white/30">Nueva solicitud</p>
-            <select value={tipoSolicitud} onChange={(e) => { setTipoSolicitud(e.target.value); setMensajeSolicitud(""); }}
-              className="w-full rounded-2xl bg-white/[0.045] px-4 py-3 text-sm text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)] outline-none">
-              {SOLICITUDES_RAPIDAS.map((s) => <option key={s.value} value={s.value} className="bg-[#0f1117]">{s.label}</option>)}
-            </select>
-            <textarea value={mensajeSolicitud} onChange={(e) => setMensajeSolicitud(e.target.value)}
-              placeholder={solicitudActual.placeholder} rows={3}
-              className="w-full resize-none rounded-2xl bg-white/[0.045] px-4 py-3 text-sm text-white placeholder:text-white/25 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)] outline-none" />
-            <button type="button" disabled={sendingSolicitud} onClick={() => void enviarSolicitudRapida()}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-violet-500 py-3 text-sm font-black text-white shadow-[0_14px_42px_-18px_rgba(139,92,246,0.9)] transition hover:bg-violet-400 disabled:opacity-50">
-              <Send className="h-4 w-4" />
-              {sendingSolicitud ? "Enviando…" : "Enviar solicitud"}
-            </button>
-          </div>
-
-          {/* Mis solicitudes */}
-          <div className="flex-1 space-y-3 overflow-y-auto bg-[radial-gradient(circle_at_top_right,rgba(139,92,246,0.08),transparent_38%)] p-5">
-            <p className="text-xs font-black uppercase tracking-widest text-white/30">Mis solicitudes</p>
+          {/* Lista solicitudes */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "12px" }}>
+            <p style={{ margin: "0 0 10px", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--muted2)" }}>Mis solicitudes ({solicitudes.length})</p>
             {solicitudes.length === 0 ? (
-              <div className="rounded-2xl bg-white/[0.035] p-4 text-center text-sm text-white/25 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.035)]">Sin solicitudes todavía</div>
+              <div style={{ borderRadius: 14, background: "var(--surface2)", border: "1px solid var(--border)", padding: "20px", textAlign: "center", fontSize: 13, color: "var(--muted)" }}>Sin solicitudes todavía</div>
             ) : solicitudes.map((s) => (
-              <article key={s.id} className="rounded-2xl bg-white/[0.035] p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.035)] transition hover:bg-white/[0.05]">
-                <div className="flex items-start justify-between gap-2">
-                  <p className="truncate text-sm font-black text-white">{solicitudLabel(s.tipo)}</p>
-                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${estadoStyle(s.estado)}`}>{s.estado}</span>
+              <article key={s.id} style={{ borderRadius: 14, background: "var(--surface2)", border: "1px solid var(--border)", padding: "12px", marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                  <p style={{ margin: 0, fontSize: 13, fontWeight: 900, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{solicitudLabel(s.tipo)}</p>
+                  <span style={{ flexShrink: 0, borderRadius: 999, padding: "3px 9px", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", ...estadoChipStyle(s.estado) }}>{s.estado}</span>
                 </div>
-                <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-white/55">{s.descripcion}</p>
-                <p className="mt-1.5 text-[10px] text-white/25">{new Date(s.created_at).toLocaleString("es-ES")}</p>
+                <p style={{ margin: "0 0 4px", fontSize: 11.5, color: "var(--muted)", lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{s.descripcion}</p>
+                <p style={{ margin: 0, fontSize: 10, color: "var(--muted2)" }}>{new Date(s.created_at).toLocaleString("es-ES")}</p>
                 {s.conversacion_id && (
                   <button type="button" onClick={() => setSelectedId(s.conversacion_id || "")}
-                    className="mt-2.5 flex items-center gap-1.5 rounded-xl bg-white/[0.06] px-3 py-1.5 text-xs font-black text-white/55 transition hover:bg-white/[0.09]">
-                    <MessageCircle className="h-3 w-3" /> Abrir chat
+                    style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, borderRadius: 10, border: "1px solid var(--border)", background: "var(--surface)", padding: "5px 10px", fontSize: 11.5, fontWeight: 700, color: "var(--muted)", cursor: "pointer", fontFamily: "inherit" }}>
+                    <MessageCircle size={11} /> Abrir chat
                   </button>
                 )}
               </article>
@@ -690,168 +831,145 @@ export default function ClienteComunicacionPage() {
         </div>
       </div>
 
-      {/* ─── MÓVIL: vistas independientes ─── */}
-      <div className="flex h-full flex-col md:hidden">
+      {/* ─── MÓVIL ─── */}
+      <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }} className="comm-mobile">
 
-        {/* Vista: Home (chats + info sesión) */}
+        {/* Vista: Home */}
         {vistaMovil === "home" && (
-          <div className="flex h-full flex-col">
-            <div className="border-b border-white/[0.06] px-4 pt-12 pb-4 safe-top">
-              {/* Header perfil */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br ${avatarColor(cliente?.nombre)} text-sm font-black text-white`}>
+          <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            {/* Header */}
+            <div style={{ padding: "52px 18px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: "50%", background: "linear-gradient(145deg, var(--purple), var(--purple2))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 900, color: "white", flexShrink: 0 }}>
                     {initials(cliente?.nombre)}
                   </div>
                   <div>
-                    <p className="font-black text-white leading-tight">{cliente?.nombre || "Cliente"}</p>
-                    <p className="text-[11px] text-white/35">Portal del cliente</p>
+                    <p style={{ margin: 0, fontSize: 15, fontWeight: 900, color: "var(--text)", lineHeight: 1.2 }}>{cliente?.nombre || "Cliente"}</p>
+                    <p style={{ margin: 0, fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>Portal del cliente</p>
                   </div>
                 </div>
+                {/* Solicitudes badge */}
                 <button type="button" onClick={() => setVistaMovil("solicitudes")}
-                  className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-white/[0.05] text-white/45">
-                  <Inbox className="h-4 w-4" />
+                  style={{ position: "relative", width: 38, height: 38, borderRadius: 12, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--muted)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                  <Inbox size={17} />
                   {solicitudesPendientes.length > 0 && (
-                    <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-400 text-[9px] font-black text-black">
+                    <span style={{ position: "absolute", top: -4, right: -4, width: 16, height: 16, borderRadius: "50%", background: "var(--yellow)", fontSize: 9, fontWeight: 900, color: "#000", display: "flex", alignItems: "center", justifyContent: "center" }}>
                       {solicitudesPendientes.length}
                     </span>
                   )}
                 </button>
               </div>
-
-              {/* Sesión de hoy */}
-              {citaHoy ? (
-                <div className="mt-4 rounded-2xl bg-white/[0.04] p-4 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.045)]">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-white/30">Sesión de hoy</p>
-                  <p className="mt-1.5 font-black text-white">{servicioNombre}</p>
-                  <p className="text-xs text-white/40">{formatTime(citaHoy.hora_inicio)} – {formatTime(citaHoy.hora_fin)} · {fisioNombre}</p>
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    <button type="button" disabled={sendingAsistencia} onClick={() => void confirmarAsistenciaCliente()}
-                      className="flex items-center justify-center gap-2 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 py-3 text-xs font-black text-emerald-300 transition active:bg-emerald-400/15 disabled:opacity-50">
-                      <CheckCircle2 className="h-4 w-4" /> Voy a asistir
-                    </button>
-                    <button type="button" disabled={sendingAsistencia} onClick={() => setModalNoAsiste(true)}
-                      className="flex items-center justify-center gap-2 rounded-2xl border border-rose-400/20 bg-rose-400/10 py-3 text-xs font-black text-rose-300 transition active:bg-rose-400/15 disabled:opacity-50">
-                      <XCircle className="h-4 w-4" /> No podré ir
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-4 rounded-2xl bg-white/[0.03] px-4 py-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.035)]">
-                  <p className="text-xs text-white/30">No tienes sesión programada hoy.</p>
-                </div>
-              )}
+              <SessionCard />
             </div>
 
-            {/* Lista de conversaciones */}
-            <div className="flex-1 overflow-y-auto">
-              <p className="px-4 pt-4 pb-2 text-[10px] font-black uppercase tracking-widest text-white/25">Mis chats</p>
+            {/* Conversation list */}
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              <p style={{ padding: "14px 18px 8px", margin: 0, fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--muted2)" }}>Mis chats</p>
               {conversaciones.length === 0 ? (
-                <div className="flex h-32 items-center justify-center text-sm text-white/25">Sin conversaciones</div>
+                <p style={{ padding: "32px 18px", textAlign: "center", fontSize: 13, color: "var(--muted)" }}>Sin conversaciones</p>
               ) : conversaciones.map((c) => {
                 const title = c.tipo === "cliente_recepcion" ? "Recepción" : firstOrNull(c.fisios)?.nombre || "Fisio";
                 return (
-                  <button key={c.id} type="button"
-                    onClick={() => { setSelectedId(c.id); setVistaMovil("chat"); }}
-                    className="flex w-full items-center gap-3.5 border-b border-white/[0.04] px-4 py-4 text-left transition active:bg-white/[0.04]">
-                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-violet-400/15 text-violet-200">
-                      {c.tipo === "cliente_recepcion" ? <Bell className="h-5 w-5" /> : <UserRound className="h-5 w-5" />}
+                  <button key={c.id} type="button" onClick={() => { setSelectedId(c.id); setVistaMovil("chat"); }}
+                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", borderBottom: "1px solid var(--border)", textAlign: "left", border: "none", borderBottom: `1px solid var(--border)`, background: "transparent", cursor: "pointer", fontFamily: "inherit" }}>
+                    <div style={{ width: 44, height: 44, borderRadius: "50%", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--purple-glow)", border: "1px solid var(--border-strong)", color: "var(--purple2)" }}>
+                      {c.tipo === "cliente_recepcion" ? <Bell size={18} /> : <UserRound size={18} />}
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <p className="truncate text-sm font-bold text-white">{title}</p>
-                        <span className="shrink-0 text-[10px] text-white/25">{formatRelative(c.ultima_actividad_at)}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 3 }}>
+                        <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+                        <span style={{ fontSize: 10, color: "var(--muted2)", flexShrink: 0 }}>{formatRelative(c.ultima_actividad_at)}</span>
                       </div>
-                      <p className="mt-0.5 truncate text-xs text-white/30">{c.ultimo_mensaje || "Sin mensajes"}</p>
+                      <p style={{ margin: 0, fontSize: 12, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.ultimo_mensaje || "Sin mensajes"}</p>
                     </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-white/15" />
+                    <ChevronRight size={16} style={{ color: "var(--muted2)", flexShrink: 0 }} />
                   </button>
                 );
               })}
-              <div className="h-24" />
+              <div style={{ height: 96 }} />
             </div>
 
             {/* Tab bar */}
-            <nav className="safe-bottom border-t border-white/[0.06] bg-[#0d0d12]/95 backdrop-blur-xl">
-              <div className="grid grid-cols-2">
-                <button type="button" onClick={() => setVistaMovil("home")}
-                  className="flex flex-col items-center gap-1 py-3 text-[10px] font-black uppercase tracking-wider text-violet-300">
-                  <MessageCircle className="h-5 w-5" /> Chats
-                </button>
-                <button type="button" onClick={() => setVistaMovil("solicitudes")}
-                  className="relative flex flex-col items-center gap-1 py-3 text-[10px] font-black uppercase tracking-wider text-white/30">
-                  <div className="relative">
-                    <Inbox className="h-5 w-5" />
-                    {solicitudesPendientes.length > 0 && (
-                      <span className="absolute -top-1.5 -right-2 flex h-4 w-4 items-center justify-center rounded-full bg-amber-400 text-[9px] font-black text-black">
-                        {solicitudesPendientes.length}
-                      </span>
-                    )}
-                  </div>
-                  Solicitudes
-                </button>
-              </div>
+            <nav style={{ flexShrink: 0, borderTop: "1px solid var(--border)", background: "var(--nav-bg)", backdropFilter: "blur(24px)", display: "grid", gridTemplateColumns: "1fr 1fr" }}>
+              <button type="button" onClick={() => setVistaMovil("home")}
+                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "12px 0", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", border: "none", background: "transparent", color: "var(--purple2)", cursor: "pointer", fontFamily: "inherit" }}>
+                <MessageCircle size={20} /> Chats
+              </button>
+              <button type="button" onClick={() => setVistaMovil("solicitudes")}
+                style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "12px 0", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", border: "none", background: "transparent", color: "var(--muted)", cursor: "pointer", fontFamily: "inherit" }}>
+                <div style={{ position: "relative" }}>
+                  <Inbox size={20} />
+                  {solicitudesPendientes.length > 0 && (
+                    <span style={{ position: "absolute", top: -6, right: -8, width: 16, height: 16, borderRadius: "50%", background: "var(--yellow)", fontSize: 9, fontWeight: 900, color: "#000", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {solicitudesPendientes.length}
+                    </span>
+                  )}
+                </div>
+                Solicitudes
+              </button>
             </nav>
           </div>
         )}
 
-        {/* Vista: Chat activo */}
+        {/* Vista: Chat */}
         {vistaMovil === "chat" && (
-          <div className="flex h-full flex-col">
-            <div className="flex items-center gap-3 border-b border-white/[0.06] px-3 pt-12 pb-3 safe-top">
+          <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            {/* Chat header */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "50px 14px 12px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
               <button type="button" onClick={() => setVistaMovil("home")}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white/50 active:bg-white/[0.06]">
-                <ArrowLeft className="h-5 w-5" />
+                style={{ width: 38, height: 38, borderRadius: 12, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0 }}>
+                <ArrowLeft size={18} />
               </button>
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-violet-400/15 text-violet-200">
-                {selected?.tipo === "cliente_recepcion" ? <Bell className="h-4 w-4" /> : <UserRound className="h-4 w-4" />}
+              <div style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--purple-glow)", border: "1px solid var(--border-strong)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--purple2)", flexShrink: 0 }}>
+                {selected?.tipo === "cliente_recepcion" ? <Bell size={15} /> : <UserRound size={15} />}
               </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-black text-white leading-tight">{selectedTitle}</p>
-                <p className="text-[11px] text-white/35">{selected?.tipo === "cliente_recepcion" ? "Cliente · Recepción" : "Cliente · Fisio"}</p>
+              <div style={{ minWidth: 0 }}>
+                <p style={{ margin: "0 0 1px", fontSize: 14, fontWeight: 900, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selectedTitle}</p>
+                <p style={{ margin: 0, fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>{selected?.tipo === "cliente_recepcion" ? "Cliente · Recepción" : "Cliente · Fisio"}</p>
               </div>
             </div>
 
-            <div className="flex-1 space-y-2 overflow-y-auto px-4 py-4">
+            {/* Messages */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
               {mensajes.length === 0 ? (
-                <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/[0.04] text-white/20">
-                    <MessageCircle className="h-6 w-6" />
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                  <div style={{ width: 52, height: 52, borderRadius: 16, background: "var(--surface2)", border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)" }}>
+                    <MessageCircle size={22} />
                   </div>
-                  <p className="text-sm text-white/30">Sin mensajes todavía</p>
+                  <p style={{ fontSize: 13, color: "var(--muted)" }}>Sin mensajes todavía</p>
                 </div>
               ) : mensajes.map((m) => {
                 const mine = m.remitente_tipo === "cliente" && m.remitente_id === cliente?.id;
                 return (
-                  <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-                    <div className={`flex max-w-[78%] flex-col gap-1 ${mine ? "items-end" : "items-start"}`}>
+                  <div key={m.id} style={{ display: "flex", justifyContent: mine ? "flex-end" : "flex-start" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: mine ? "flex-end" : "flex-start", maxWidth: "78%" }}>
                       {m.tipo === "solicitud" && (
-                        <span className="rounded-full bg-amber-400/15 px-2.5 py-0.5 text-[10px] font-black uppercase text-amber-300">Solicitud</span>
+                        <span style={{ borderRadius: 999, background: "var(--yellow-soft)", border: "1px solid rgba(251,191,36,0.22)", padding: "2px 10px", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", color: "var(--yellow)" }}>Solicitud</span>
                       )}
-                      <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${mine ? "rounded-br-sm bg-violet-500/25 text-white" : "rounded-bl-sm bg-white/[0.07] text-white/85"}`}>
+                      <div style={{ borderRadius: 18, padding: "10px 14px", fontSize: 13.5, lineHeight: 1.5, background: mine ? "var(--purple-glow)" : "var(--surface2)", border: `1px solid ${mine ? "var(--border-strong)" : "var(--border)"}`, color: "var(--text)", borderBottomRightRadius: mine ? 4 : 18, borderBottomLeftRadius: mine ? 18 : 4 }}>
                         {m.mensaje}
                       </div>
-                      <span className="text-[10px] text-white/20">
-                        {isTempId(m.id) ? "Enviando…" : formatHour(m.created_at)}
-                      </span>
+                      <span style={{ fontSize: 10, color: "var(--muted2)" }}>{isTempId(m.id) ? "Enviando…" : formatHour(m.created_at)}</span>
                     </div>
                   </div>
                 );
               })}
               <div ref={bottomRef} />
-              <div className="h-4" />
+              <div style={{ height: 8 }} />
             </div>
 
-            <div className="border-t border-white/[0.06] bg-[#0d0d12] px-3 py-3 safe-bottom">
-              <div className="flex items-center gap-2 rounded-2xl border border-white/[0.09] bg-white/[0.05] px-4 py-2">
+            {/* Input */}
+            <div style={{ padding: "10px 14px 16px", borderTop: "1px solid var(--border)", flexShrink: 0, background: "var(--nav-bg)", backdropFilter: "blur(24px)" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", borderRadius: 16, border: "1.5px solid var(--border)", background: "var(--surface2)", padding: "6px 8px 6px 14px" }}>
                 <input value={texto} onChange={(e) => setTexto(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void enviarMensaje(); } }}
                   disabled={sendingMsg}
                   placeholder="Escribe un mensaje…"
-                  className="min-w-0 flex-1 bg-transparent py-1.5 text-sm text-white outline-none placeholder:text-white/25 disabled:opacity-40" />
+                  style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", outline: "none", fontSize: 14, color: "var(--text)", fontFamily: "inherit", padding: "7px 0" }} />
                 <button type="button" onClick={() => void enviarMensaje()} disabled={sendingMsg || !texto.trim()}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-500 text-white shadow-md transition active:bg-violet-400 disabled:opacity-35">
-                  <Send className="h-4 w-4" />
+                  style={{ width: 38, height: 38, borderRadius: 12, border: "none", background: "linear-gradient(135deg, var(--purple), var(--purple2))", color: "white", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, opacity: (sendingMsg || !texto.trim()) ? 0.35 : 1 }}>
+                  <Send size={16} />
                 </button>
               </div>
             </div>
@@ -860,76 +978,55 @@ export default function ClienteComunicacionPage() {
 
         {/* Vista: Solicitudes */}
         {vistaMovil === "solicitudes" && (
-          <div className="flex h-full flex-col">
-            <div className="border-b border-white/[0.06] px-4 pt-12 pb-4 safe-top">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-2xl font-black text-white">Solicitudes</h2>
-                  <p className="text-xs text-white/30">Pide ayuda a recepción</p>
-                </div>
+          <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            {/* Header + form */}
+            <div style={{ padding: "52px 18px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ margin: "0 0 2px", fontSize: 22, fontWeight: 900, color: "var(--text)", letterSpacing: "-0.03em" }}>Solicitudes</p>
+                <p style={{ margin: 0, fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>Pide ayuda a recepción</p>
               </div>
-
-              {/* Form nueva solicitud */}
-              <div className="mt-4 space-y-3">
-                <select value={tipoSolicitud} onChange={(e) => { setTipoSolicitud(e.target.value); setMensajeSolicitud(""); }}
-                  className="w-full rounded-2xl border border-white/[0.08] bg-white/[0.04] px-4 py-3 text-sm text-white outline-none">
-                  {SOLICITUDES_RAPIDAS.map((s) => <option key={s.value} value={s.value} className="bg-[#0f1117]">{s.label}</option>)}
-                </select>
-                <div className="flex gap-2">
-                  <input value={mensajeSolicitud} onChange={(e) => setMensajeSolicitud(e.target.value)}
-                    placeholder={solicitudActual.placeholder}
-                    className="min-w-0 flex-1 rounded-2xl border border-white/[0.08] bg-white/[0.04] px-4 py-3 text-sm text-white outline-none placeholder:text-white/25" />
-                  <button type="button" disabled={sendingSolicitud} onClick={() => void enviarSolicitudRapida()}
-                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-violet-500 text-white shadow-md disabled:opacity-50">
-                    <Send className="h-4 w-4" />
-                  </button>
+              {solicitudesPendientes.length > 0 && (
+                <div style={{ marginBottom: 12, borderRadius: 10, background: "var(--yellow-soft)", border: "1px solid rgba(251,191,36,0.22)", padding: "7px 12px", fontSize: 12, fontWeight: 700, color: "var(--yellow)" }}>
+                  {solicitudesPendientes.length} solicitud{solicitudesPendientes.length !== 1 ? "es" : ""} pendiente{solicitudesPendientes.length !== 1 ? "s" : ""}
                 </div>
-              </div>
+              )}
+              <SolicitudForm />
             </div>
 
-            <div className="flex-1 space-y-3 overflow-y-auto p-4">
-              <p className="text-[10px] font-black uppercase tracking-widest text-white/25">Mis solicitudes ({solicitudes.length})</p>
+            {/* Solicitudes list */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "14px 18px" }}>
+              <p style={{ margin: "0 0 10px", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--muted2)" }}>Mis solicitudes ({solicitudes.length})</p>
               {solicitudes.length === 0 ? (
-                <div className="flex h-32 items-center justify-center text-sm text-white/25">Sin solicitudes todavía</div>
+                <div style={{ borderRadius: 14, background: "var(--surface2)", border: "1px solid var(--border)", padding: "24px", textAlign: "center", fontSize: 13, color: "var(--muted)" }}>Sin solicitudes todavía</div>
               ) : solicitudes.map((s) => (
-                <article key={s.id} className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="truncate text-sm font-black text-white">{solicitudLabel(s.tipo)}</p>
-                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${estadoStyle(s.estado)}`}>{s.estado}</span>
+                <article key={s.id} style={{ borderRadius: 16, background: "var(--surface2)", border: "1px solid var(--border)", padding: "14px", marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                    <p style={{ margin: 0, fontSize: 13.5, fontWeight: 900, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{solicitudLabel(s.tipo)}</p>
+                    <span style={{ flexShrink: 0, borderRadius: 999, padding: "3px 9px", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", ...estadoChipStyle(s.estado) }}>{s.estado}</span>
                   </div>
-                  <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-white/55">{s.descripcion}</p>
-                  <p className="mt-1.5 text-[10px] text-white/25">{new Date(s.created_at).toLocaleString("es-ES")}</p>
+                  <p style={{ margin: "0 0 5px", fontSize: 12, color: "var(--muted)", lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" } as React.CSSProperties}>{s.descripcion}</p>
+                  <p style={{ margin: 0, fontSize: 10, color: "var(--muted2)" }}>{new Date(s.created_at).toLocaleString("es-ES")}</p>
                   {s.conversacion_id && (
                     <button type="button" onClick={() => { setSelectedId(s.conversacion_id || ""); setVistaMovil("chat"); }}
-                      className="mt-2.5 flex items-center gap-1.5 rounded-xl bg-white/[0.06] px-3 py-1.5 text-xs font-black text-white/55">
-                      <MessageCircle className="h-3 w-3" /> Abrir chat
+                      style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, borderRadius: 10, border: "1px solid var(--border)", background: "var(--surface)", padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "var(--muted)", cursor: "pointer", fontFamily: "inherit" }}>
+                      <MessageCircle size={12} /> Abrir chat
                     </button>
                   )}
                 </article>
               ))}
-              <div className="h-24" />
+              <div style={{ height: 32 }} />
             </div>
 
             {/* Tab bar */}
-            <nav className="safe-bottom border-t border-white/[0.06] bg-[#0d0d12]/95 backdrop-blur-xl">
-              <div className="grid grid-cols-2">
-                <button type="button" onClick={() => setVistaMovil("home")}
-                  className="flex flex-col items-center gap-1 py-3 text-[10px] font-black uppercase tracking-wider text-white/30">
-                  <MessageCircle className="h-5 w-5" /> Chats
-                </button>
-                <button type="button" onClick={() => setVistaMovil("solicitudes")}
-                  className="flex flex-col items-center gap-1 py-3 text-[10px] font-black uppercase tracking-wider text-amber-300">
-                  <div className="relative">
-                    <Inbox className="h-5 w-5" />
-                    {solicitudesPendientes.length > 0 && (
-                      <span className="absolute -top-1.5 -right-2 flex h-4 w-4 items-center justify-center rounded-full bg-amber-400 text-[9px] font-black text-black">
-                        {solicitudesPendientes.length}
-                      </span>
-                    )}
-                  </div>
-                  Solicitudes
-                </button>
-              </div>
+            <nav style={{ flexShrink: 0, borderTop: "1px solid var(--border)", background: "var(--nav-bg)", backdropFilter: "blur(24px)", display: "grid", gridTemplateColumns: "1fr 1fr" }}>
+              <button type="button" onClick={() => setVistaMovil("home")}
+                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "12px 0", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", border: "none", background: "transparent", color: "var(--muted)", cursor: "pointer", fontFamily: "inherit" }}>
+                <MessageCircle size={20} /> Chats
+              </button>
+              <button type="button" onClick={() => setVistaMovil("solicitudes")}
+                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "12px 0", fontSize: 9.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", border: "none", background: "transparent", color: "var(--yellow)", cursor: "pointer", fontFamily: "inherit" }}>
+                <Inbox size={20} /> Solicitudes
+              </button>
             </nav>
           </div>
         )}
@@ -937,36 +1034,39 @@ export default function ClienteComunicacionPage() {
 
       {/* ─── Modal: No asiste ─── */}
       {modalNoAsiste && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm md:items-center">
-          <div className="w-full max-w-md rounded-t-[2rem] bg-[#0f1117]/95 p-5 shadow-2xl ring-1 ring-white/10 backdrop-blur-2xl md:rounded-[2rem]">
-            <div className="mb-1 flex h-1 w-10 mx-auto rounded-full bg-white/15 md:hidden" />
-            <div className="mt-4 flex items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-400/20 bg-rose-400/10 text-rose-300">
-                <XCircle className="h-5 w-5" />
+        <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "flex-end", justifyContent: "center", background: "rgba(0,0,0,0.60)", backdropFilter: "blur(6px)", padding: "0 0 16px" }}>
+          <div style={{ width: "100%", maxWidth: 480, borderRadius: 24, background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-lg)", overflow: "hidden" }}>
+            <div style={{ height: 3, background: "linear-gradient(90deg, var(--red), var(--orange))" }} />
+            <div style={{ padding: 20 }}>
+              <div style={{ width: 36, height: 4, borderRadius: 999, background: "var(--border)", margin: "0 auto 16px" }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 13, background: "var(--red-soft)", border: "1px solid rgba(248,113,113,0.24)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--red)", flexShrink: 0 }}>
+                  <XCircle size={20} />
+                </div>
+                <div>
+                  <p style={{ margin: "0 0 2px", fontSize: 15, fontWeight: 900, color: "var(--text)" }}>Avisar que no podrás ir</p>
+                  <p style={{ margin: 0, fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>Recepción recibirá el aviso para gestionar la sesión.</p>
+                </div>
               </div>
-              <div>
-                <p className="font-black text-white">Avisar que no podrás ir</p>
-                <p className="text-xs text-white/35">Recepción recibirá el aviso para gestionar la sesión.</p>
+              {citaHoy && (
+                <div style={{ marginBottom: 14, borderRadius: 14, background: "var(--surface2)", border: "1px solid var(--border)", padding: "12px 14px" }}>
+                  <p style={{ margin: "0 0 2px", fontSize: 14, fontWeight: 800, color: "var(--text)" }}>{servicioNombre}</p>
+                  <p style={{ margin: 0, fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{formatTime(citaHoy.hora_inicio)} – {formatTime(citaHoy.hora_fin)} · {fisioNombre}</p>
+                </div>
+              )}
+              <textarea value={motivoNoAsiste} onChange={(e) => setMotivoNoAsiste(e.target.value)}
+                placeholder="Motivo obligatorio…" rows={4}
+                style={{ width: "100%", resize: "none", borderRadius: 14, border: "1.5px solid var(--border)", background: "var(--surface2)", color: "var(--text)", padding: "12px 14px", fontSize: 13.5, outline: "none", fontFamily: "inherit", marginBottom: 14, boxSizing: "border-box" }} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" onClick={() => setModalNoAsiste(false)} disabled={sendingAsistencia}
+                  style={{ flex: 1, borderRadius: 14, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--muted)", padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: sendingAsistencia ? 0.5 : 1 }}>
+                  Cancelar
+                </button>
+                <button type="button" onClick={() => void avisarNoAsiste()} disabled={sendingAsistencia}
+                  style={{ flex: 1, borderRadius: 14, border: "none", background: "linear-gradient(135deg, var(--purple), var(--purple2))", color: "white", padding: "12px", fontSize: 13.5, fontWeight: 900, cursor: "pointer", fontFamily: "inherit", opacity: sendingAsistencia ? 0.5 : 1 }}>
+                  {sendingAsistencia ? "Enviando…" : "Enviar aviso"}
+                </button>
               </div>
-            </div>
-            {citaHoy && (
-              <div className="mt-4 rounded-2xl bg-white/[0.04] px-4 py-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.045)]">
-                <p className="text-sm font-black text-white">{servicioNombre}</p>
-                <p className="text-xs text-white/40">{formatTime(citaHoy.hora_inicio)} – {formatTime(citaHoy.hora_fin)} · {fisioNombre}</p>
-              </div>
-            )}
-            <textarea value={motivoNoAsiste} onChange={(e) => setMotivoNoAsiste(e.target.value)}
-              placeholder="Motivo obligatorio…" rows={4}
-              className="mt-4 w-full resize-none rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-white outline-none placeholder:text-white/25" />
-            <div className="mt-4 flex gap-2">
-              <button type="button" onClick={() => setModalNoAsiste(false)} disabled={sendingAsistencia}
-                className="flex-1 rounded-2xl border border-white/10 bg-white/[0.04] py-3 text-sm font-bold text-white/55 disabled:opacity-50">
-                Cancelar
-              </button>
-              <button type="button" onClick={() => void avisarNoAsiste()} disabled={sendingAsistencia}
-                className="flex-1 rounded-2xl bg-violet-500 py-3 text-sm font-black text-white shadow-[0_14px_42px_-18px_rgba(139,92,246,0.9)] transition hover:bg-violet-400 disabled:opacity-50">
-                {sendingAsistencia ? "Enviando…" : "Enviar aviso"}
-              </button>
             </div>
           </div>
         </div>
