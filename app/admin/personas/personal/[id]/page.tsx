@@ -52,6 +52,18 @@ type ComisionDetalle = {
   fecha: string;
   tipo: string;
   estado: string;
+
+  porcentaje_fisio?: number | null;
+  porcentaje_profesional?: number | null;
+
+  cuenta_cobrar_id?: string | null;
+  cuenta_estado?: string | null;
+  cuenta_saldo_usd?: number | null;
+  cuenta_saldo_bs?: number | null;
+  cuenta_monto_total_usd?: number | null;
+  cuenta_monto_pagado_usd?: number | null;
+  cuenta_pagada_completa?: boolean | null;
+
   moneda: "USD" | "BS" | string | null;
   tasa_bcv: number | null;
   monto_base_usd: number | null;
@@ -362,7 +374,55 @@ function mapById<T extends { id?: string | null }>(rows: T[] | null | undefined)
   return map;
 }
 
-function normalizeComisionDetalle(row: any, ctx?: { pagosMap?: Map<string, any>; clientesMap?: Map<string, any>; citasMap?: Map<string, any>; serviciosMap?: Map<string, any>; clientesPlanesMap?: Map<string, any>; descuentosMap?: Map<string, { usd: number; bs: number; registros: any[] }>; }): ComisionDetalle {
+
+function getPorcentajeFisioComision(c: ComisionDetalle) {
+  const directo = Number((c as any)?.porcentaje_fisio ?? (c as any)?.porcentaje_profesional ?? NaN);
+  if (Number.isFinite(directo) && directo > 0) return r2(directo);
+
+  const base = Number(c.monto_base_usd ?? c.base ?? 0);
+  const profesional = Number(c.monto_profesional_usd ?? c.profesional ?? 0);
+
+  if (!Number.isFinite(base) || base <= 0) return 0;
+  if (!Number.isFinite(profesional) || profesional <= 0) return 0;
+
+  return r2((profesional / base) * 100);
+}
+
+function cuentaPagadaCompleta(c: ComisionDetalle) {
+  const tieneCuenta =
+    !!c.cuenta_cobrar_id ||
+    c.cuenta_estado != null ||
+    c.cuenta_saldo_usd != null ||
+    c.cuenta_saldo_bs != null ||
+    c.cuenta_monto_total_usd != null;
+
+  if (!tieneCuenta) return false;
+
+  const estadoCuenta = normalizeEstado(c.cuenta_estado);
+  const saldoUsd = Number(c.cuenta_saldo_usd ?? 0);
+  const saldoBs = Number(c.cuenta_saldo_bs ?? 0);
+
+  return (
+    ["cobrada", "pagada", "pagado", "cerrada", "liquidada"].includes(estadoCuenta) ||
+    (saldoUsd <= 0.009 && saldoBs <= 0.009)
+  );
+}
+
+function puedeMostrarComisionPendiente(c: ComisionDetalle) {
+  if (!isPendienteEstado(c.estado)) return false;
+
+  const porcentajeFisio = getPorcentajeFisioComision(c);
+
+  // REGLA FINAL:
+  // Fisio <= 35% / RPM >= 65%: se muestra siempre, aunque no paguen ni abonen.
+  if (porcentajeFisio <= 35) return true;
+
+  // Fisio > 35% / RPM < 65%: solo se muestra si existe cuenta asociada y está pagada completa.
+  // Si abonó parcial, si debe, o si no hay cuenta enlazada/verificable, NO se muestra.
+  return cuentaPagadaCompleta(c);
+}
+
+function normalizeComisionDetalle(row: any, ctx?: { pagosMap?: Map<string, any>; clientesMap?: Map<string, any>; citasMap?: Map<string, any>; serviciosMap?: Map<string, any>; clientesPlanesMap?: Map<string, any>; cuentasMap?: Map<string, any>; descuentosMap?: Map<string, { usd: number; bs: number; registros: any[] }>; }): ComisionDetalle {
   const get = (v: any) => { if (!v) return null; return Array.isArray(v) ? v[0] : v; };
   const pago = get(row?.pagos) ?? (row?.pago_id ? ctx?.pagosMap?.get(String(row.pago_id)) : null);
   const cita = get(row?.citas) ?? (row?.cita_id ? ctx?.citasMap?.get(String(row.cita_id)) : null);
@@ -376,9 +436,43 @@ function normalizeComisionDetalle(row: any, ctx?: { pagosMap?: Map<string, any>;
   const conceptoPago = typeof pago?.concepto === "string" ? pago.concepto.trim() : "";
   const servicioNombre = servicioDirecto?.nombre ?? servicioCita?.nombre ?? row?.servicio_nombre ?? null;
   const clienteNombre = clientePago?.nombre ?? clienteDirecto?.nombre ?? clienteCita?.nombre ?? clientePlan?.nombre ?? (row?.cliente_id ? `Cliente ${String(row.cliente_id).slice(0, 6)}` : null) ?? "Cliente desconocido";
+
+  const cuentaKey = row?.cliente_plan_id ? String(row.cliente_plan_id) : row?.cita_id ? String(row.cita_id) : "";
+  const cuentaAsociada = cuentaKey ? ctx?.cuentasMap?.get(cuentaKey) : null;
+  const cuentaEstado = normalizeEstado(cuentaAsociada?.estado);
+  const cuentaSaldoUsd = Number(cuentaAsociada?.saldo_usd ?? 0);
+  const cuentaSaldoBs = Number(cuentaAsociada?.saldo_bs ?? 0);
+  const cuentaPagada = !!cuentaAsociada && (
+    ["cobrada", "pagada", "pagado", "cerrada", "liquidada"].includes(cuentaEstado) ||
+    (cuentaSaldoUsd <= 0.009 && cuentaSaldoBs <= 0.009)
+  );
+
   const descuentoAplicado = row?.id ? ctx?.descuentosMap?.get(String(row.id)) : null;
   return {
-    ...row, pago_id: row?.pago_id ?? pago?.id ?? null, concepto: (row?.concepto ?? conceptoPago) || null,
+    ...row,
+
+    porcentaje_fisio: (() => {
+      const directo = Number(row?.porcentaje_fisio ?? row?.porcentaje_profesional ?? NaN);
+      if (Number.isFinite(directo) && directo > 0) return r2(directo);
+
+      const base = Number(row?.monto_base_usd ?? row?.base ?? 0);
+      const profesional = Number(row?.monto_profesional_usd ?? row?.profesional ?? 0);
+
+      if (!Number.isFinite(base) || base <= 0) return 0;
+      if (!Number.isFinite(profesional) || profesional <= 0) return 0;
+
+      return r2((profesional / base) * 100);
+    })(),
+
+    cuenta_cobrar_id: cuentaAsociada?.id ?? null,
+    cuenta_estado: cuentaAsociada?.estado ?? null,
+    cuenta_saldo_usd: Number(cuentaAsociada?.saldo_usd ?? 0),
+    cuenta_saldo_bs: Number(cuentaAsociada?.saldo_bs ?? 0),
+    cuenta_monto_total_usd: Number(cuentaAsociada?.monto_total_usd ?? 0),
+    cuenta_monto_pagado_usd: Number(cuentaAsociada?.monto_pagado_usd ?? 0),
+    cuenta_pagada_completa: cuentaPagada,
+
+    pago_id: row?.pago_id ?? pago?.id ?? null, concepto: (row?.concepto ?? conceptoPago) || null,
     pago_concepto: conceptoPago || null, pago_categoria: pago?.categoria ?? null, pago_fecha: pago?.fecha ?? null,
     pago_cliente_nombre: clientePago?.nombre ?? null, cliente_nombre: clienteNombre, servicio_nombre: servicioNombre,
     cita_fecha: cita?.fecha ?? null, cita_hora_inicio: cita?.hora_inicio ?? null,
@@ -488,7 +582,7 @@ export default function VerPersonalPage() {
     const clienteIdsDirectos = uniqueStrings(rows.map((r) => r.cliente_id));
     const clientePlanIds = uniqueStrings(rows.map((r) => r.cliente_plan_id));
     const comisionIds = uniqueStrings(rows.map((r) => r.id));
-    let pagosMap = new Map<string, any>(); let citasMap = new Map<string, any>(); let serviciosMap = new Map<string, any>(); let clientesPlanesMap = new Map<string, any>(); let clientesMap = new Map<string, any>(); let descuentosMap = new Map<string, { usd: number; bs: number; registros: any[] }>();
+    let pagosMap = new Map<string, any>(); let citasMap = new Map<string, any>(); let serviciosMap = new Map<string, any>(); let clientesPlanesMap = new Map<string, any>(); let clientesMap = new Map<string, any>(); let cuentasMap = new Map<string, any>(); let descuentosMap = new Map<string, { usd: number; bs: number; registros: any[] }>();
     if (comisionIds.length > 0) {
       const { data, error: descuentosError } = await supabase.from("comisiones_descuentos_deuda").select("*").in("comision_id", comisionIds);
       if (descuentosError) console.error("Error cargando descuentos de deuda:", descuentosError);
@@ -507,7 +601,107 @@ export default function VerPersonalPage() {
     if (servicioIds.length > 0) { const { data } = await supabase.from("servicios").select("id, nombre").in("id", servicioIds); serviciosMap = mapById((data || []) as any[]); }
     const clienteIds = uniqueStrings([...clienteIdsDirectos, ...[...pagosMap.values()].map((p) => p?.cliente_id), ...[...citasMap.values()].map((c) => c?.cliente_id), ...[...clientesPlanesMap.values()].map((p) => p?.cliente_id)]);
     if (clienteIds.length > 0) { const { data } = await supabase.from("clientes").select("id, nombre").in("id", clienteIds); clientesMap = mapById((data || []) as any[]); }
-    return { ...baseRes, data: rows.map((row) => normalizeComisionDetalle(row, { pagosMap, clientesMap, citasMap, serviciosMap, clientesPlanesMap, descuentosMap })) };
+
+    const origenIdsCuenta = uniqueStrings([...clientePlanIds, ...citaIds]);
+
+    const guardarCuenta = (key: string, cuenta: any) => {
+      if (!key) return;
+
+      const existente = cuentasMap.get(key);
+      if (!existente) {
+        cuentasMap.set(key, cuenta);
+        return;
+      }
+
+      const estadoCuenta = normalizeEstado(cuenta?.estado);
+      const estadoExistente = normalizeEstado(existente?.estado);
+
+      const cuentaPagada =
+        ["cobrada", "pagada", "pagado", "cerrada", "liquidada"].includes(estadoCuenta) ||
+        (Number(cuenta?.saldo_usd || 0) <= 0.009 && Number(cuenta?.saldo_bs || 0) <= 0.009);
+
+      const existentePagada =
+        ["cobrada", "pagada", "pagado", "cerrada", "liquidada"].includes(estadoExistente) ||
+        (Number(existente?.saldo_usd || 0) <= 0.009 && Number(existente?.saldo_bs || 0) <= 0.009);
+
+      // Para fisio >35 nos interesa detectar la cuenta pagada completa.
+      if (cuentaPagada && !existentePagada) {
+        cuentasMap.set(key, cuenta);
+        return;
+      }
+
+      const cuentaSaldo = Number(cuenta?.saldo_usd || 0) + Number(cuenta?.saldo_bs || 0);
+      const existenteSaldo = Number(existente?.saldo_usd || 0) + Number(existente?.saldo_bs || 0);
+
+      if (!cuentaPagada && !existentePagada && cuentaSaldo > existenteSaldo) {
+        cuentasMap.set(key, cuenta);
+      }
+    };
+
+    if (origenIdsCuenta.length > 0) {
+      const { data } = await supabase
+        .from("cuentas_por_cobrar")
+        .select("id, cliente_id, origen_id, origen_tipo, tipo_origen, estado, monto_total_usd, monto_pagado_usd, saldo_usd, monto_total_bs, monto_pagado_bs, saldo_bs, concepto, created_at")
+        .in("origen_id", origenIdsCuenta)
+        .not("estado", "in", '("anulado","anulada","cancelado","cancelada")')
+        .order("created_at", { ascending: false });
+
+      for (const cuenta of (data || []) as any[]) {
+        guardarCuenta(String(cuenta?.origen_id || ""), cuenta);
+      }
+    }
+
+    // Fallback para comisiones con cuenta no enlazada por origen_id:
+    // cliente_id + monto_total_usd aproximado.
+    if (clienteIdsDirectos.length > 0) {
+      const { data } = await supabase
+        .from("cuentas_por_cobrar")
+        .select("id, cliente_id, origen_id, origen_tipo, tipo_origen, estado, monto_total_usd, monto_pagado_usd, saldo_usd, monto_total_bs, monto_pagado_bs, saldo_bs, concepto, created_at")
+        .in("cliente_id", clienteIdsDirectos)
+        .not("estado", "in", '("anulado","anulada","cancelado","cancelada")')
+        .order("created_at", { ascending: false });
+
+      for (const row of rows) {
+        const key = row?.cliente_plan_id ? String(row.cliente_plan_id) : row?.cita_id ? String(row.cita_id) : "";
+        if (!key || cuentasMap.has(key)) continue;
+
+        const clienteId = String(row?.cliente_id || "");
+        const base = Number(row?.monto_base_usd ?? row?.base ?? 0);
+        const tipoComision = String(row?.tipo || "").toLowerCase();
+
+        if (!clienteId || !Number.isFinite(base) || base <= 0) continue;
+
+        const candidatas = ((data || []) as any[]).filter((cuenta) => {
+          if (String(cuenta?.cliente_id || "") !== clienteId) return false;
+
+          const montoCuenta = Number(cuenta?.monto_total_usd ?? 0);
+          if (Math.abs(montoCuenta - base) > 1) return false;
+
+          const concepto = String(cuenta?.concepto || "").toLowerCase();
+          const parecePlan = concepto.includes("plan");
+          const pareceCita = concepto.includes("cita") || concepto.includes("sesion") || concepto.includes("sesión");
+
+          if (tipoComision === "plan" && pareceCita && !parecePlan) return false;
+          if (tipoComision === "cita" && parecePlan && !pareceCita) return false;
+
+          return true;
+        });
+
+        if (candidatas.length === 0) continue;
+
+        const pagadas = candidatas.filter((cuenta) => {
+          const estado = normalizeEstado(cuenta?.estado);
+          return (
+            ["cobrada", "pagada", "pagado", "cerrada", "liquidada"].includes(estado) ||
+            (Number(cuenta?.saldo_usd || 0) <= 0.009 && Number(cuenta?.saldo_bs || 0) <= 0.009)
+          );
+        });
+
+        guardarCuenta(key, pagadas[0] || candidatas[0]);
+      }
+    }
+
+    return { ...baseRes, data: rows.map((row) => normalizeComisionDetalle(row, { pagosMap, clientesMap, citasMap, serviciosMap, clientesPlanesMap, cuentasMap, descuentosMap })) };
   }
 
   async function loadAll() {
@@ -565,9 +759,24 @@ export default function VerPersonalPage() {
 
   const agendaAgrupadaPorCliente = useMemo(() => chunkAgendaByCliente(agendaFiltrada), [agendaFiltrada]);
 
-  const comisionesPendientes = useMemo(() => comisiones.filter((c) => isPendienteEstado(c.estado)), [comisiones]);
-  const comisionesLiquidadaHoyQuincena = useMemo(() => comisiones.filter((c) => { if (!isFacturadaEstado(c.estado)) return false; return c.fecha >= quincenaActual.inicio && c.fecha <= quincenaActual.fin; }), [comisiones, quincenaActual]);
-  const comisionesDisponibles = useMemo(() => comisiones.filter((c) => isPendienteEstado(c.estado)), [comisiones]);
+  const comisionesPendientes = useMemo(
+    () => comisiones.filter((c) => puedeMostrarComisionPendiente(c)),
+    [comisiones]
+  );
+
+  const comisionesLiquidadaHoyQuincena = useMemo(
+    () =>
+      comisiones.filter((c) => {
+        if (!isFacturadaEstado(c.estado)) return false;
+        return c.fecha >= quincenaActual.inicio && c.fecha <= quincenaActual.fin;
+      }),
+    [comisiones, quincenaActual]
+  );
+
+  const comisionesDisponibles = useMemo(
+    () => comisiones.filter((c) => puedeMostrarComisionPendiente(c)),
+    [comisiones]
+  );
 
   const resumenDisponible = useMemo(() => {
     const profesionalUsd = comisionesDisponibles.reduce((a, c) => a + getComisionMontoByMoneda(c, "USD"), 0);
@@ -586,7 +795,14 @@ export default function VerPersonalPage() {
     registrosPendientes: resumenDisponible.pendientes,
   }), [agenda, hoy, resumenDisponible]);
 
-  const comisionesPendientesMoneda = useMemo(() => comisionesPendientes.filter((c) => getComisionMontoByMoneda(c, monedaPago) > 0), [comisionesPendientes, monedaPago]);
+  const comisionesPendientesMoneda = useMemo(
+    () =>
+      comisionesPendientes.filter((c) => {
+        const monto = getComisionMontoByMoneda(c, monedaPago);
+        return monto > 0 && puedeMostrarComisionPendiente(c);
+      }),
+    [comisionesPendientes, monedaPago]
+  );
   const allCurrentCurrencySelected = useMemo(() => { if (comisionesPendientesMoneda.length === 0) return false; return comisionesPendientesMoneda.every((c) => selectedComisionIds.includes(c.id)); }, [comisionesPendientesMoneda, selectedComisionIds]);
   const comisionesSeleccionadas = useMemo(() => { const ids = new Set(selectedComisionIds); return comisionesPendientesMoneda.filter((c) => ids.has(c.id)); }, [comisionesPendientesMoneda, selectedComisionIds]);
 
@@ -682,13 +898,13 @@ export default function VerPersonalPage() {
       return comisiones.filter((c) => { const perteneceALiquidacion = c.liquidacion_id === liquidacionImprimirId || (!!liq?.pago_empleado_id && c.pago_empleado_id === liq.pago_empleado_id); return perteneceALiquidacion && isFacturadaEstado(c.estado); }).sort((a, b) => { const fa = `${a.cita_fecha || a.fecha} ${a.cita_hora_inicio || ""}`; const fb = `${b.cita_fecha || b.fecha} ${b.cita_hora_inicio || ""}`; return fa.localeCompare(fb); });
     }
     const base = selectedComisionIds.length > 0 ? comisionesSeleccionadas : comisionesPendientesMoneda;
-    return base.filter((c) => { const fecha = c.cita_fecha || c.fecha; if (!isPendienteEstado(c.estado)) return false; if (periodoComision === "pendientes") return true; if (fechaInicioComision && fecha < fechaInicioComision) return false; if (fechaFinComision && fecha > fechaFinComision) return false; return true; }).sort((a, b) => { const fa = `${a.cita_fecha || a.fecha} ${a.cita_hora_inicio || ""}`; const fb = `${b.cita_fecha || b.fecha} ${b.cita_hora_inicio || ""}`; return fa.localeCompare(fb); });
+    return base.filter((c) => { const fecha = c.cita_fecha || c.fecha; if (!puedeMostrarComisionPendiente(c)) return false; if (periodoComision === "pendientes") return true; if (fechaInicioComision && fecha < fechaInicioComision) return false; if (fechaFinComision && fecha > fechaFinComision) return false; return true; }).sort((a, b) => { const fa = `${a.cita_fecha || a.fecha} ${a.cita_hora_inicio || ""}`; const fb = `${b.cita_fecha || b.fecha} ${b.cita_hora_inicio || ""}`; return fa.localeCompare(fb); });
   }, [comisiones, comisionesSeleccionadas, comisionesPendientesMoneda, selectedComisionIds.length, fechaInicioComision, fechaFinComision, periodoComision, liquidacionImprimirId, liquidaciones]);
 
   async function exportComisionPDF(liquidacionHistorica?: Liquidacion) {
     if (!empleado) return;
     const liquidacionPdf = liquidacionHistorica || null;
-    const rows = liquidacionPdf ? (comisionesPorLiquidacion.get(liquidacionPdf.id) || []).filter((c) => isFacturadaEstado(c.estado)).sort((a, b) => { const fa = `${a.cita_fecha || a.fecha} ${a.cita_hora_inicio || ""}`; const fb = `${b.cita_fecha || b.fecha} ${b.cita_hora_inicio || ""}`; return fa.localeCompare(fb); }) : comisionesPendientesMoneda.filter((c) => isPendienteEstado(c.estado)).sort((a, b) => { const fa = `${a.cita_fecha || a.fecha} ${a.cita_hora_inicio || ""}`; const fb = `${b.cita_fecha || b.fecha} ${b.cita_hora_inicio || ""}`; return fa.localeCompare(fb); });
+    const rows = liquidacionPdf ? (comisionesPorLiquidacion.get(liquidacionPdf.id) || []).filter((c) => isFacturadaEstado(c.estado)).sort((a, b) => { const fa = `${a.cita_fecha || a.fecha} ${a.cita_hora_inicio || ""}`; const fb = `${b.cita_fecha || b.fecha} ${b.cita_hora_inicio || ""}`; return fa.localeCompare(fb); }) : comisionesPendientesMoneda.filter((c) => puedeMostrarComisionPendiente(c)).sort((a, b) => { const fa = `${a.cita_fecha || a.fecha} ${a.cita_hora_inicio || ""}`; const fb = `${b.cita_fecha || b.fecha} ${b.cita_hora_inicio || ""}`; return fa.localeCompare(fb); });
     if (rows.length === 0) { alert(liquidacionPdf ? "Esta liquidación no tiene comisiones enlazadas para imprimir." : `No hay comisiones pendientes con monto para ${monedaPago}.`); return; }
     const logoSrc = "/logo-imprimir.png";
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
@@ -1401,7 +1617,7 @@ export default function VerPersonalPage() {
             <div className="grid grid-cols-3 gap-2 text-xs">
               <div>
                 <p className="text-[10px] text-white/35">Pendientes en quincena</p>
-                <p className="mt-0.5 font-medium text-white">{comisiones.filter((c) => isPendienteEstado(c.estado) && c.fecha >= quincenaActual.inicio && c.fecha <= quincenaActual.fin).length} registros</p>
+                <p className="mt-0.5 font-medium text-white">{comisiones.filter((c) => puedeMostrarComisionPendiente(c) && c.fecha >= quincenaActual.inicio && c.fecha <= quincenaActual.fin).length} registros</p>
               </div>
               <div>
                 <p className="text-[10px] text-white/35">Liquidados en quincena</p>

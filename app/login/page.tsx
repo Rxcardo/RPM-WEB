@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import Image from "next/image";
 
-type Vista = "login" | "registro";
+type Vista = "login" | "registro" | "recuperar";
 type TipoRegistro = "existente" | "nuevo";
 
 function firstOrNull<T>(value: T | T[] | null | undefined): T | null {
@@ -214,6 +214,31 @@ export default function LoginPage() {
       });
     } catch (err: any) {
       setError(err?.message || "Error inesperado.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRecuperar(e: FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+        email.trim().toLowerCase(),
+        { redirectTo: `${window.location.origin}/actualizar-password` },
+      );
+
+      if (resetError) throw resetError;
+
+      setSuccess(
+        "Te enviamos un correo con el enlace para restablecer tu contraseña. Revisa tu bandeja de entrada.",
+      );
+      setEmail("");
+    } catch (err: any) {
+      setError(err?.message || "No se pudo enviar el correo. Verifica el email ingresado.");
     } finally {
       setLoading(false);
     }
@@ -476,7 +501,7 @@ export default function LoginPage() {
                 margin: "0 0 6px",
               }}
             >
-              {vista === "login" ? "Iniciar sesión" : "Crear cuenta"}
+              {vista === "login" ? "Iniciar sesión" : vista === "recuperar" ? "Recuperar contraseña" : "Crear cuenta"}
             </h1>
 
             <p
@@ -489,11 +514,42 @@ export default function LoginPage() {
             >
               {vista === "login"
                 ? "Accede a tu panel según tu rol"
+                : vista === "recuperar"
+                ? "Te enviaremos un enlace para restablecer tu contraseña"
                 : "Activa tu acceso o solicita registrarte en RPM"}
             </p>
           </div>
 
-          {vista === "login" ? (
+          {vista === "recuperar" ? (
+            <form onSubmit={handleRecuperar} style={{ display: "flex", flexDirection: "column", gap: 15 }}>
+              <FieldLabel label="Correo electrónico">
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="correo@empresa.com"
+                  className="rpm-input"
+                  autoComplete="email"
+                  inputMode="email"
+                  required
+                />
+              </FieldLabel>
+
+              <Alerts error={error} success={success} />
+
+              <button type="submit" disabled={loading} className="rpm-btn">
+                {loading ? "Enviando..." : "Enviar enlace"}
+              </button>
+
+              <button
+                type="button"
+                className="rpm-secondary-btn"
+                onClick={() => { setVista("login"); setError(""); setSuccess(""); setEmail(""); }}
+              >
+                Volver al login
+              </button>
+            </form>
+          ) : vista === "login" ? (
             <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 15 }}>
               <FieldLabel label="Correo electrónico">
                 <input
@@ -546,6 +602,27 @@ export default function LoginPage() {
                 }}
               >
                 Crear cuenta / Solicitar acceso
+              </button>
+
+              <button
+                type="button"
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "rgba(167,139,250,0.75)",
+                  fontSize: 13,
+                  cursor: "pointer",
+                  padding: "4px 0",
+                  textDecoration: "underline",
+                  textUnderlineOffset: 3,
+                }}
+                onClick={() => {
+                  setVista("recuperar");
+                  setError("");
+                  setSuccess("");
+                }}
+              >
+                ¿Olvidaste tu contraseña?
               </button>
             </form>
           ) : (

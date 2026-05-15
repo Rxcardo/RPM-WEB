@@ -462,7 +462,13 @@ export default function PersonalPage() {
         .from('comisiones_detalle')
         .select(`
           id,
+          tipo,
+          cliente_plan_id,
+          cita_id,
           empleado_id,
+          base,
+          profesional,
+          rpm,
           monto_base_usd,
           monto_base_bs,
           monto_profesional_usd,
@@ -513,6 +519,9 @@ export default function PersonalPage() {
           .from('comisiones_detalle')
           .select(`
             id,
+            tipo,
+            cliente_plan_id,
+            cita_id,
             empleado_id,
             monto_base_usd,
             monto_base_bs,
@@ -537,7 +546,97 @@ export default function PersonalPage() {
         rowsMap.set(key, row)
       })
 
-      const rows = Array.from(rowsMap.values())
+      const rowsCandidatas = Array.from(rowsMap.values())
+
+      // 4.1) CANDADO REAL SEGÚN REGLA RPM/FISIO:
+      // - Si el fisio gana 35% o menos, la comisión puede verse pendiente aunque la cuenta no esté pagada completa.
+      // - Si el fisio gana más de 35%, SOLO se muestra si la cuenta del plan/cita está cobrada completa.
+      // - Si el fisio gana más de 35% y no existe cuenta enlazada, se oculta porque no se puede comprobar el cobro.
+      const origenIds = Array.from(
+        new Set(
+          rowsCandidatas
+            .map((row) => String(row?.tipo || '').toLowerCase() === 'plan' ? row?.cliente_plan_id : row?.cita_id)
+            .map((value) => String(value || ''))
+            .filter(Boolean)
+        )
+      )
+
+      let cuentasPorOrigen = new Map<string, any[]>()
+      if (origenIds.length > 0) {
+        const { data: cuentasData, error: cuentasError } = await supabase
+          .from('cuentas_por_cobrar')
+          .select('id, origen_id, origen_tipo, tipo_origen, saldo_usd, saldo_bs, estado')
+          .in('origen_id', origenIds)
+
+        if (cuentasError) throw cuentasError
+
+        ;((cuentasData || []) as any[]).forEach((cuenta) => {
+          const estadoCuenta = String(cuenta?.estado || '').toLowerCase()
+          if (['anulado', 'anulada', 'cancelado', 'cancelada'].includes(estadoCuenta)) return
+          const key = String(cuenta?.origen_id || '')
+          if (!key) return
+          const prev = cuentasPorOrigen.get(key) || []
+          cuentasPorOrigen.set(key, [...prev, cuenta])
+        })
+      }
+
+      const getNumeroComision = (...values: any[]) => {
+        for (const value of values) {
+          const n = Number(value || 0)
+          if (Number.isFinite(n) && n > 0) return n
+        }
+        return 0
+      }
+
+      const getPorcentajeFisio = (row: any) => {
+        const base = getNumeroComision(row?.monto_base_usd, row?.base)
+        const profesional = getNumeroComision(row?.monto_profesional_usd, row?.profesional)
+        if (base <= 0) return 0
+        return (profesional / base) * 100
+      }
+
+      const cuentaPerteneceAlTipo = (cuenta: any, tipo: string) => {
+        const origenTipo = String(cuenta?.origen_tipo || '').toLowerCase()
+        const tipoOrigen = String(cuenta?.tipo_origen || '').toLowerCase()
+
+        if (tipo === 'plan') {
+          return origenTipo === 'cliente_plan' || origenTipo === 'plan' || tipoOrigen === 'plan'
+        }
+
+        if (tipo === 'cita') {
+          return origenTipo === 'cita_lote' || origenTipo === 'cita' || tipoOrigen === 'cita' || tipoOrigen === 'otro'
+        }
+
+        return false
+      }
+
+      const cuentaEstaCobradaCompleta = (cuenta: any) => {
+        const estadoCuenta = String(cuenta?.estado || '').toLowerCase()
+        if (['cobrada', 'pagada', 'cobrado', 'pagado'].includes(estadoCuenta)) return true
+        return Number(cuenta?.saldo_usd || 0) <= 0 && Number(cuenta?.saldo_bs || 0) <= 0
+      }
+
+      const esComisionVisibleComoPendiente = (row: any) => {
+        const porcentajeFisio = getPorcentajeFisio(row)
+
+        // Regla principal: 35% o menos para el fisio se deja visible aunque el cliente no haya completado pago.
+        if (porcentajeFisio <= 35) return true
+
+        // Por encima de 35% para el fisio, RPM recibe menos de 65%; debe estar cobrado completo.
+        const tipo = String(row?.tipo || '').toLowerCase()
+        const origenId = tipo === 'plan' ? String(row?.cliente_plan_id || '') : String(row?.cita_id || '')
+        if (!origenId) return false
+
+        const cuentasValidas = (cuentasPorOrigen.get(origenId) || []).filter((cuenta) =>
+          cuentaPerteneceAlTipo(cuenta, tipo)
+        )
+
+        if (cuentasValidas.length === 0) return false
+
+        return cuentasValidas.every(cuentaEstaCobradaCompleta)
+      }
+
+      const rows = rowsCandidatas.filter(esComisionVisibleComoPendiente)
       const comisionIds = rows.map((row) => String(row.id || '')).filter(Boolean)
       const descuentosPorComision = new Map<string, { usd: number; bs: number }>()
 

@@ -593,7 +593,11 @@ export default function NuevoClientePage() {
 
   // ─── Comisión ─────────────────────────────────────────────────────────────
 
-  async function registrarComision(planIdVal: string | null, citaIdVal: string | null, empId: string, clienteIdVal: string, base: number, fecha: string, porcRpm: number) {
+  async function registrarComision(
+    planIdVal: string | null, citaIdVal: string | null, empId: string, clienteIdVal: string,
+    base: number, fecha: string, porcRpm: number,
+    cuentaPorCobrarId: string | null, pagoCompleto: boolean,
+  ) {
     try {
       const rpm = r2((base * porcRpm) / 100); const profesional = r2(base - rpm)
       const tipo = planIdVal ? 'plan' : 'cita'
@@ -601,12 +605,15 @@ export default function NuevoClientePage() {
         .eq('empleado_id', empId).eq('cliente_id', clienteIdVal)
         .eq(planIdVal ? 'cliente_plan_id' : 'cita_id', planIdVal || citaIdVal).eq('tipo', tipo).limit(1).maybeSingle()
       if (existente?.id) return
+      const porcentajeFisio = base > 0 ? (profesional / base) * 100 : 0
+      const estadoComision = porcentajeFisio <= 50 || pagoCompleto ? 'pendiente' : 'retenida'
       await supabase.from('comisiones_detalle').insert({
         empleado_id: empId, cliente_id: clienteIdVal,
         ...(planIdVal ? { cliente_plan_id: planIdVal } : {}),
         ...(citaIdVal ? { cita_id: citaIdVal } : {}),
         ...(citaServicioId ? { servicio_id: citaServicioId } : {}),
-        fecha, base, profesional, rpm, tipo, estado: 'pendiente', pagado: false,
+        pago_id: null, cuenta_por_cobrar_id: cuentaPorCobrarId,
+        fecha, base, profesional, rpm, tipo, estado: estadoComision, pagado: false,
         porcentaje_rpm: porcRpm, moneda: tasaRef ? 'BS' : 'USD', tasa_bcv: tasaRef,
         monto_base_usd: comisionEq.monto_base_usd, monto_base_bs: comisionEq.monto_base_bs,
         monto_rpm_usd: comisionEq.monto_rpm_usd,   monto_rpm_bs: comisionEq.monto_rpm_bs,
@@ -781,10 +788,18 @@ export default function NuevoClientePage() {
           concepto, fecha: fechaPago,
           registradoPor: auditorId || null,
         })
+        let cuentaPorCobrarId: string | null = null
         if (cxcPayload) {
-          const { error: cxcErr } = await supabase.from('cuentas_por_cobrar').insert(cxcPayload)
+          const origenId = tipoAsignacion === 'plan' ? clientePlanId : citaId
+          const { data: cxcData, error: cxcErr } = await supabase
+            .from('cuentas_por_cobrar')
+            .insert({ ...cxcPayload, ...(origenId ? { origen_id: origenId, origen_tipo: tipoAsignacion === 'plan' ? 'cliente_plan' : 'cita' } : {}) })
+            .select('id')
+            .single()
           if (cxcErr) console.warn('No se pudo crear cuenta por cobrar:', cxcErr.message)
+          else cuentaPorCobrarId = cxcData?.id ?? null
         }
+        const pagoCompleto = pagoState.tipoCobro !== 'sin_pago' && !cxcPayload
 
         if (empleadoComisionId) {
           await registrarComision(
@@ -792,7 +807,9 @@ export default function NuevoClientePage() {
             tipoAsignacion === 'cita' ? citaId : null,
             empleadoComisionId, clienteId, baseComisionAplicada,
             fechaPago,
-            porcentajeRpmAplicado
+            porcentajeRpmAplicado,
+            cuentaPorCobrarId,
+            pagoCompleto
           )
           if (tipoAsignacion === 'plan' && clientePlanId) {
             await supabase.from('clientes_planes').update({ porcentaje_rpm: porcentajeRpmAplicado, monto_base_comision: baseComisionAplicada }).eq('id', clientePlanId)

@@ -524,13 +524,20 @@ export default function ClientePlanPage() {
 
   // ─── Registrar comisión ───────────────────────────────────────────────
 
-  async function registrarComision(clientePlanId: string, empId: string, clienteIdValue: string, base: number, fecha: string, rpm: number, profesional: number) {
+  async function registrarComision(
+    clientePlanId: string, empId: string, clienteIdValue: string,
+    base: number, fecha: string, rpm: number, profesional: number,
+    cuentaPorCobrarId: string | null, pagoCompleto: boolean,
+  ) {
     try {
       const { data: existente } = await supabase.from('comisiones_detalle').select('id').eq('cliente_plan_id', clientePlanId).eq('empleado_id', empId).eq('tipo', 'plan').limit(1).maybeSingle()
       if (existente?.id) return
+      const porcentajeFisio = base > 0 ? (profesional / base) * 100 : 0
+      const estadoComision = porcentajeFisio <= 50 || pagoCompleto ? 'pendiente' : 'retenida'
       const { error } = await supabase.from('comisiones_detalle').insert({
         empleado_id: empId, cliente_id: clienteIdValue, cliente_plan_id: clientePlanId,
-        fecha, base, profesional, rpm, tipo: 'plan', estado: 'pendiente',
+        pago_id: null, cuenta_por_cobrar_id: cuentaPorCobrarId,
+        fecha, base, profesional, rpm, tipo: 'plan', estado: estadoComision,
         porcentaje_rpm: porcentajeRpmAplicado, moneda: tasaReferenciaComision ? 'BS' : 'USD', tasa_bcv: tasaReferenciaComision,
         monto_base_usd: comisionEquivalentes.monto_base_usd, monto_base_bs: comisionEquivalentes.monto_base_bs,
         monto_rpm_usd: comisionEquivalentes.monto_rpm_usd,   monto_rpm_bs: comisionEquivalentes.monto_rpm_bs,
@@ -594,8 +601,8 @@ export default function ClientePlanPage() {
 
   // ─── Registrar pago + deuda ───────────────────────────────────────────
 
-  async function registrarPagoPlan(clientePlanId: string, concepto: string) {
-    if (!registrarPago || montoObjetivoPago <= 0.009) return
+  async function registrarPagoPlan(clientePlanId: string, concepto: string): Promise<{ pagoCompleto: boolean; cuentaPorCobrarId: string | null }> {
+    if (!registrarPago || montoObjetivoPago <= 0.009) return { pagoCompleto: false, cuentaPorCobrarId: null }
 
     if (pagoState.tipoCobro !== 'sin_pago') {
       const pagosPayload = buildPagosRpcPayload(pagoState, montoObjetivoPago)
@@ -615,10 +622,17 @@ export default function ClientePlanPage() {
       state: pagoState, montoTotal: montoObjetivoPago, clienteId: id,
       clienteNombre: cliente?.nombre || 'Cliente', concepto, fecha: fechaPago, registradoPor: null,
     })
-    if (cxcPayload) {
-      const { error: cxcErr } = await supabase.from('cuentas_por_cobrar').insert(cxcPayload)
-      if (cxcErr) throw new Error(`Cuenta por cobrar: ${cxcErr.message}`)
+    if (!cxcPayload) {
+      return { pagoCompleto: pagoState.tipoCobro !== 'sin_pago', cuentaPorCobrarId: null }
     }
+
+    const { data: cxcData, error: cxcErr } = await supabase
+      .from('cuentas_por_cobrar')
+      .insert({ ...cxcPayload, origen_id: clientePlanId, origen_tipo: 'cliente_plan' })
+      .select('id')
+      .single()
+    if (cxcErr) throw new Error(`Cuenta por cobrar: ${cxcErr.message}`)
+    return { pagoCompleto: false, cuentaPorCobrarId: cxcData?.id ?? null }
   }
 
   // ─── Asignar ─────────────────────────────────────────────────────────
@@ -655,8 +669,8 @@ export default function ClientePlanPage() {
       const hfN = horaFin.length    === 5 ? `${horaFin}:00`    : horaFin
       await ensureEntrenamientos(np.id, planificacion.fechas, empleadoId, hiN, hfN, recursoId)
       const concepto = `Plan: ${plan.nombre} — ${cliente?.nombre || 'Cliente'}`
-      await registrarPagoPlan(np.id, concepto)
-      if (baseComisionAplicada > 0) await registrarComision(np.id, empleadoId, id, baseComisionAplicada, fechaPago, montoRpmAplicado, montoEntrenadorAplicado)
+      const { pagoCompleto, cuentaPorCobrarId } = await registrarPagoPlan(np.id, concepto)
+      if (baseComisionAplicada > 0) await registrarComision(np.id, empleadoId, id, baseComisionAplicada, fechaPago, montoRpmAplicado, montoEntrenadorAplicado, cuentaPorCobrarId, pagoCompleto)
       await supabase.from('clientes_planes').update({ origen: 'manual', porcentaje_rpm: porcentajeRpmAplicado, monto_base_comision: baseComisionAplicada }).eq('id', np.id)
       if (registrarAjustePlan && ajusteFinancieroPlan > 0.009 && planActivo) await registrarCuentaPorCobrarAjustePlan(ajusteFinancieroPlan, `Ajuste por cambio de plan: ${planActivo.planes?.nombre || 'Plan actual'} → ${plan.nombre}`, fechaInicio)
       if (ajusteFinancieroPlan < -0.009 && planActivo) await registrarCreditoClienteCambioPlan(Math.abs(ajusteFinancieroPlan), `Saldo a favor por cambio de plan: ${planActivo.planes?.nombre || 'Plan actual'} → ${plan.nombre}`, fechaInicio)
@@ -704,8 +718,8 @@ export default function ClientePlanPage() {
       const hfN = horaFin.length    === 5 ? `${horaFin}:00`    : horaFin
       await ensureEntrenamientos(np.id, planificacion.fechas, empleadoId, hiN, hfN, recursoId)
       const concepto = renovarConPendientes === 'si' ? `Renovación: ${plan.nombre} — ${cliente?.nombre || 'Cliente'} (+${sesionesRestantes} pendientes)` : `Renovación: ${plan.nombre} — ${cliente?.nombre || 'Cliente'} (sin pendientes)`
-      await registrarPagoPlan(np.id, concepto)
-      if (baseComisionAplicada > 0) await registrarComision(np.id, empleadoId, id, baseComisionAplicada, fechaPago, montoRpmAplicado, montoEntrenadorAplicado)
+      const { pagoCompleto, cuentaPorCobrarId } = await registrarPagoPlan(np.id, concepto)
+      if (baseComisionAplicada > 0) await registrarComision(np.id, empleadoId, id, baseComisionAplicada, fechaPago, montoRpmAplicado, montoEntrenadorAplicado, cuentaPorCobrarId, pagoCompleto)
       await supabase.from('clientes_planes').update({ origen: 'manual', porcentaje_rpm: porcentajeRpmAplicado, monto_base_comision: baseComisionAplicada }).eq('id', np.id)
       setSuccessMsg(renovarConPendientes === 'si' ? `Plan renovado. Se conservaron ${sesionesRestantes} sesiones pendientes. Total: ${sesN} sesiones.` : `Plan renovado. Total: ${sesN} sesiones.`)
       resetForm(); setModo(null); await fetchAll()

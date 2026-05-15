@@ -2100,29 +2100,22 @@ function IngresosPageContent() {
     if (error) throw error;
   }
 
-  async function sincronizarCuentaCobrarClienteDesdeAbonos(cuentaId: string) {
-    const [
-      { data: cuenta, error: cuentaError },
-      { data: abonos, error: abonosError },
-    ] = await Promise.all([
-      supabase
-        .from("cuentas_por_cobrar")
-        .select("id, monto_total_usd")
-        .eq("id", cuentaId)
-        .maybeSingle(),
-      supabase
-        .from("abonos_cobranza")
-        .select("monto_usd")
-        .eq("cuenta_cobrar_id", cuentaId),
-    ]);
+  async function sincronizarCuentaCobrarClienteDesdeAbonos(cuentaId: string, montoNuevoAbonoUsd: number) {
+    // Lee el estado actual de la CxC para hacer un update incremental.
+    // No recalcula desde abonos_cobranza porque el pago inicial (abono al crear el plan)
+    // va a `pagos` via registrar_pagos_mixtos, no a abonos_cobranza, por lo que
+    // recalcular desde cero causaría que ese pago inicial quede perdido.
+    const { data: cuenta, error: cuentaError } = await supabase
+      .from("cuentas_por_cobrar")
+      .select("id, monto_total_usd, monto_pagado_usd")
+      .eq("id", cuentaId)
+      .maybeSingle();
 
     if (cuentaError) throw cuentaError;
-    if (abonosError) throw abonosError;
     if (!cuenta) return;
 
-    const pagadoReal = r2(
-      (abonos || []).reduce((sum, row) => sum + Number(row.monto_usd || 0), 0),
-    );
+    const pagadoActual = r2(Number(cuenta.monto_pagado_usd || 0));
+    const pagadoReal = r2(pagadoActual + montoNuevoAbonoUsd);
     const totalActual = r2(Number(cuenta.monto_total_usd || 0));
     const totalFinal = r2(Math.max(totalActual, pagadoReal));
     const saldoFinal = r2(Math.max(totalFinal - pagadoReal, 0));
@@ -2316,6 +2309,27 @@ function IngresosPageContent() {
     if (pagoBs)
       return { monedaPago: "BS" as const, tasaBcv: pagoBs.tasaBcv || null };
     return { monedaPago: "USD" as const, tasaBcv: null };
+  }
+
+  async function liberarComisionesRetenidas(cuentaId: string) {
+    const { data: cuenta } = await supabase
+      .from("cuentas_por_cobrar")
+      .select("saldo_usd, estado")
+      .eq("id", cuentaId)
+      .maybeSingle();
+    if (!cuenta) return;
+    const cobrada =
+      String(cuenta.estado || "").toLowerCase() === "cobrada" ||
+      Number(cuenta.saldo_usd || 0) <= 0.01;
+    if (!cobrada) return;
+    await supabase
+      .from("comisiones_detalle")
+      .update({ cuenta_por_cobrar_id: cuentaId, estado: "pendiente" })
+      .eq("cuenta_por_cobrar_id", cuentaId)
+      .eq("estado", "retenida")
+      .eq("pagado", false)
+      .is("liquidacion_id", null)
+      .is("pago_empleado_id", null);
   }
 
   async function sincronizarComisionPlanDesdeDeudaCliente(args: {
@@ -2758,6 +2772,7 @@ function IngresosPageContent() {
           });
 
         if (ajusteManualActivo && montoRealAbonoUsd <= 0) {
+          await liberarComisionesRetenidas(cuentaPendienteSeleccionada.id);
           const contextoComision = obtenerContextoPagoRapidoComision();
           await sincronizarComisionPlanDesdeDeudaCliente({
             cuentaCobrarId: cuentaPendienteSeleccionada.id,
@@ -2775,7 +2790,9 @@ function IngresosPageContent() {
           });
           await sincronizarCuentaCobrarClienteDesdeAbonos(
             cuentaPendienteSeleccionada.id,
+            montoRealAbonoUsd,
           );
+          await liberarComisionesRetenidas(cuentaPendienteSeleccionada.id);
           const contextoComision = obtenerContextoPagoRapidoComision();
           await sincronizarComisionPlanDesdeDeudaCliente({
             cuentaCobrarId: cuentaPendienteSeleccionada.id,

@@ -587,30 +587,6 @@ function NuevaCitaPageContent() {
 
         const citaId = citaData.id
         createdCitas.push({ id: citaId, fecha: slot.fecha, hora_inicio: slot.hora_inicio })
-
-        const { error: comisionErr } = await supabase.from('comisiones_detalle').insert({
-          empleado_id: form.terapeuta_id,
-          cliente_id: form.cliente_id,
-          cita_id: citaId,
-          servicio_id: form.servicio_id,
-          fecha: slot.fecha,
-          tipo: 'cita',
-          estado: 'pendiente',
-          pagado: false,
-          base: baseComisionAplicada,
-          rpm: rpmMonto,
-          profesional: terapeutaMonto,
-          moneda: tasaReferenciaComision ? 'BS' : 'USD',
-          tasa_bcv: tasaReferenciaComision,
-          porcentaje_rpm: porcentajeRpmAplicado,
-          monto_base_usd: comisionEq.monto_base_usd,
-          monto_base_bs: comisionEq.monto_base_bs,
-          monto_rpm_usd: comisionEq.monto_rpm_usd,
-          monto_rpm_bs: comisionEq.monto_rpm_bs,
-          monto_profesional_usd: comisionEq.monto_profesional_usd,
-          monto_profesional_bs: comisionEq.monto_profesional_bs,
-        })
-        if (comisionErr) throw new Error(`Error comisión (${slot.fecha} ${slot.hora_inicio}): ${comisionErr.message}`)
       }
 
       if (createdCitas.length === 0) throw new Error('No se creó ninguna cita.')
@@ -665,9 +641,10 @@ function NuevaCitaPageContent() {
         fecha: fechaPago,
         registradoPor: auditorId || null,
       }) : null
+      let cxcId: string | null = null
       if (cxcPayload) {
         const cxcSafe = cxcPayload as any
-        const { error: cxcErr } = await supabase.from('cuentas_por_cobrar').insert({
+        const { data: cxcData, error: cxcErr } = await supabase.from('cuentas_por_cobrar').insert({
           ...cxcSafe,
           monto_total_usd: estadoFinanciero.total,
           monto_pagado_usd: estadoFinanciero.pagado,
@@ -677,8 +654,42 @@ function NuevaCitaPageContent() {
           origen_tipo: cxcSafe.origen_tipo ?? 'cita_lote',
           origen_id: primeraCita.id,
           operacion_origen: cxcSafe.operacion_origen ?? 'cita_lote',
-        })
+        }).select('id').single()
         if (cxcErr) console.warn('No se pudo crear cuenta por cobrar del lote:', cxcErr.message)
+        else cxcId = cxcData?.id ?? null
+      }
+
+      // 4) Crear comisiones para todas las citas con el enlace correcto al pago/deuda.
+      const pagoCompleto = pagoState.tipoCobro !== 'sin_pago' && !cxcPayload
+      const porcentajeFisio = baseComisionAplicada > 0 ? (terapeutaMonto / baseComisionAplicada) * 100 : 0
+      const estadoComision = porcentajeFisio <= 50 || pagoCompleto ? 'pendiente' : 'retenida'
+      const comisionesPayload = createdCitas.map((cita) => ({
+        empleado_id: form.terapeuta_id,
+        cliente_id: form.cliente_id,
+        cita_id: cita.id,
+        servicio_id: form.servicio_id,
+        fecha: cita.fecha,
+        tipo: 'cita',
+        estado: estadoComision,
+        pagado: false,
+        pago_id: null,
+        cuenta_por_cobrar_id: cxcId,
+        base: baseComisionAplicada,
+        rpm: rpmMonto,
+        profesional: terapeutaMonto,
+        moneda: tasaReferenciaComision ? 'BS' : 'USD',
+        tasa_bcv: tasaReferenciaComision,
+        porcentaje_rpm: porcentajeRpmAplicado,
+        monto_base_usd: comisionEq.monto_base_usd,
+        monto_base_bs: comisionEq.monto_base_bs,
+        monto_rpm_usd: comisionEq.monto_rpm_usd,
+        monto_rpm_bs: comisionEq.monto_rpm_bs,
+        monto_profesional_usd: comisionEq.monto_profesional_usd,
+        monto_profesional_bs: comisionEq.monto_profesional_bs,
+      }))
+      if (comisionesPayload.length > 0) {
+        const { error: comisionBatchErr } = await supabase.from('comisiones_detalle').insert(comisionesPayload)
+        if (comisionBatchErr) throw new Error(`Error registrando comisiones: ${comisionBatchErr.message}`)
       }
 
       router.push('/admin/operaciones/agenda')
