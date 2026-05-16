@@ -5,7 +5,9 @@ import { CalendarRange, ChevronDown, RotateCcw } from 'lucide-react'
 
 type PeriodoKey = 'actual' | 'anterior'
 type Moneda = 'USD' | 'BS'
-type EstadoFiltro = 'todos' | 'pendiente' | 'pagado'
+type EstadoFiltro = 'todos' | 'pendiente' | 'liquidada'
+
+const ESTADOS_EXCLUIDOS = new Set(['retenida', 'cancelada', 'cancelado'])
 type MonedaFiltro = 'todas' | Moneda
 
 type ApiData = {
@@ -105,6 +107,10 @@ function esPendiente(row: any) {
 function esPagado(row: any) {
   if (row?.pagado === true || row?.paid === true) return true
   return isFacturadaEstado(row?.estado || row?.status)
+}
+
+function esExcluido(row: any) {
+  return ESTADOS_EXCLUIDOS.has(normalizarEstado(row?.estado || row?.status || ''))
 }
 
 function formatDate(v: string | null | undefined) {
@@ -256,7 +262,7 @@ function estadoBadgeStyle(c: ComisionVista): React.CSSProperties {
     }
   }
 
-  if (c.estadoNormalizado === 'pendiente') {
+  if (esPendiente(c.raw)) {
     return {
       background: 'rgba(251,191,36,0.1)',
       border: '1px solid rgba(251,191,36,0.22)',
@@ -269,6 +275,12 @@ function estadoBadgeStyle(c: ComisionVista): React.CSSProperties {
     border: '1px solid var(--border)',
     color: 'var(--text-sub)',
   }
+}
+
+function estadoLabel(c: ComisionVista): string {
+  if (c.pagado) return 'Liquidada'
+  if (esPendiente(c.raw)) return 'Pendiente'
+  return c.estado || 'Pendiente'
 }
 
 function tipoBadgeStyle(tipo: string): React.CSSProperties {
@@ -379,6 +391,7 @@ export default function EmpleadoQuincenaPage() {
   const [error, setError] = useState('')
   const [showDebug, setShowDebug] = useState(false)
   const [estadoFiltro, setEstadoFiltro] = useState<EstadoFiltro>('todos')
+
   const [monedaFiltro, setMonedaFiltro] = useState<MonedaFiltro>('todas')
 
   async function load(nextPeriodo = periodo) {
@@ -409,6 +422,7 @@ export default function EmpleadoQuincenaPage() {
     const map = new Map<string, ComisionVista>()
 
     ;[...detalle, ...pagos].forEach((row, i) => {
+      if (esExcluido(row)) return
       const item = normalizarComision(row, i)
       if (!map.has(item.id)) map.set(item.id, item)
     })
@@ -453,8 +467,8 @@ export default function EmpleadoQuincenaPage() {
   const comisionesFiltradas = useMemo(
     () =>
       comisiones.filter((c) => {
-        if (estadoFiltro === 'pendiente' && c.pagado) return false
-        if (estadoFiltro === 'pagado' && !c.pagado) return false
+        if (estadoFiltro === 'pendiente' && !esPendiente(c.raw)) return false
+        if (estadoFiltro === 'liquidada' && !c.pagado) return false
         if (monedaFiltro !== 'todas' && c.moneda !== monedaFiltro) return false
         return true
       }),
@@ -552,7 +566,7 @@ export default function EmpleadoQuincenaPage() {
         <StatCard
           label="Registro"
           value={String(comisiones.length)}
-          sub={`${pendientes.length} pendiente(s) · ${liquidadas.length} pagada(s)`}
+          sub={`${pendientes.length} pendiente(s) · ${liquidadas.length} liquidada(s)`}
         />
       </section>
 
@@ -587,7 +601,7 @@ export default function EmpleadoQuincenaPage() {
               options={[
                 { value: 'todos', label: 'Todos' },
                 { value: 'pendiente', label: 'Pendientes' },
-                { value: 'pagado', label: 'Pagadas' },
+                { value: 'liquidada', label: 'Liquidadas' },
               ]}
             />
 
@@ -629,7 +643,7 @@ export default function EmpleadoQuincenaPage() {
                       <Pill label={item.tipo} style={tipoBadgeStyle(item.tipo)} />
 
                       <Pill
-                        label={item.pagado ? 'Pagado' : item.estado || 'Pendiente'}
+                        label={estadoLabel(item)}
                         style={estadoBadgeStyle(item)}
                       />
 

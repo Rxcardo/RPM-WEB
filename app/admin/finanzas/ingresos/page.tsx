@@ -2100,22 +2100,32 @@ function IngresosPageContent() {
     if (error) throw error;
   }
 
-  async function sincronizarCuentaCobrarClienteDesdeAbonos(cuentaId: string, montoNuevoAbonoUsd: number) {
-    // Lee el estado actual de la CxC para hacer un update incremental.
-    // No recalcula desde abonos_cobranza porque el pago inicial (abono al crear el plan)
-    // va a `pagos` via registrar_pagos_mixtos, no a abonos_cobranza, por lo que
-    // recalcular desde cero causaría que ese pago inicial quede perdido.
+  async function sincronizarCuentaCobrarClienteDesdeAbonos(args: {
+    cuentaId: string;
+    montoNuevoAbonoUsd: number;
+    montoPagadoBaseUsd: number;
+  }) {
+    // IMPORTANTE:
+    // El abono posterior debe sumar sobre el pagado que tenía la deuda ANTES
+    // de llamar registrarAbonoMixto. Esa función/RPC puede recalcular usando solo
+    // los abonos posteriores y perder el pago inicial del plan/cita.
+    //
+    // Ejemplo correcto:
+    // total 110, pagado inicial 50, abono nuevo 60 => pagado 110, saldo 0.
+    // Ejemplo incorrecto que evitamos:
+    // total 110, abono nuevo 60 => pagado 60, saldo 50.
     const { data: cuenta, error: cuentaError } = await supabase
       .from("cuentas_por_cobrar")
-      .select("id, monto_total_usd, monto_pagado_usd")
-      .eq("id", cuentaId)
+      .select("id, monto_total_usd")
+      .eq("id", args.cuentaId)
       .maybeSingle();
 
     if (cuentaError) throw cuentaError;
     if (!cuenta) return;
 
-    const pagadoActual = r2(Number(cuenta.monto_pagado_usd || 0));
-    const pagadoReal = r2(pagadoActual + montoNuevoAbonoUsd);
+    const pagadoBase = r2(Number(args.montoPagadoBaseUsd || 0));
+    const montoNuevoAbonoUsd = r2(Number(args.montoNuevoAbonoUsd || 0));
+    const pagadoReal = r2(pagadoBase + montoNuevoAbonoUsd);
     const totalActual = r2(Number(cuenta.monto_total_usd || 0));
     const totalFinal = r2(Math.max(totalActual, pagadoReal));
     const saldoFinal = r2(Math.max(totalFinal - pagadoReal, 0));
@@ -2134,7 +2144,7 @@ function IngresosPageContent() {
         saldo_usd: saldoFinal,
         estado: estadoFinal,
       })
-      .eq("id", cuentaId);
+      .eq("id", args.cuentaId);
 
     if (error) throw error;
   }
@@ -2788,10 +2798,13 @@ function IngresosPageContent() {
             notasGenerales: notas.trim() || null,
             pagos: buildPagosPayloadRapido(),
           });
-          await sincronizarCuentaCobrarClienteDesdeAbonos(
-            cuentaPendienteSeleccionada.id,
-            montoRealAbonoUsd,
-          );
+          await sincronizarCuentaCobrarClienteDesdeAbonos({
+            cuentaId: cuentaPendienteSeleccionada.id,
+            montoNuevoAbonoUsd: montoRealAbonoUsd,
+            montoPagadoBaseUsd: Number(
+              cuentaPendienteSeleccionada.monto_pagado_usd || 0,
+            ),
+          });
           await liberarComisionesRetenidas(cuentaPendienteSeleccionada.id);
           const contextoComision = obtenerContextoPagoRapidoComision();
           await sincronizarComisionPlanDesdeDeudaCliente({

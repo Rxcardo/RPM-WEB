@@ -29,13 +29,13 @@ export type SincronizarComisionesParams = {
 
 /**
  * Regla global de estado de comisión:
- * - fisio <= 50% → pendiente siempre
- * - fisio > 50% con pago completo → pendiente
- * - fisio > 50% sin pago completo → retenida
+ * - RPM >= 35% (fisio <= 65%) → pendiente siempre (split estándar o favorable a RPM)
+ * - RPM < 35% (fisio > 65%) con pago completo → pendiente
+ * - RPM < 35% (fisio > 65%) sin pago completo → retenida
  */
 export function calcularEstadoComision(base: number, profesional: number, pagoCompleto: boolean): 'pendiente' | 'retenida' {
   const porcentajeFisio = base > 0 ? (profesional / base) * 100 : 0
-  return porcentajeFisio <= 50 || pagoCompleto ? 'pendiente' : 'retenida'
+  return porcentajeFisio <= 65 || pagoCompleto ? 'pendiente' : 'retenida'
 }
 
 /**

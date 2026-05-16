@@ -219,6 +219,7 @@ export async function GET(req: NextRequest) {
         .eq("empleado_id", empleado.id)
         .gte("fecha", periodo.start)
         .lte("fecha", periodo.end)
+        .or("estado.is.null,estado.not.in.(retenida,cancelada,cancelado)")
         .order("fecha", { ascending: false })
         .limit(500),
     ]);

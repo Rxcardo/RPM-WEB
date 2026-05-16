@@ -662,7 +662,7 @@ function NuevaCitaPageContent() {
       // 4) Crear comisiones para todas las citas con el enlace correcto al pago/deuda.
       const pagoCompleto = pagoState.tipoCobro !== 'sin_pago' && !cxcPayload
       const porcentajeFisio = baseComisionAplicada > 0 ? (terapeutaMonto / baseComisionAplicada) * 100 : 0
-      const estadoComision = porcentajeFisio <= 50 || pagoCompleto ? 'pendiente' : 'retenida'
+      const estadoComision = porcentajeFisio <= 65 || pagoCompleto ? 'pendiente' : 'retenida'
       const comisionesPayload = createdCitas.map((cita) => ({
         empleado_id: form.terapeuta_id,
         cliente_id: form.cliente_id,

@@ -12,6 +12,11 @@ import {
   Mail,
   Phone,
   BadgeCheck,
+  Pencil,
+  Check,
+  X,
+  Calendar,
+  CreditCard,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 
@@ -42,26 +47,12 @@ function safeText(v?: string | null, fallback = '—') {
 }
 
 function getInitials(nombre?: string | null) {
-  return safeText(nombre, 'Empleado')
+  return safeText(nombre, 'E')
     .split(' ')
     .slice(0, 2)
     .map((w) => w[0])
     .join('')
     .toUpperCase()
-}
-
-function estadoClass(estado?: string | null) {
-  const v = String(estado ?? '').toLowerCase()
-
-  if (v === 'activo') {
-    return 'border-emerald-400/20 bg-emerald-500/10 text-emerald-300'
-  }
-
-  if (v === 'inactivo' || v === 'suspendido') {
-    return 'border-red-400/20 bg-red-500/10 text-red-300'
-  }
-
-  return 'border-[var(--line)] bg-white/5 text-[var(--muted)]'
 }
 
 export default function EmpleadoPerfilPage() {
@@ -80,6 +71,11 @@ export default function EmpleadoPerfilPage() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [cerrando, setCerrando] = useState(false)
   const [loading, setLoading] = useState(true)
+
+  const [editingPhone, setEditingPhone] = useState(false)
+  const [phoneValue, setPhoneValue] = useState('')
+  const [savingPhone, setSavingPhone] = useState(false)
+  const [phoneError, setPhoneError] = useState('')
 
   useEffect(() => {
     const saved = localStorage.getItem('rpm-empleado-theme') as 'dark' | 'light' | null
@@ -102,6 +98,7 @@ export default function EmpleadoPerfilPage() {
         .maybeSingle()
 
       setEmpleado(data as Empleado | null)
+      setPhoneValue(data?.telefono ?? '')
       setLoading(false)
     }
 
@@ -116,9 +113,7 @@ export default function EmpleadoPerfilPage() {
 
   async function cerrarSesion() {
     if (cerrando) return
-
     setCerrando(true)
-
     try {
       await supabase.auth.signOut()
       router.replace('/login')
@@ -128,34 +123,67 @@ export default function EmpleadoPerfilPage() {
     }
   }
 
-  const fields: Array<[string, string | null | undefined]> = [
-    ['Nombre', empleado?.nombre],
-    ['Correo', empleado?.email],
-    ['Teléfono', empleado?.telefono],
-    ['Cédula', empleado?.cedula],
-    ['Especialidad', empleado?.especialidad],
-    ['Rol', empleado?.rol],
-    ['Estado', empleado?.estado],
-    ['Fecha de creación', formatDate(empleado?.created_at)],
-  ]
+  async function savePhone() {
+    if (!empleado) return
+    setSavingPhone(true)
+    setPhoneError('')
+    try {
+      const { error } = await supabase
+        .from('empleados')
+        .update({ telefono: phoneValue.trim() || null })
+        .eq('id', empleado.id)
+
+      if (error) {
+        setPhoneError('No se pudo guardar. Intenta de nuevo.')
+        return
+      }
+
+      setEmpleado((prev) =>
+        prev ? { ...prev, telefono: phoneValue.trim() || null } : prev
+      )
+      setEditingPhone(false)
+    } finally {
+      setSavingPhone(false)
+    }
+  }
+
+  function cancelPhone() {
+    setPhoneValue(empleado?.telefono ?? '')
+    setPhoneError('')
+    setEditingPhone(false)
+  }
 
   const nombre = loading ? 'Cargando…' : safeText(empleado?.nombre, 'Empleado')
   const rol = safeText(empleado?.rol, 'Terapeuta')
-  const estado = safeText(empleado?.estado, 'activo')
+  const estadoRaw = (empleado?.estado ?? 'activo').toLowerCase()
   const iniciales = getInitials(empleado?.nombre)
 
+  const estadoBadge =
+    estadoRaw === 'activo'
+      ? { bg: 'rgba(52,211,153,0.12)', border: 'rgba(52,211,153,0.2)', color: '#34d399', label: 'Activo' }
+      : estadoRaw === 'inactivo' || estadoRaw === 'suspendido'
+        ? { bg: 'rgba(248,113,113,0.12)', border: 'rgba(248,113,113,0.2)', color: '#f87171', label: safeText(empleado?.estado) }
+        : { bg: 'var(--surface2)', border: 'var(--border)', color: 'var(--text-sub)', label: safeText(empleado?.estado) }
+
+  const readOnlyFields = [
+    { icon: <Mail className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />, label: 'Correo electrónico', value: empleado?.email },
+    { icon: <CreditCard className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />, label: 'Cédula', value: empleado?.cedula },
+    { icon: <ShieldCheck className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />, label: 'Especialidad', value: empleado?.especialidad },
+    { icon: <Briefcase className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />, label: 'Rol', value: empleado?.rol },
+    { icon: <Calendar className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />, label: 'Miembro desde', value: formatDate(empleado?.created_at) },
+  ]
+
   return (
-    <div className="space-y-4">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div className="space-y-4 pb-4">
+      {/* Header */}
+      <header className="flex items-start justify-between gap-4">
         <div>
-          <div className="inline-flex items-center rounded-full border border-[var(--line)] bg-white/5 px-3 py-1 text-xs font-black uppercase tracking-[0.16em] text-[var(--muted)]">
-            Configuración
-          </div>
-
-          <h1 className="mt-2 text-3xl font-black tracking-tight">Perfil</h1>
-
-          <p className="rpm-muted mt-1 text-sm">
-            Información del empleado, sesión y apariencia del portal.
+          <p className="rpm-label">Mi cuenta</p>
+          <h1 className="mt-1.5 text-[1.75rem] font-black tracking-tight leading-tight">
+            Perfil
+          </h1>
+          <p className="mt-1 text-sm rpm-muted">
+            Tu información, sesión y apariencia.
           </p>
         </div>
 
@@ -163,212 +191,219 @@ export default function EmpleadoPerfilPage() {
           type="button"
           onClick={cerrarSesion}
           disabled={cerrando}
-          className="
-            inline-flex items-center justify-center gap-2 rounded-2xl
-            border border-red-400/20 bg-red-500/10
-            px-4 py-3 text-sm font-black text-red-300
-            transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60
-          "
+          className="flex shrink-0 items-center gap-2 rounded-2xl px-4 py-2.5 text-sm font-bold transition"
+          style={{
+            background: 'rgba(248,113,113,0.1)',
+            border: '1px solid rgba(248,113,113,0.2)',
+            color: 'var(--red)',
+          }}
         >
           <LogOut className="h-4 w-4" />
-          {cerrando ? 'Cerrando...' : 'Cerrar sesión'}
+          {cerrando ? 'Saliendo...' : 'Cerrar sesión'}
         </button>
       </header>
 
-      <section className="overflow-hidden rounded-[2rem] border border-[var(--line)] bg-[var(--card)] shadow-sm">
-        <div className="h-1 bg-gradient-to-r from-[var(--purple)] via-fuchsia-500 to-orange-400" />
-
-        <div className="p-5">
-          <div className="flex items-center gap-4">
-            <div
-              className="
-                grid h-20 w-20 shrink-0 place-items-center rounded-[1.6rem]
-                bg-gradient-to-br from-[var(--purple)] to-fuchsia-500
-                text-2xl font-black text-white shadow-lg shadow-purple-500/20
-              "
-            >
-              {empleado?.nombre ? iniciales : <UserRound className="h-9 w-9" />}
-            </div>
-
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-[var(--purple)]">
-                Empleado RPM
-              </p>
-
-              <h2 className="mt-1 truncate text-2xl font-black tracking-tight">
-                {nombre}
-              </h2>
-
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1 rounded-full border border-[var(--line)] bg-white/5 px-3 py-1 text-xs font-black text-[var(--muted)]">
-                  <Briefcase className="h-3.5 w-3.5" />
-                  {rol}
-                </span>
-
-                <span
-                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-black ${estadoClass(
-                    empleado?.estado
-                  )}`}
-                >
-                  <BadgeCheck className="h-3.5 w-3.5" />
-                  {estado}
-                </span>
-              </div>
-            </div>
+      {/* Profile hero */}
+      <div className="purple-card p-5 text-white">
+        <div className="flex items-center gap-4">
+          <div
+            className="grid h-16 w-16 shrink-0 place-items-center rounded-[1.4rem] text-xl font-black"
+            style={{ background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(8px)' }}
+          >
+            {empleado?.nombre ? iniciales : <UserRound className="h-8 w-8" />}
           </div>
 
-          <div className="mt-5 grid gap-2 sm:grid-cols-3">
-            <MiniStat
-              icon={<Mail className="h-4 w-4" />}
-              label="Correo"
-              value={empleado?.email}
-            />
-            <MiniStat
-              icon={<Phone className="h-4 w-4" />}
-              label="Teléfono"
-              value={empleado?.telefono}
-            />
-            <MiniStat
-              icon={<ShieldCheck className="h-4 w-4" />}
-              label="Especialidad"
-              value={empleado?.especialidad}
-            />
+          <div className="min-w-0 flex-1">
+            <p
+              style={{
+                fontSize: '10px',
+                fontWeight: 700,
+                letterSpacing: '0.07em',
+                textTransform: 'uppercase',
+                color: 'rgba(255,255,255,0.55)',
+              }}
+            >
+              Empleado RPM
+            </p>
+
+            <h2 className="mt-1 truncate text-xl font-black">{nombre}</h2>
+
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold"
+                style={{ background: 'rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.85)' }}
+              >
+                <Briefcase className="h-3 w-3" />
+                {rol}
+              </span>
+
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold"
+                style={{
+                  background: estadoBadge.bg,
+                  border: `1px solid ${estadoBadge.border}`,
+                  color: estadoBadge.color,
+                }}
+              >
+                <BadgeCheck className="h-3 w-3" />
+                {estadoBadge.label}
+              </span>
+            </div>
           </div>
         </div>
-      </section>
+      </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
-        <section className="overflow-hidden rounded-[1.8rem] border border-[var(--line)] bg-[var(--card)]">
-          <div className="h-1 bg-gradient-to-r from-[var(--purple)] to-fuchsia-500" />
-
-          <div className="p-5">
-            <div className="mb-4">
-              <h2 className="text-lg font-black">Mis datos</h2>
-              <p className="rpm-muted mt-1 text-sm">
-                Solo lectura. Estos datos los modifica administración.
-              </p>
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-2">
-              {fields.map(([label, value]) => (
-                <InfoBox key={label} label={label} value={value} />
-              ))}
-            </div>
+      {/* Data + Appearance */}
+      <div className="grid gap-4 md:grid-cols-[1.5fr_0.5fr]">
+        {/* Data section */}
+        <div className="glass-card p-5">
+          <div className="mb-4">
+            <h2 className="font-black">Mis datos</h2>
+            <p className="mt-0.5 text-xs rpm-muted">
+              Puedes editar tu teléfono. El resto lo gestiona administración.
+            </p>
           </div>
-        </section>
 
-        <section className="overflow-hidden rounded-[1.8rem] border border-[var(--line)] bg-[var(--card)]">
-          <div className="h-1 bg-gradient-to-r from-orange-400 to-[var(--purple)]" />
+          <div className="space-y-2">
+            {/* Editable: Phone */}
+            <div className="stat-mini">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Phone className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
+                  <p className="rpm-label">Teléfono</p>
+                </div>
 
-          <div className="p-5">
-            <div className="mb-4">
-              <h2 className="text-lg font-black">Apariencia</h2>
-              <p className="rpm-muted mt-1 text-sm">
-                El morado RPM se mantiene en ambos modos.
-              </p>
+                {!editingPhone ? (
+                  <button
+                    type="button"
+                    onClick={() => setEditingPhone(true)}
+                    className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-bold transition"
+                    style={{ background: 'var(--purple-soft)', color: 'var(--accent)' }}
+                  >
+                    <Pencil className="h-3 w-3" />
+                    Editar
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={savePhone}
+                      disabled={savingPhone}
+                      aria-label="Guardar teléfono"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg transition disabled:opacity-50"
+                      style={{ background: 'rgba(52,211,153,0.15)', color: 'var(--green)' }}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelPhone}
+                      aria-label="Cancelar edición"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg transition"
+                      style={{ background: 'rgba(248,113,113,0.1)', color: 'var(--red)' }}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {editingPhone ? (
+                <>
+                  <input
+                    className="rpm-input mt-2"
+                    value={phoneValue}
+                    onChange={(e) => setPhoneValue(e.target.value)}
+                    placeholder="Ej: +58 412 000 0000"
+                    type="tel"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') savePhone()
+                      if (e.key === 'Escape') cancelPhone()
+                    }}
+                  />
+                  {phoneError && (
+                    <p className="mt-1 text-xs" style={{ color: 'var(--red)' }}>
+                      {phoneError}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="mt-1 text-sm font-black">{safeText(empleado?.telefono)}</p>
+              )}
             </div>
 
-            <div className="grid gap-3">
-              <ThemeButton
-                active={theme === 'dark'}
-                icon={<Moon className="h-5 w-5" />}
-                label="Oscuro"
-                description="Interfaz profunda y premium."
-                onClick={() => changeTheme('dark')}
-              />
-
-              <ThemeButton
-                active={theme === 'light'}
-                icon={<Sun className="h-5 w-5" />}
-                label="Claro"
-                description="Interfaz limpia y luminosa."
-                onClick={() => changeTheme('light')}
-              />
-            </div>
+            {/* Read-only fields */}
+            {readOnlyFields.map(({ icon, label, value }) => (
+              <div key={label} className="stat-mini">
+                <div className="flex items-center gap-2">
+                  {icon}
+                  <p className="rpm-label">{label}</p>
+                </div>
+                <p className="mt-1 text-sm font-black">{safeText(value)}</p>
+              </div>
+            ))}
           </div>
-        </section>
+        </div>
+
+        {/* Appearance section */}
+        <div className="glass-card p-5">
+          <div className="mb-4">
+            <h2 className="font-black">Apariencia</h2>
+            <p className="mt-0.5 text-xs rpm-muted">
+              El morado RPM se mantiene en ambos modos.
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            {(
+              [
+                { value: 'dark', icon: <Moon className="h-4 w-4" />, label: 'Oscuro', desc: 'Profundo y premium.' },
+                { value: 'light', icon: <Sun className="h-4 w-4" />, label: 'Claro', desc: 'Limpio y luminoso.' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => changeTheme(opt.value)}
+                className="flex w-full items-center gap-3 rounded-[1.2rem] p-4 text-left transition"
+                style={
+                  theme === opt.value
+                    ? {
+                        background: 'var(--purple)',
+                        border: '1px solid transparent',
+                        color: '#fff',
+                        boxShadow: '0 2px 12px var(--purple-glow)',
+                      }
+                    : {
+                        background: 'var(--surface2)',
+                        border: '1px solid var(--border)',
+                        color: 'var(--text)',
+                      }
+                }
+              >
+                <div
+                  className="grid h-10 w-10 shrink-0 place-items-center rounded-xl"
+                  style={{
+                    background: theme === opt.value ? 'rgba(255,255,255,0.2)' : 'var(--purple-soft)',
+                  }}
+                >
+                  {opt.icon}
+                </div>
+                <div>
+                  <p className="text-sm font-black">{opt.label}</p>
+                  <p
+                    className="text-xs"
+                    style={{ color: theme === opt.value ? 'rgba(255,255,255,0.65)' : 'var(--text-sub)' }}
+                  >
+                    {opt.desc}
+                  </p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
-  )
-}
-
-function MiniStat({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode
-  label: string
-  value?: string | null
-}) {
-  return (
-    <div className="rounded-2xl border border-[var(--line)] bg-white/5 p-3">
-      <div className="mb-2 flex items-center gap-2 text-[var(--muted)]">
-        {icon}
-        <p className="text-xs font-black uppercase tracking-[0.08em]">{label}</p>
-      </div>
-
-      <p className="truncate text-sm font-black">{safeText(value)}</p>
-    </div>
-  )
-}
-
-function InfoBox({
-  label,
-  value,
-}: {
-  label: string
-  value?: string | null
-}) {
-  return (
-    <div className="rounded-2xl border border-[var(--line)] bg-white/5 p-3">
-      <p className="rpm-muted text-xs font-bold">{label}</p>
-      <p className="mt-1 break-words text-sm font-black">{safeText(value)}</p>
-    </div>
-  )
-}
-
-function ThemeButton({
-  active,
-  icon,
-  label,
-  description,
-  onClick,
-}: {
-  active: boolean
-  icon: React.ReactNode
-  label: string
-  description: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`
-        flex items-center gap-3 rounded-2xl border p-4 text-left transition
-        ${
-          active
-            ? 'border-[var(--purple)] bg-[var(--purple)] text-white shadow-lg shadow-purple-500/20'
-            : 'border-[var(--line)] bg-white/5 hover:bg-white/10'
-        }
-      `}
-    >
-      <div
-        className={`
-          grid h-11 w-11 shrink-0 place-items-center rounded-2xl
-          ${active ? 'bg-white/20' : 'bg-white/5'}
-        `}
-      >
-        {icon}
-      </div>
-
-      <div>
-        <p className="font-black">{label}</p>
-        <p className={active ? 'text-sm text-white/70' : 'rpm-muted text-sm'}>
-          {description}
-        </p>
-      </div>
-    </button>
   )
 }

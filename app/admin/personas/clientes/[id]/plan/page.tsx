@@ -533,7 +533,7 @@ export default function ClientePlanPage() {
       const { data: existente } = await supabase.from('comisiones_detalle').select('id').eq('cliente_plan_id', clientePlanId).eq('empleado_id', empId).eq('tipo', 'plan').limit(1).maybeSingle()
       if (existente?.id) return
       const porcentajeFisio = base > 0 ? (profesional / base) * 100 : 0
-      const estadoComision = porcentajeFisio <= 50 || pagoCompleto ? 'pendiente' : 'retenida'
+      const estadoComision = porcentajeFisio <= 65 || pagoCompleto ? 'pendiente' : 'retenida'
       const { error } = await supabase.from('comisiones_detalle').insert({
         empleado_id: empId, cliente_id: clienteIdValue, cliente_plan_id: clientePlanId,
         pago_id: null, cuenta_por_cobrar_id: cuentaPorCobrarId,

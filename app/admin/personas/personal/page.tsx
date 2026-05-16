@@ -413,15 +413,6 @@ export default function PersonalPage() {
   // Comisiones
   const [comisiones, setComisiones] = useState<ComisionResumen[]>([])
   const [loadingComisiones, setLoadingComisiones] = useState(false)
-  const [fechaComisionInicio, setFechaComisionInicio] = useState(() => {
-    const now = new Date()
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-  })
-  const [fechaComisionFin, setFechaComisionFin] = useState(() => {
-    const now = new Date()
-    const last = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-    return `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, '0')}-${String(last.getDate()).padStart(2, '0')}`
-  })
 
   // Paneles
   const [showNuevoPanel, setShowNuevoPanel] = useState(false)
@@ -449,16 +440,13 @@ export default function PersonalPage() {
 
   useEffect(() => {
     void loadComisiones()
-  }, [fechaComisionInicio, fechaComisionFin])
+  }, [])
 
   async function loadComisiones() {
     setLoadingComisiones(true)
     try {
-      const fechaInicioTs = `${fechaComisionInicio}T00:00:00`
-      const fechaFinTs = `${fechaComisionFin}T23:59:59.999`
-
-      // 1) Comisiones pendientes creadas dentro del rango normal del filtro.
-      const { data: comisionesPorFechaData, error: comisionesPorFechaError } = await supabase
+      // Todas las comisiones pendientes sin filtro de fecha (igual que la página individual)
+      const { data: comisionesData, error: comisionesError } = await supabase
         .from('comisiones_detalle')
         .select(`
           id,
@@ -466,6 +454,8 @@ export default function PersonalPage() {
           cliente_plan_id,
           cita_id,
           empleado_id,
+          pago_id,
+          cuenta_por_cobrar_id,
           base,
           profesional,
           rpm,
@@ -477,81 +467,14 @@ export default function PersonalPage() {
           monto_rpm_bs,
           empleados:empleado_id(nombre)
         `)
-        .gte('fecha', fechaComisionInicio)
-        .lte('fecha', fechaComisionFin)
         .eq('estado', 'pendiente')
 
-      if (comisionesPorFechaError) throw comisionesPorFechaError
+      if (comisionesError) throw comisionesError
 
-      const rowsPorFecha = (comisionesPorFechaData || []) as any[]
-      const idsPorFecha = rowsPorFecha.map((row) => String(row.id || '')).filter(Boolean)
+      const rowsCandidatas = (comisionesData || []) as any[]
 
-      // 2) Descuentos de deuda aplicados dentro del rango.
-      //    Esto es CLAVE: una comisión puede ser de abril, pero el descuento se aplicó en mayo.
-      //    El listado debe traer esa comisión porque ahora hay un movimiento real en el rango.
-      const { data: descuentosDelRangoData, error: descuentosDelRangoError } = await supabase
-        .from('comisiones_descuentos_deuda')
-        .select('comision_id, monto_descuento_usd, monto_descuento_bs, estado, created_at')
-        .gte('created_at', fechaInicioTs)
-        .lte('created_at', fechaFinTs)
-
-      if (descuentosDelRangoError) {
-        console.error('Error cargando descuentos de deuda del rango:', descuentosDelRangoError)
-      }
-
-      const comisionIdsConDescuentoEnRango = Array.from(
-        new Set(
-          ((descuentosDelRangoData || []) as any[])
-            .filter((descuento) => esDescuentoDeudaActivo(descuento?.estado))
-            .map((descuento) => String(descuento?.comision_id || ''))
-            .filter(Boolean)
-        )
-      )
-
-      const idsFaltantesPorDescuento = comisionIdsConDescuentoEnRango.filter(
-        (comisionId) => !idsPorFecha.includes(comisionId)
-      )
-
-      // 3) Traer las comisiones enlazadas a descuentos del rango aunque su fecha original esté fuera.
-      let rowsPorDescuento: any[] = []
-      if (idsFaltantesPorDescuento.length > 0) {
-        const { data: comisionesPorDescuentoData, error: comisionesPorDescuentoError } = await supabase
-          .from('comisiones_detalle')
-          .select(`
-            id,
-            tipo,
-            cliente_plan_id,
-            cita_id,
-            empleado_id,
-            monto_base_usd,
-            monto_base_bs,
-            monto_profesional_usd,
-            monto_profesional_bs,
-            monto_rpm_usd,
-            monto_rpm_bs,
-            empleados:empleado_id(nombre)
-          `)
-          .in('id', idsFaltantesPorDescuento)
-          .eq('estado', 'pendiente')
-
-        if (comisionesPorDescuentoError) throw comisionesPorDescuentoError
-        rowsPorDescuento = (comisionesPorDescuentoData || []) as any[]
-      }
-
-      // 4) Unificar sin duplicados.
-      const rowsMap = new Map<string, any>()
-      ;[...rowsPorFecha, ...rowsPorDescuento].forEach((row) => {
-        const key = String(row?.id || '')
-        if (!key) return
-        rowsMap.set(key, row)
-      })
-
-      const rowsCandidatas = Array.from(rowsMap.values())
-
-      // 4.1) CANDADO REAL SEGÚN REGLA RPM/FISIO:
-      // - Si el fisio gana 35% o menos, la comisión puede verse pendiente aunque la cuenta no esté pagada completa.
-      // - Si el fisio gana más de 35%, SOLO se muestra si la cuenta del plan/cita está cobrada completa.
-      // - Si el fisio gana más de 35% y no existe cuenta enlazada, se oculta porque no se puede comprobar el cobro.
+      // 4.1) CANDADO REAL: una comisión solo se muestra si su plan/cita tiene
+      // cuenta por cobrar enlazada y saldo 0. Si no hay cuenta, NO se considera liquidable.
       const origenIds = Array.from(
         new Set(
           rowsCandidatas
@@ -561,7 +484,7 @@ export default function PersonalPage() {
         )
       )
 
-      let cuentasPorOrigen = new Map<string, any[]>()
+      const cuentasPorOrigen = new Map<string, any[]>()
       if (origenIds.length > 0) {
         const { data: cuentasData, error: cuentasError } = await supabase
           .from('cuentas_por_cobrar')
@@ -580,63 +503,52 @@ export default function PersonalPage() {
         })
       }
 
-      const getNumeroComision = (...values: any[]) => {
-        for (const value of values) {
-          const n = Number(value || 0)
-          if (Number.isFinite(n) && n > 0) return n
-        }
-        return 0
+      const getPorcentajeFisioRow = (row: any) => {
+        const directo = Number(row?.porcentaje_fisio ?? row?.porcentaje_profesional ?? NaN)
+        if (Number.isFinite(directo) && directo > 0) return r2(directo)
+
+        const base = Number(row?.monto_base_usd ?? row?.base ?? 0)
+        const profesional = Number(row?.monto_profesional_usd ?? row?.profesional ?? 0)
+
+        if (!Number.isFinite(base) || base <= 0) return 0
+        if (!Number.isFinite(profesional) || profesional <= 0) return 0
+
+        return r2((profesional / base) * 100)
       }
 
-      const getPorcentajeFisio = (row: any) => {
-        const base = getNumeroComision(row?.monto_base_usd, row?.base)
-        const profesional = getNumeroComision(row?.monto_profesional_usd, row?.profesional)
-        if (base <= 0) return 0
-        return (profesional / base) * 100
-      }
-
-      const cuentaPerteneceAlTipo = (cuenta: any, tipo: string) => {
-        const origenTipo = String(cuenta?.origen_tipo || '').toLowerCase()
-        const tipoOrigen = String(cuenta?.tipo_origen || '').toLowerCase()
-
-        if (tipo === 'plan') {
-          return origenTipo === 'cliente_plan' || origenTipo === 'plan' || tipoOrigen === 'plan'
-        }
-
-        if (tipo === 'cita') {
-          return origenTipo === 'cita_lote' || origenTipo === 'cita' || tipoOrigen === 'cita' || tipoOrigen === 'otro'
-        }
-
-        return false
-      }
-
-      const cuentaEstaCobradaCompleta = (cuenta: any) => {
+      const cuentaEstaPagadaCompleta = (cuenta: any) => {
         const estadoCuenta = String(cuenta?.estado || '').toLowerCase()
-        if (['cobrada', 'pagada', 'cobrado', 'pagado'].includes(estadoCuenta)) return true
-        return Number(cuenta?.saldo_usd || 0) <= 0 && Number(cuenta?.saldo_bs || 0) <= 0
+        const saldoUsd = Number(cuenta?.saldo_usd || 0)
+        const saldoBs = Number(cuenta?.saldo_bs || 0)
+
+        return (
+          ['cobrada', 'pagada', 'pagado', 'cerrada', 'liquidada'].includes(estadoCuenta) ||
+          (saldoUsd <= 0.009 && saldoBs <= 0.009)
+        )
       }
 
-      const esComisionVisibleComoPendiente = (row: any) => {
-        const porcentajeFisio = getPorcentajeFisio(row)
+      const esComisionLiquidablePorCobro = (row: any) => {
+        const tipo = String(row?.tipo || '').toLowerCase()
+        const porcentajeFisio = getPorcentajeFisioRow(row)
 
-        // Regla principal: 35% o menos para el fisio se deja visible aunque el cliente no haya completado pago.
+        // Fisio <=35% / RPM >=65%: se muestra siempre, aunque no tenga pago ni cuenta.
         if (porcentajeFisio <= 35) return true
 
-        // Por encima de 35% para el fisio, RPM recibe menos de 65%; debe estar cobrado completo.
-        const tipo = String(row?.tipo || '').toLowerCase()
+        // >50% fisio: se muestra si el cliente pagó directo y la comisión tiene pago_id.
+        if (row?.pago_id) return true
+
         const origenId = tipo === 'plan' ? String(row?.cliente_plan_id || '') : String(row?.cita_id || '')
         if (!origenId) return false
 
-        const cuentasValidas = (cuentasPorOrigen.get(origenId) || []).filter((cuenta) =>
-          cuentaPerteneceAlTipo(cuenta, tipo)
-        )
+        const cuentas = cuentasPorOrigen.get(origenId) || []
 
-        if (cuentasValidas.length === 0) return false
+        // >50% fisio sin pago_id solo se muestra si tiene cuenta cobrada completa.
+        if (cuentas.length === 0) return false
 
-        return cuentasValidas.every(cuentaEstaCobradaCompleta)
+        return cuentas.some(cuentaEstaPagadaCompleta)
       }
 
-      const rows = rowsCandidatas.filter(esComisionVisibleComoPendiente)
+      const rows = rowsCandidatas.filter(esComisionLiquidablePorCobro)
       const comisionIds = rows.map((row) => String(row.id || '')).filter(Boolean)
       const descuentosPorComision = new Map<string, { usd: number; bs: number }>()
 
@@ -672,12 +584,12 @@ export default function PersonalPage() {
         const key = String(c.empleado_id || `sin-empleado-${nombre}`)
         const descuento = descuentosPorComision.get(String(c.id || '')) || { usd: 0, bs: 0 }
 
-        const baseUsd = r2(Number(c.monto_base_usd || 0))
-        const baseBs = r2(Number(c.monto_base_bs || 0))
-        const rpmUsd = r2(Number(c.monto_rpm_usd || 0))
-        const rpmBs = r2(Number(c.monto_rpm_bs || 0))
-        const brutoUsd = r2(Number(c.monto_profesional_usd || 0))
-        const brutoBs = r2(Number(c.monto_profesional_bs || 0))
+        const baseUsd = r2(Number(c.monto_base_usd ?? c.base ?? 0))
+        const baseBs = r2(Number(c.monto_base_bs ?? 0))
+        const rpmUsd = r2(Number(c.monto_rpm_usd ?? c.rpm ?? 0))
+        const rpmBs = r2(Number(c.monto_rpm_bs ?? 0))
+        const brutoUsd = r2(Number(c.monto_profesional_usd ?? c.profesional ?? 0))
+        const brutoBs = r2(Number(c.monto_profesional_bs ?? 0))
         const descuentoUsd = r2(Math.min(Math.max(descuento.usd, 0), brutoUsd))
         const descuentoBs = r2(Math.min(Math.max(descuento.bs, 0), brutoBs))
         const netoUsd = r2(Math.max(brutoUsd - descuentoUsd, 0))
@@ -1026,22 +938,6 @@ export default function PersonalPage() {
                 <div className="h-3.5 w-3.5 animate-spin rounded-full border border-white/10 border-t-white/40" />
               )}
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-white/35">Período</span>
-              <input
-                type="date"
-                value={fechaComisionInicio}
-                onChange={(e) => setFechaComisionInicio(e.target.value)}
-                className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white outline-none focus:border-white/20"
-              />
-              <span className="text-xs text-white/25">→</span>
-              <input
-                type="date"
-                value={fechaComisionFin}
-                onChange={(e) => setFechaComisionFin(e.target.value)}
-                className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white outline-none focus:border-white/20"
-              />
-            </div>
           </div>
 
           <div className="p-5">
@@ -1382,3 +1278,7 @@ export default function PersonalPage() {
     </>
   )
 }
+
+
+
+

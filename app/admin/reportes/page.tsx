@@ -83,6 +83,18 @@ type DocumentoGeneradoItem = { id: string; tipo: 'constancia'|'informe_sesiones'
 type DocumentoClienteOption = { id: string; nombre: string; cedula?: string|null; telefono?: string|null; direccion?: string|null; fechaNacimiento?: string|null; terapeuta?: string|null }
 type LineaPresupuestoPDF = { cantidad: number; tipoSesion: string; precio: number }
 type PresupuestoPDFData = { numero: number; fecha: string; atencion: string; direccion: string; rif: string; telefono: string; lineas: LineaPresupuestoPDF[]; observaciones?: string; realizadoPor?: string }
+type ComisionReporteRow = {
+  id: string; empleado_id: string; empleado_nombre: string | null;
+  fecha: string; tipo: string; estado: string; pagado: boolean | null;
+  base: number; profesional: number; rpm: number;
+  moneda: string | null; tasa_bcv: number | null;
+  monto_base_usd: number | null; monto_base_bs: number | null;
+  monto_profesional_usd: number | null; monto_profesional_bs: number | null;
+  cliente_nombre: string | null; liquidacion_id: string | null;
+  concepto: string | null; cliente_plan_id: string | null; cita_id: string | null; cliente_id: string | null;
+  porcentaje_rpm: number | null; cuenta_por_cobrar_id: string | null;
+  cuenta_pagada: boolean | null; es_retenida: boolean | null;
+}
 
 const TIPOS = [
   { value: 'clientes', label: 'Clientes', icon: '👤' },
@@ -132,6 +144,8 @@ function normalizeEgresoRow(row: any): EgresoRow { const empleado=firstOrNull(ro
 function normalizeCobranzaRow(row: any): CobranzaRow { const cliente=firstOrNull(row?.clientes); return {id:String(row?.id??''),cliente_nombre:String(row?.cliente_nombre??''),concepto:String(row?.concepto??''),tipo_origen:String(row?.tipo_origen??''),monto_total_usd:Number(row?.monto_total_usd||0),monto_pagado_usd:Number(row?.monto_pagado_usd||0),saldo_usd:Number(row?.saldo_usd||0),fecha_venta:String(row?.fecha_venta??''),fecha_vencimiento:row?.fecha_vencimiento??null,estado:String(row?.estado??''),created_at:String(row?.created_at??''),clientes:cliente?{nombre:String(cliente?.nombre??'')}:null} }
 function normalizeInventarioRow(row: any): InventarioRow { const inventario=firstOrNull(row?.inventario); return {id:String(row?.id??''),inventario_id:String(row?.inventario_id??''),tipo:String(row?.tipo??''),cantidad:Number(row?.cantidad||0),cantidad_anterior:row?.cantidad_anterior!=null?Number(row.cantidad_anterior):null,cantidad_nueva:row?.cantidad_nueva!=null?Number(row.cantidad_nueva):null,concepto:String(row?.concepto??''),precio_unitario_usd:row?.precio_unitario_usd!=null?Number(row.precio_unitario_usd):null,monto_total_usd:row?.monto_total_usd!=null?Number(row.monto_total_usd):null,created_at:String(row?.created_at??''),inventario:inventario?{nombre:String(inventario?.nombre??'')}:null} }
 function normalizeNominaRow(row: any): NominaRow { const empleado=firstOrNull(row?.empleados); const metodo=firstOrNull(row?.metodos_pago_v2); return {id:String(row?.id??''),empleado_id:String(row?.empleado_id??''),fecha:String(row?.fecha??''),tipo:String(row?.tipo??''),moneda_pago:String(row?.moneda_pago??''),monto_pago:Number(row?.monto_pago||0),tasa_bcv:row?.tasa_bcv!=null?Number(row.tasa_bcv):null,monto_equivalente_usd:row?.monto_equivalente_usd!=null?Number(row.monto_equivalente_usd):null,monto_equivalente_bs:row?.monto_equivalente_bs!=null?Number(row.monto_equivalente_bs):null,notas:row?.notas??null,created_at:String(row?.created_at??''),referencia:row?.referencia??null,empleados:empleado?{nombre:String(empleado?.nombre??'')}:null,metodos_pago_v2:metodo?{nombre:String(metodo?.nombre??'')}:null} }
+function normalizeComisionReporteRow(row: any): ComisionReporteRow { const empleado=firstOrNull(row?.empleados); return {id:String(row?.id??''),empleado_id:String(row?.empleado_id??''),empleado_nombre:empleado?String(empleado?.nombre??''):null,fecha:String(row?.fecha??''),tipo:String(row?.tipo??''),estado:String(row?.estado??''),pagado:row?.pagado??null,base:Number(row?.base||0),profesional:Number(row?.profesional||0),rpm:Number(row?.rpm||0),moneda:row?.moneda??null,tasa_bcv:row?.tasa_bcv!=null?Number(row.tasa_bcv):null,monto_base_usd:row?.monto_base_usd!=null?Number(row.monto_base_usd):null,monto_base_bs:row?.monto_base_bs!=null?Number(row.monto_base_bs):null,monto_profesional_usd:row?.monto_profesional_usd!=null?Number(row.monto_profesional_usd):null,monto_profesional_bs:row?.monto_profesional_bs!=null?Number(row.monto_profesional_bs):null,cliente_nombre:null,liquidacion_id:row?.liquidacion_id??null,concepto:null,cliente_plan_id:row?.cliente_plan_id??null,cita_id:row?.cita_id??null,cliente_id:row?.cliente_id??null,porcentaje_rpm:row?.porcentaje_rpm!=null?Number(row.porcentaje_rpm):null,cuenta_por_cobrar_id:row?.cuenta_por_cobrar_id??null,cuenta_pagada:null,es_retenida:null} }
+function estadoComisionEfectivo(row: ComisionReporteRow): 'pendiente'|'retenida'|'liquidada' { const est=(row.estado||'').trim().toLowerCase(); if(row.pagado||['liquidado','liquidada','pagado','pagada'].includes(est))return'liquidada'; if(est==='retenida'||row.es_retenida)return'retenida'; return'pendiente' }
 
 function normalizeTxt(value: string | null | undefined) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
@@ -206,6 +220,44 @@ async function exportCierrePDF(args:{ingresos:IngresoRow[];egresos:EgresoRow[];f
   doc.save(`RPM_Cierre_${sanitizeFilePart(fechaInicio)}_${sanitizeFilePart(fechaFin)}_${sanitizeFilePart(horaInicio)}-${sanitizeFilePart(horaFin)}.pdf`)
 }
 
+async function exportLiquidacionPDF(args:{rows:ComisionReporteRow[];estadosFiltro:string[];empleadoNombre?:string;fechaInicio:string;fechaFin:string;generadoPor?:string;logoSrc?:string}) {
+  const{rows,estadosFiltro,empleadoNombre,fechaInicio,fechaFin,generadoPor,logoSrc='/logo-imprimir.png'}=args
+  if(!rows.length){alert('No hay comisiones para generar el reporte.');return}
+  const doc=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'})
+  const marginX=15;let cursorY=62
+  const estadoTxt=estadosFiltro.length>0?estadosFiltro.map((e)=>e.charAt(0).toUpperCase()+e.slice(1)).join(', '):'Todos los estados'
+  const subtitleParts=[`${shortDate(fechaInicio)} → ${shortDate(fechaFin)}`,estadoTxt]
+  if(empleadoNombre)subtitleParts.push(empleadoNombre)
+  await drawCorporateHeader({doc,logoSrc,title:'Liquidación de comisiones',subtitle:subtitleParts.join(' · '),dateText:`Fecha: ${shortDate(todayISO())}`,generatedBy:generadoPor})
+  const fmtUsd=(n:number)=>`$ ${n.toFixed(2)}`;const fmtBs=(n:number)=>`Bs. ${n.toFixed(2)}`
+  const pendientes=rows.filter((r)=>estadoComisionEfectivo(r)==='pendiente')
+  const retenidas=rows.filter((r)=>estadoComisionEfectivo(r)==='retenida')
+  const liquidadas=rows.filter((r)=>estadoComisionEfectivo(r)==='liquidada')
+  const totalPendUsd=pendientes.reduce((a,r)=>a+Number(r.monto_profesional_usd||0),0)
+  const totalRetUsd=retenidas.reduce((a,r)=>a+Number(r.monto_profesional_usd||0),0)
+  const totalLiqUsd=liquidadas.reduce((a,r)=>a+Number(r.monto_profesional_usd||0),0)
+  const totalPendBs=pendientes.reduce((a,r)=>a+Number(r.monto_profesional_bs||0),0)
+  const totalRetBs=retenidas.reduce((a,r)=>a+Number(r.monto_profesional_bs||0),0)
+  const totalLiqBs=liquidadas.reduce((a,r)=>a+Number(r.monto_profesional_bs||0),0)
+  doc.setFillColor(246,246,246);doc.roundedRect(marginX,cursorY,180,24,2,2,'F');doc.setDrawColor(205);doc.roundedRect(marginX,cursorY,180,24,2,2,'S')
+  doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(60)
+  doc.text('PENDIENTE',35,cursorY+7,{align:'center'});doc.text('RETENIDA',90,cursorY+7,{align:'center'});doc.text('LIQUIDADA',145,cursorY+7,{align:'center'})
+  doc.setFontSize(10);doc.setTextColor(20)
+  doc.text(fmtUsd(totalPendUsd),35,cursorY+14,{align:'center'});doc.text(fmtUsd(totalRetUsd),90,cursorY+14,{align:'center'});doc.text(fmtUsd(totalLiqUsd),145,cursorY+14,{align:'center'})
+  doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(95)
+  doc.text(fmtBs(totalPendBs),35,cursorY+20,{align:'center'});doc.text(fmtBs(totalRetBs),90,cursorY+20,{align:'center'});doc.text(fmtBs(totalLiqBs),145,cursorY+20,{align:'center'})
+  cursorY+=32
+  const empMap=new Map<string,{nombre:string;pendUsd:number;retUsd:number;liqUsd:number;pendBs:number;retBs:number;liqBs:number}>()
+  for(const r of rows){const nombre=r.empleado_nombre||'Sin nombre';const prev=empMap.get(r.empleado_id)||{nombre,pendUsd:0,retUsd:0,liqUsd:0,pendBs:0,retBs:0,liqBs:0};const est=estadoComisionEfectivo(r);const usd=Number(r.monto_profesional_usd||0);const bs=Number(r.monto_profesional_bs||0);if(est==='pendiente'){prev.pendUsd+=usd;prev.pendBs+=bs}else if(est==='retenida'){prev.retUsd+=usd;prev.retBs+=bs}else{prev.liqUsd+=usd;prev.liqBs+=bs};empMap.set(r.empleado_id,prev)}
+  doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setTextColor(25);doc.text('Resumen por empleado',marginX,cursorY)
+  autoTable(doc,{startY:cursorY+4,margin:{left:marginX,right:marginX,bottom:40},head:[['Empleado','Pendiente USD','Retenida USD','Liquidada USD']],body:Array.from(empMap.values()).map((e)=>[e.nombre,fmtUsd(e.pendUsd),fmtUsd(e.retUsd),fmtUsd(e.liqUsd)]),theme:'grid',styles:{font:'helvetica',fontSize:8,cellPadding:2.4,lineColor:[210,210,210],lineWidth:0.2},headStyles:{fillColor:[65,65,65],textColor:[255,255,255],fontStyle:'bold'},alternateRowStyles:{fillColor:[248,248,248]},columnStyles:{1:{halign:'right'},2:{halign:'right'},3:{halign:'right'}}})
+  cursorY=((doc as any).lastAutoTable?.finalY||cursorY)+8
+  doc.setFont('helvetica','bold');doc.setFontSize(9);doc.setTextColor(25);doc.text('Detalle de comisiones',marginX,cursorY)
+  autoTable(doc,{startY:cursorY+4,margin:{left:marginX,right:marginX,bottom:40},head:[['Fecha','Empleado','Concepto','Estado','Prof. USD','Prof. BS']],body:rows.map((r)=>[shortDate(r.fecha),r.empleado_nombre||'—',r.concepto||titleCase(r.tipo||'—'),estadoComisionEfectivo(r).toUpperCase(),fmtUsd(Number(r.monto_profesional_usd||0)),fmtBs(Number(r.monto_profesional_bs||0))]),theme:'grid',styles:{font:'helvetica',fontSize:7.5,cellPadding:2.2,lineColor:[210,210,210],lineWidth:0.2},headStyles:{fillColor:[65,65,65],textColor:[255,255,255],fontStyle:'bold'},alternateRowStyles:{fillColor:[248,248,248]},columnStyles:{4:{halign:'right'},5:{halign:'right'}}})
+  await finalizeCorporatePdf(doc,logoSrc)
+  doc.save(`RPM_Liquidacion_${sanitizeFilePart(fechaInicio)}_${sanitizeFilePart(fechaFin)}.pdf`)
+}
+
 async function exportPresupuestoPDF(data: PresupuestoPDFData,logoSrc='/logo-imprimir.png') {
   if(!data.atencion||!data.lineas.length){alert('Completa el nombre del cliente y al menos una línea de presupuesto.');return}
   const doc=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'})
@@ -239,7 +291,7 @@ async function exportInformeSesionesPDF(args:{citas:CitaRow[];paciente:string;ce
   doc.save(`RPM_Informe_Sesiones_${sanitizeFilePart(paciente)}.pdf`)
 }
 
-async function exportConstanciaPDF(data:{paciente:string;cedula?:string;terapeuta?:string;ciudad?:string;fechaEmision?:string;sesiones:Array<{fecha:string;terapeuta:string;tipoSesion:string}>;generadoPor?:string},logoSrc='/logo-rpm.png') {
+async function exportConstanciaPDF(data:{paciente:string;cedula?:string;terapeuta?:string;ciudad?:string;fechaEmision?:string;sesiones:Array<{fecha:string;terapeuta:string;tipoSesion:string}>;generadoPor?:string},logoSrc='/logo-imprimir.png') {
   if(!data.paciente||!data.sesiones.length){alert('Debes indicar el paciente y al menos una sesión para emitir la constancia.');return}
   const doc=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'});let cursorY=62
   await drawCorporateHeader({doc,logoSrc,title:'Constancia de asistencia',subtitle:data.ciudad||'Valencia',dateText:`Fecha: ${data.fechaEmision||shortDate(todayISO())}`,generatedBy:data.generadoPor})
@@ -652,6 +704,9 @@ export default function ReportesPage() {
   const [inventario, setInventario] = useState<InventarioRow[]>([])
   const [nomina, setNomina] = useState<NominaRow[]>([])
   const [liquidacion, setLiquidacion] = useState<NominaRow[]>([])
+  const [comisionesDetalle, setComisionesDetalle] = useState<ComisionReporteRow[]>([])
+  const [filtroLiqEstados, setFiltroLiqEstados] = useState<string[]>([])
+  const [filtroLiqEmpleado, setFiltroLiqEmpleado] = useState<string>('')
   const [constanciaPaciente, setConstanciaPaciente] = useState('')
   const [constanciaCedula, setConstanciaCedula] = useState('')
   const [constanciaTerapeuta, setConstanciaTerapeuta] = useState('F/T. JORGE MANTILLA')
@@ -709,7 +764,7 @@ export default function ReportesPage() {
     } catch(err){console.error(err)}
   }
 
-  function limpiarDatos() { setClientes([]);setPlanes([]);setCitas([]);setIngresos([]);setEgresos([]);setCobranzas([]);setInventario([]);setNomina([]);setLiquidacion([]) }
+  function limpiarDatos() { setClientes([]);setPlanes([]);setCitas([]);setIngresos([]);setEgresos([]);setCobranzas([]);setInventario([]);setNomina([]);setLiquidacion([]);setComisionesDetalle([]) }
 
   async function loadReporte() {
     try {
@@ -721,7 +776,26 @@ export default function ReportesPage() {
       if(tipo==='egresos'||tipo==='financiero'){const{data,error}=await supabase.from('egresos').select('id,fecha,concepto,categoria,proveedor,monto,estado,created_at,moneda,monto_equivalente_usd,monto_equivalente_bs,referencia,metodos_pago_v2:metodo_pago_v2_id(nombre,moneda),empleados:empleado_id(nombre)').gte('fecha',fechaInicio).lte('fecha',fechaFin).order('fecha',{ascending:false}).order('created_at',{ascending:false});if(error)throw error;setEgresos(((data||[]) as any[]).map(normalizeEgresoRow).filter((row)=>createdAtInTurno(row.created_at,horaInicio,horaFin)))}
       if(tipo==='cobranzas'){const{data,error}=await supabase.from('cuentas_por_cobrar').select('id,cliente_nombre,concepto,tipo_origen,monto_total_usd,monto_pagado_usd,saldo_usd,fecha_venta,fecha_vencimiento,estado,created_at,clientes:cliente_id(nombre)').gte('fecha_venta',fechaInicio).lte('fecha_venta',fechaFin).order('fecha_venta',{ascending:false});if(error)throw error;setCobranzas(((data||[]) as any[]).map(normalizeCobranzaRow))}
       if(tipo==='inventario'){const{data,error}=await supabase.from('movimientos_inventario').select('id,inventario_id,tipo,cantidad,cantidad_anterior,cantidad_nueva,concepto,precio_unitario_usd,monto_total_usd,created_at,inventario:inventario_id(nombre)').order('created_at',{ascending:false});if(error)throw error;setInventario(((data||[]) as any[]).map(normalizeInventarioRow))}
-      if(tipo==='nomina'||tipo==='liquidacion'){const{data,error}=await supabase.from('pagos_empleados').select('id,empleado_id,fecha,tipo,moneda_pago,monto_pago,tasa_bcv,monto_equivalente_usd,monto_equivalente_bs,notas,created_at,referencia,empleados:empleado_id(nombre),metodos_pago_v2:metodo_pago_v2_id(nombre)').gte('fecha',fechaInicio).lte('fecha',fechaFin).order('fecha',{ascending:false}).order('created_at',{ascending:false});if(error)throw error;const rows=((data||[]) as any[]).map(normalizeNominaRow).filter((row)=>createdAtInTurno(row.created_at,horaInicio,horaFin));setNomina(rows.filter((row)=>!isLiquidacionPagoEmpleado(row)));setLiquidacion(rows.filter((row)=>isLiquidacionPagoEmpleado(row)))}
+      if(tipo==='nomina'){const{data,error}=await supabase.from('pagos_empleados').select('id,empleado_id,fecha,tipo,moneda_pago,monto_pago,tasa_bcv,monto_equivalente_usd,monto_equivalente_bs,notas,created_at,referencia,empleados:empleado_id(nombre),metodos_pago_v2:metodo_pago_v2_id(nombre)').gte('fecha',fechaInicio).lte('fecha',fechaFin).order('fecha',{ascending:false}).order('created_at',{ascending:false});if(error)throw error;const rows=((data||[]) as any[]).map(normalizeNominaRow).filter((row)=>createdAtInTurno(row.created_at,horaInicio,horaFin));setNomina(rows.filter((row)=>!isLiquidacionPagoEmpleado(row)));setLiquidacion(rows.filter((row)=>isLiquidacionPagoEmpleado(row)))}
+      if(tipo==='liquidacion'){
+        const{data,error}=await supabase.from('comisiones_detalle').select('id,empleado_id,cliente_id,cliente_plan_id,cita_id,fecha,tipo,estado,base,profesional,rpm,moneda,tasa_bcv,monto_base_usd,monto_base_bs,monto_profesional_usd,monto_profesional_bs,pagado,liquidacion_id,porcentaje_rpm,cuenta_por_cobrar_id,empleados:empleado_id(nombre)').gte('fecha',fechaInicio).lte('fecha',fechaFin).order('fecha',{ascending:false})
+        if(error)throw error
+        const baseRows=((data||[]) as any[]).map(normalizeComisionReporteRow)
+        const clienteIds=[...new Set(baseRows.map((r)=>r.cliente_id).filter(Boolean))] as string[]
+        const clientePlanIds=[...new Set(baseRows.map((r)=>r.cliente_plan_id).filter(Boolean))] as string[]
+        const citaIds=[...new Set(baseRows.map((r)=>r.cita_id).filter(Boolean))] as string[]
+        const clienteNombres=new Map<string,string>()
+        const planConceptos=new Map<string,string>()
+        const citaConceptos=new Map<string,string>()
+        if(clienteIds.length>0){const{data:cd}=await supabase.from('clientes').select('id,nombre').in('id',clienteIds);for(const c of(cd||[]) as any[])clienteNombres.set(String(c.id),String(c.nombre||''))}
+        if(clientePlanIds.length>0){const{data:cpd}=await supabase.from('clientes_planes').select('id,cliente_id,planes:plan_id(nombre)').in('id',clientePlanIds);for(const cp of(cpd||[]) as any[]){const pn=firstOrNull(cp.planes)?.nombre||'Plan';const cn=clienteNombres.get(String(cp.cliente_id||''))||'';planConceptos.set(String(cp.id),cn?`${pn} — ${cn}`:pn)}}
+        if(citaIds.length>0){const{data:ctd}=await supabase.from('citas').select('id,cliente_id,hora_inicio,servicios:servicio_id(nombre)').in('id',citaIds);for(const ct of(ctd||[]) as any[]){const sn=firstOrNull(ct.servicios)?.nombre||'Sesión';const cn=clienteNombres.get(String(ct.cliente_id||''))||'';const hora=ct.hora_inicio?` ${String(ct.hora_inicio).slice(0,5)}`:'';citaConceptos.set(String(ct.id),cn?`${sn} — ${cn}${hora}`:`${sn}${hora}`)}}
+        const cuentasPorIdMap=new Map<string,any>()
+        const cuentaIds=[...new Set(baseRows.map((r)=>r.cuenta_por_cobrar_id).filter(Boolean))] as string[]
+        if(cuentaIds.length>0){const{data:cuentasData}=await supabase.from('cuentas_por_cobrar').select('id,estado,saldo_usd,saldo_bs').in('id',cuentaIds);for(const c of(cuentasData||[]) as any[])cuentasPorIdMap.set(String(c.id||''),c)}
+        const enriched=baseRows.map((r)=>{const cuenta=r.cuenta_por_cobrar_id?cuentasPorIdMap.get(r.cuenta_por_cobrar_id):null;const cuentaEst=((cuenta?.estado||'')).trim().toLowerCase();const cuentaPagada=!!cuenta&&(['cobrada','pagada','pagado','cerrada','liquidada'].includes(cuentaEst)||(Number(cuenta.saldo_usd||0)<=0.009&&Number(cuenta.saldo_bs||0)<=0.009));const pctRpm=Number(r.porcentaje_rpm??100);const necesitaCuentaPagada=pctRpm<65;const esRetenida=necesitaCuentaPagada&&(r.cuenta_por_cobrar_id===null||!cuentaPagada);return{...r,cliente_nombre:r.cliente_id?clienteNombres.get(r.cliente_id)||null:null,concepto:r.tipo==='plan'&&r.cliente_plan_id?planConceptos.get(r.cliente_plan_id)||null:r.tipo==='cita'&&r.cita_id?citaConceptos.get(r.cita_id)||null:null,cuenta_pagada:cuentaPagada,es_retenida:esRetenida}})
+        setComisionesDetalle(enriched)
+      }
     } catch(err:any){console.error(err);setError(err.message||'No se pudo generar el reporte.');limpiarDatos()}
     finally{setLoading(false)}
   }
@@ -736,6 +810,15 @@ export default function ReportesPage() {
   const inventarioFiltrado=useMemo(()=>inventario.filter((r)=>matchSearch([r.inventario?.nombre,r.tipo,r.concepto])),[inventario,search])
   const nominaBaseFiltrada=useMemo(()=>nomina.filter((r)=>matchSearch([r.empleados?.nombre,r.tipo,r.moneda_pago,r.notas,r.referencia])),[nomina,search])
   const liquidacionBaseFiltrada=useMemo(()=>liquidacion.filter((r)=>matchSearch([r.empleados?.nombre,r.tipo,r.moneda_pago,r.notas,r.referencia])),[liquidacion,search])
+
+  const comisionesDetalleFiltradas=useMemo(()=>{
+    let rows=comisionesDetalle.filter((r)=>matchSearch([r.empleado_nombre,r.cliente_nombre,r.tipo,r.estado]))
+    if(filtroLiqEstados.length>0)rows=rows.filter((r)=>filtroLiqEstados.includes(estadoComisionEfectivo(r)))
+    if(filtroLiqEmpleado)rows=rows.filter((r)=>r.empleado_id===filtroLiqEmpleado)
+    return rows
+  },[comisionesDetalle,filtroLiqEstados,filtroLiqEmpleado,search])
+
+  const empleadosLiquidacion=useMemo(()=>{const map=new Map<string,string>();for(const r of comisionesDetalle){if(r.empleado_id&&r.empleado_nombre)map.set(r.empleado_id,r.empleado_nombre)};return Array.from(map.entries()).map(([id,nombre])=>({id,nombre})).sort((a,b)=>a.nombre.localeCompare(b.nombre))},[comisionesDetalle])
 
   const ingresosFiltrados = useMemo(() => applyExportFilters(
     ingresosBaseFiltrados,
@@ -774,14 +857,14 @@ export default function ReportesPage() {
     const ingresosBs=ingresosFiltrados.filter((x)=>x.estado==='pagado').reduce((acc,x)=>acc+Number(x.monto_equivalente_bs||0),0)
     const egresosBaseUsd=egresosFiltrados.filter((x)=>x.estado==='pagado'||x.estado==='liquidado').reduce((acc,x)=>acc+Number(x.monto_equivalente_usd||0),0)
     const egresosBaseBs=egresosFiltrados.filter((x)=>x.estado==='pagado'||x.estado==='liquidado').reduce((acc,x)=>acc+Number(x.monto_equivalente_bs||0),0)
-    const pagosEmpleadoRows = tipo==='nomina' ? nominaFiltrada : tipo==='liquidacion' ? liquidacionFiltrada : []
-    const pagosEmpleadoUsd = pagosEmpleadoRows.reduce((acc,x)=>acc+Number(x.monto_equivalente_usd||0),0)
-    const pagosEmpleadoBs = pagosEmpleadoRows.reduce((acc,x)=>acc+Number(x.monto_equivalente_bs||0),0)
+    const pagosEmpleadoRows = tipo==='nomina' ? nominaFiltrada : []
+    const pagosEmpleadoUsd = pagosEmpleadoRows.reduce((acc,x)=>acc+Number(x.monto_equivalente_usd||0),0) + (tipo==='liquidacion'?comisionesDetalleFiltradas.reduce((acc,r)=>acc+Number(r.monto_profesional_usd||0),0):0)
+    const pagosEmpleadoBs = pagosEmpleadoRows.reduce((acc,x)=>acc+Number(x.monto_equivalente_bs||0),0) + (tipo==='liquidacion'?comisionesDetalleFiltradas.reduce((acc,r)=>acc+Number(r.monto_profesional_bs||0),0):0)
     const egresosUsd = egresosBaseUsd + pagosEmpleadoUsd
     const egresosBs = egresosBaseBs + pagosEmpleadoBs
     const carteraPendienteUsd=cobranzasFiltradas.reduce((acc,x)=>acc+Number(x.saldo_usd||0),0)
     return{ingresosUsd,ingresosBs,egresosUsd,egresosBs,balanceUsd:ingresosUsd-egresosUsd,balanceBs:ingresosBs-egresosBs,carteraPendienteUsd,totalCitasCompletadas:citasFiltradas.filter((x)=>x.estado==='completada').length,totalCitasCanceladas:citasFiltradas.filter((x)=>x.estado==='cancelada').length}
-  },[tipo,citasFiltradas,ingresosFiltrados,egresosFiltrados,cobranzasFiltradas,nominaFiltrada,liquidacionFiltrada])
+  },[tipo,citasFiltradas,ingresosFiltrados,egresosFiltrados,cobranzasFiltradas,nominaFiltrada,liquidacionFiltrada,comisionesDetalleFiltradas])
 
   const citasEstadoChart=useMemo(()=>{const map=new Map<string,number>();for(const row of citasFiltradas){const key=row.estado||'sin estado';map.set(key,(map.get(key)||0)+1)}return Array.from(map.entries()).map(([name,value])=>({name,value}))},[citasFiltradas])
   const categoriaChart=useMemo(()=>{
@@ -794,7 +877,7 @@ export default function ReportesPage() {
     } else if(tipo==='nomina'){
       for(const row of nominaFiltrada) add(row.empleados?.nombre||'Sin empleado', monedaVista==='USD'?Number(row.monto_equivalente_usd||0):Number(row.monto_equivalente_bs||0))
     } else if(tipo==='liquidacion'){
-      for(const row of liquidacionFiltrada) add(row.empleados?.nombre||'Sin empleado', monedaVista==='USD'?Number(row.monto_equivalente_usd||0):Number(row.monto_equivalente_bs||0))
+      for(const row of comisionesDetalleFiltradas) add(row.empleado_nombre||'Sin empleado', monedaVista==='USD'?Number(row.monto_profesional_usd||0):Number(row.monto_profesional_bs||0))
     } else {
       for(const row of ingresosFiltrados.filter((x)=>x.estado==='pagado')) add(`Ingreso: ${row.categoria||'general'}`, monedaVista==='USD'?Number(row.monto_equivalente_usd||0):Number(row.monto_equivalente_bs||0))
       for(const row of egresosFiltrados.filter((x)=>x.estado==='pagado'||x.estado==='liquidado')) add(`Egreso: ${categoriaEgresoLabel(row)}`, monedaVista==='USD'?Number(row.monto_equivalente_usd||0):Number(row.monto_equivalente_bs||0))
@@ -807,10 +890,11 @@ export default function ReportesPage() {
     const ensure=(fecha:string)=>{const key=getKey(fecha);const prev=map.get(key)||{label:key,ingresosUsd:0,ingresosBs:0,egresosUsd:0,egresosBs:0};map.set(key,prev);return prev}
     for(const row of ingresosFiltrados.filter((x)=>x.estado==='pagado')){const prev=ensure(row.fecha);prev.ingresosUsd+=Number(row.monto_equivalente_usd||0);prev.ingresosBs+=Number(row.monto_equivalente_bs||0)}
     for(const row of egresosFiltrados.filter((x)=>x.estado==='pagado'||x.estado==='liquidado')){const prev=ensure(row.fecha);prev.egresosUsd+=Number(row.monto_equivalente_usd||0);prev.egresosBs+=Number(row.monto_equivalente_bs||0)}
-    const extraRows = tipo==='nomina' ? nominaFiltrada : tipo==='liquidacion' ? liquidacionFiltrada : []
+    const extraRows = tipo==='nomina' ? nominaFiltrada : []
     for(const row of extraRows){const prev=ensure(row.fecha);prev.egresosUsd+=Number(row.monto_equivalente_usd||0);prev.egresosBs+=Number(row.monto_equivalente_bs||0)}
+    if(tipo==='liquidacion'){for(const row of comisionesDetalleFiltradas){const prev=ensure(row.fecha);prev.egresosUsd+=Number(row.monto_profesional_usd||0);prev.egresosBs+=Number(row.monto_profesional_bs||0)}}
     return Array.from(map.values()).sort((a,b)=>a.label.localeCompare(b.label)).map((row)=>({...row,ingresos:monedaVista==='USD'?row.ingresosUsd:row.ingresosBs,egresos:monedaVista==='USD'?row.egresosUsd:row.egresosBs}))
-  },[tipo,ingresosFiltrados,egresosFiltrados,nominaFiltrada,liquidacionFiltrada,monedaVista,agrupacion])
+  },[tipo,ingresosFiltrados,egresosFiltrados,nominaFiltrada,comisionesDetalleFiltradas,monedaVista,agrupacion])
   const acumuladoChart=useMemo(()=>{let acumulado=0;return financieroAgrupadoChart.map((d)=>{const saldo=d.ingresos-d.egresos;acumulado+=saldo;return{...d,saldo,acumulado:Math.round(acumulado*100)/100}})},[financieroAgrupadoChart])
 
   function normalizeExportMoneda(value: string | null | undefined) {
@@ -886,10 +970,9 @@ export default function ReportesPage() {
   const ingresosExportFiltrados = ingresosFiltrados
   const egresosExportFiltrados = egresosFiltrados
   const nominaExportFiltrada = nominaFiltrada
-  const liquidacionExportFiltrada = liquidacionFiltrada
 
   const filtrosExportActivos = Boolean(filtroExportMonedas.length || filtroExportMetodos.length || filtroExportCategorias.length || filtroExportEstados.length)
-  const exportCountActual = tipo==='ingresos' ? ingresosExportFiltrados.length : tipo==='egresos' ? egresosExportFiltrados.length : tipo==='nomina' ? nominaExportFiltrada.length : tipo==='liquidacion' ? liquidacionExportFiltrada.length : tipo==='financiero' ? ingresosExportFiltrados.length + egresosExportFiltrados.length : null
+  const exportCountActual = tipo==='ingresos' ? ingresosExportFiltrados.length : tipo==='egresos' ? egresosExportFiltrados.length : tipo==='nomina' ? nominaExportFiltrada.length : tipo==='liquidacion' ? comisionesDetalleFiltradas.length : tipo==='financiero' ? ingresosExportFiltrados.length + egresosExportFiltrados.length : null
 
   function buildExportRows() {
     if(tipo==='clientes')return{title:'Reporte de clientes',filenameBase:'RPM_Clientes',rows:clientesFiltrados.map((row)=>({ID:row.id,Nombre:row.nombre,Cédula:row.cedula||'',Teléfono:row.telefono||'',Email:row.email||'',Dirección:row.direccion||'',Terapeuta:row.empleados?.nombre||'',Estado:row.estado,'Fecha Creación':formatDateTime(row.created_at)}))}
@@ -900,12 +983,19 @@ export default function ReportesPage() {
     if(tipo==='cobranzas')return{title:'Reporte de cobranzas',filenameBase:'RPM_Cobranzas',rows:cobranzasFiltradas.map((row)=>({ID:row.id,Cliente:row.clientes?.nombre||row.cliente_nombre||'',Concepto:row.concepto,'Tipo Origen':row.tipo_origen,'Monto Total USD':Number(row.monto_total_usd||0),'Monto Pagado USD':Number(row.monto_pagado_usd||0),'Saldo USD':Number(row.saldo_usd||0),'Fecha Venta':row.fecha_venta,'Fecha Vencimiento':row.fecha_vencimiento||'',Estado:row.estado}))}
     if(tipo==='inventario')return{title:'Reporte de inventario',filenameBase:'RPM_Inventario',rows:inventarioFiltrado.map((row)=>({ID:row.id,Producto:row.inventario?.nombre||'',Tipo:row.tipo,Cantidad:Number(row.cantidad||0),'Cantidad Anterior':Number(row.cantidad_anterior||0),'Cantidad Nueva':Number(row.cantidad_nueva||0),Concepto:row.concepto,'Precio Unitario USD':Number(row.precio_unitario_usd||0),'Monto Total USD':Number(row.monto_total_usd||0),'Fecha Creación':formatDateTime(row.created_at)}))}
     if(tipo==='nomina')return{title:'Reporte de nómina',filenameBase:'RPM_Nomina',rows:nominaExportFiltrada.map((row)=>({ID:row.id,Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Empleado:row.empleados?.nombre||'',Tipo:row.tipo,'Moneda Pago':row.moneda_pago,'Monto Pago':Number(row.monto_pago||0),'Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),'Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'',Notas:row.notas||''}))}
-    if(tipo==='liquidacion')return{title:'Reporte de liquidaciones',filenameBase:'RPM_Liquidaciones',rows:liquidacionExportFiltrada.map((row)=>({ID:row.id,Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Empleado:row.empleados?.nombre||'',Tipo:tipoNominaLabel(row),'Moneda Pago':row.moneda_pago,'Monto Pago':Number(row.monto_pago||0),'Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),'Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'',Notas:row.notas||''}))}
+    if(tipo==='liquidacion')return{title:'Reporte de liquidaciones',filenameBase:'RPM_Liquidaciones',rows:comisionesDetalleFiltradas.map((row)=>({ID:row.id,Fecha:row.fecha,Empleado:row.empleado_nombre||'',Cliente:row.cliente_nombre||'',Tipo:titleCase(row.tipo||''),Estado:estadoComisionEfectivo(row),'Base USD':Number(row.monto_base_usd||0),'Prof. USD':Number(row.monto_profesional_usd||0),'Prof. BS':Number(row.monto_profesional_bs||0),Moneda:row.moneda||''}))}
     return{title:'Reporte financiero',filenameBase:'RPM_Financiero',rows:[...ingresosExportFiltrados.map((row)=>({Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Tipo:'Ingreso',Concepto:row.concepto,Categoría:row.categoria,Tercero:row.clientes?.nombre||'','Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'','Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),Estado:row.estado})),...egresosExportFiltrados.map((row)=>({Fecha:row.fecha,Hora:row.created_at?new Date(row.created_at).toLocaleTimeString('es-VE',{hour:'2-digit',minute:'2-digit'}):'',Tipo:'Egreso',Concepto:row.concepto,Categoría:categoriaEgresoLabel(row),Tercero:row.empleados?.nombre||row.proveedor||'','Método Pago':row.metodos_pago_v2?.nombre||'',Referencia:row.referencia||'','Monto USD':Number(row.monto_equivalente_usd||0),'Monto BS':Number(row.monto_equivalente_bs||0),Estado:row.estado}))]}
   }
 
   async function handleExportExcel(){const data=buildExportRows();const stamp=new Date().toISOString().slice(0,19).replace(/:/g,'-');await exportStyledExcel({title:data.title,subtitle:`${getPeriodoTexto(fechaInicio,fechaFin,horaInicio,horaFin)} · Generado por: ${generadoPor||'—'}`,sheetName:data.title,filename:`${data.filenameBase}_${stamp}.xlsx`,rows:data.rows,logoSrc:'/logo-rpm.png',accentColor:'111827'})}
-  async function handleExportPDF(){const data=buildExportRows();const stamp=new Date().toISOString().slice(0,19).replace(/:/g,'-');await exportReportePDF({title:data.title,subtitle:getPeriodoTexto(fechaInicio,fechaFin,horaInicio,horaFin),rows:data.rows,filename:`${data.filenameBase}_${stamp}.pdf`,generadoPor,logoSrc:'/logo-imprimir.png'})}
+  async function handleExportPDF(){
+    if(tipo==='liquidacion'){
+      const empNombre=filtroLiqEmpleado?empleadosLiquidacion.find((e)=>e.id===filtroLiqEmpleado)?.nombre:undefined
+      await exportLiquidacionPDF({rows:comisionesDetalleFiltradas,estadosFiltro:filtroLiqEstados,empleadoNombre:empNombre,fechaInicio,fechaFin,generadoPor,logoSrc:'/logo-imprimir.png'})
+      return
+    }
+    const data=buildExportRows();const stamp=new Date().toISOString().slice(0,19).replace(/:/g,'-');await exportReportePDF({title:data.title,subtitle:getPeriodoTexto(fechaInicio,fechaFin,horaInicio,horaFin),rows:data.rows,filename:`${data.filenameBase}_${stamp}.pdf`,generadoPor,logoSrc:'/logo-imprimir.png'})
+  }
   async function handleCierrePDF(){await exportCierrePDF({ingresos:ingresosExportFiltrados,egresos:egresosExportFiltrados,fechaInicio,fechaFin,horaInicio,horaFin,monedaVista,generadoPor,logoSrc:'/logo-imprimir.png'})}
   async function handlePresupuestoPDF(){await exportPresupuestoPDF({numero:presupNumero,fecha:formatBudgetDate(presupFecha),atencion:presupAtencion,direccion:presupDireccion,rif:presupRif,telefono:presupTelefono,lineas:presupLineas,observaciones:presupObservaciones||undefined,realizadoPor:presupRealizadoPor||generadoPor||undefined});registrarDocumento('presupuesto',presupAtencion||'Sin cliente',`Presupuesto #${presupNumero}`)}
   async function handleInformeSesionesPDF(){await exportInformeSesionesPDF({citas:citasFiltradas,paciente:constanciaPaciente||citasFiltradas[0]?.clientes?.nombre||'',cedula:constanciaCedula,terapeuta:constanciaTerapeuta,ciudad:constanciaCiudad,generadoPor,logoSrc:'/logo-imprimir.png'});registrarDocumento('informe_sesiones',constanciaPaciente||citasFiltradas[0]?.clientes?.nombre||'Sin paciente',`Informe de sesiones · ${citasFiltradas.length} citas`)}
@@ -1082,6 +1172,47 @@ export default function ReportesPage() {
               </div>
             )}
 
+            {/* Filtros de liquidación */}
+            {tipo === 'liquidacion' && (
+              <div className="mt-4 border-t border-white/[0.06] pt-4 space-y-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-white/30">Filtrar comisiones</p>
+                <div className="flex flex-wrap gap-2">
+                  {(['pendiente','retenida','liquidada'] as const).map((est) => (
+                    <button key={est} type="button"
+                      onClick={() => setFiltroLiqEstados((prev) => prev.includes(est) ? prev.filter((x) => x !== est) : [...prev, est])}
+                      className={`rounded-xl border px-3 py-1.5 text-[11px] font-semibold capitalize transition ${filtroLiqEstados.includes(est) ? est==='pendiente'?'border-amber-400/40 bg-amber-400/15 text-amber-300':est==='retenida'?'border-rose-400/40 bg-rose-400/15 text-rose-300':'border-emerald-400/40 bg-emerald-400/15 text-emerald-300' : 'border-white/[0.06] bg-white/[0.02] text-white/40 hover:text-white/70'}`}>
+                      {est}
+                    </button>
+                  ))}
+                  {filtroLiqEstados.length > 0 && (
+                    <button type="button" onClick={() => setFiltroLiqEstados([])}
+                      className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-1.5 text-[11px] text-white/30 transition hover:text-white/60">
+                      Limpiar estado
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex-1 min-w-[180px]">
+                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-white/30">Terapeuta / empleado</p>
+                    <select title="Filtrar por empleado" value={filtroLiqEmpleado} onChange={(e) => setFiltroLiqEmpleado(e.target.value)}
+                      className="w-full rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-xs text-white outline-none focus:border-white/15">
+                      <option value="">Todos los empleados</option>
+                      {empleadosLiquidacion.map((emp) => (
+                        <option key={emp.id} value={emp.id}>{emp.nombre}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {(filtroLiqEstados.length > 0 || filtroLiqEmpleado) && (
+                    <div className="pt-5">
+                      <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-300">
+                        {comisionesDetalleFiltradas.length} comisiones
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Datos del informe de citas */}
             {tipo === 'citas' && (
               <div className="mt-3 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
@@ -1242,7 +1373,7 @@ export default function ReportesPage() {
             {loading && <span className="animate-pulse text-[10px] text-white/25">actualizando…</span>}
           </div>
           <span className="text-[11px] text-white/25">
-            {tipo==='clientes'?clientesFiltrados.length:tipo==='planes'?planesFiltrados.length:tipo==='citas'?citasFiltradas.length:tipo==='ingresos'?ingresosFiltrados.length:tipo==='egresos'?egresosFiltrados.length:tipo==='cobranzas'?cobranzasFiltradas.length:tipo==='inventario'?inventarioFiltrado.length:tipo==='nomina'?nominaFiltrada.length:tipo==='liquidacion'?liquidacionFiltrada.length:ingresosFiltrados.length+egresosFiltrados.length} reg.
+            {tipo==='clientes'?clientesFiltrados.length:tipo==='planes'?planesFiltrados.length:tipo==='citas'?citasFiltradas.length:tipo==='ingresos'?ingresosFiltrados.length:tipo==='egresos'?egresosFiltrados.length:tipo==='cobranzas'?cobranzasFiltradas.length:tipo==='inventario'?inventarioFiltrado.length:tipo==='nomina'?nominaFiltrada.length:tipo==='liquidacion'?comisionesDetalleFiltradas.length:ingresosFiltrados.length+egresosFiltrados.length} reg.
           </span>
         </div>
 
@@ -1254,7 +1385,7 @@ export default function ReportesPage() {
         {tipo==='cobranzas'&&<DataTable headers={['Cliente','Concepto','Total USD','Pagado USD','Saldo USD','Vence','Estado']} empty="No hay cobranzas." rows={cobranzasFiltradas.map((r)=>[r.clientes?.nombre||r.cliente_nombre||'—',r.concepto,money(Number(r.monto_total_usd||0),'USD'),money(Number(r.monto_pagado_usd||0),'USD'),<span key={r.id} className={`font-semibold ${Number(r.saldo_usd||0)>0?'text-amber-400':'text-emerald-400'}`}>{money(Number(r.saldo_usd||0),'USD')}</span>,r.fecha_vencimiento?shortDate(r.fecha_vencimiento):'—',<Pill key={`${r.id}-p`} color={r.estado==='pagado'?'emerald':r.estado==='vencido'?'rose':'amber'}>{r.estado}</Pill>])}/>}
         {tipo==='inventario'&&<DataTable headers={['Producto','Tipo','Cantidad','Anterior','Nueva','Concepto','Monto USD','Fecha']} empty="No hay movimientos." rows={inventarioFiltrado.map((r)=>[r.inventario?.nombre||'—',r.tipo,r.cantidad,r.cantidad_anterior??'—',r.cantidad_nueva??'—',r.concepto,money(Number(r.monto_total_usd||0),'USD'),formatDateTime(r.created_at)])}/>}
         {tipo==='nomina'&&<DataTable headers={['Fecha','Empleado','Tipo','Moneda','Monto USD','Monto BS','Método']} empty="No hay pagos de nómina." rows={nominaFiltrada.map((r)=>[shortDate(r.fecha),r.empleados?.nombre||'—',tipoNominaLabel(r),r.moneda_pago,money(Number(r.monto_equivalente_usd||0),'USD'),money(Number(r.monto_equivalente_bs||0),'VES'),r.metodos_pago_v2?.nombre||'—'])}/>}
-        {tipo==='liquidacion'&&<DataTable headers={['Fecha','Empleado','Tipo','Moneda','Monto USD','Monto BS','Método','Referencia']} empty="No hay liquidaciones." rows={liquidacionFiltrada.map((r)=>[shortDate(r.fecha),r.empleados?.nombre||'—',tipoNominaLabel(r),r.moneda_pago,<span key={r.id} className="font-semibold text-teal-300">{money(Number(r.monto_equivalente_usd||0),'USD')}</span>,money(Number(r.monto_equivalente_bs||0),'VES'),r.metodos_pago_v2?.nombre||'—',r.referencia||'—'])}/>}
+        {tipo==='liquidacion'&&<DataTable headers={['Fecha','Empleado','Concepto','Estado','Prof. USD','Prof. BS']} empty="No hay comisiones." rows={comisionesDetalleFiltradas.map((r)=>{const est=estadoComisionEfectivo(r);return[shortDate(r.fecha),r.empleado_nombre||'—',r.concepto||titleCase(r.tipo||'—'),<Pill key={r.id} color={est==='pendiente'?'amber':est==='retenida'?'rose':'emerald'}>{est}</Pill>,<span key={`u-${r.id}`} className="font-semibold text-teal-300">{money(Number(r.monto_profesional_usd||0),'USD')}</span>,money(Number(r.monto_profesional_bs||0),'VES')]})}/>}
         {tipo==='financiero'&&<DataTable headers={['Fecha','Tipo','Concepto','Categoría','Tercero','Método','Monto USD','Monto BS','Estado']} empty="No hay movimientos." rows={[...ingresosFiltrados.map((r)=>({fecha:r.fecha,created_at:r.created_at,tipo:'ingreso' as const,concepto:r.concepto,categoria:r.categoria,tercero:r.clientes?.nombre||'—',metodo:r.metodos_pago_v2?.nombre||'—',montoUsd:Number(r.monto_equivalente_usd||0),montoBs:Number(r.monto_equivalente_bs||0),estado:r.estado,id:r.id})),...egresosFiltrados.map((r)=>({fecha:r.fecha,created_at:r.created_at,tipo:'egreso' as const,concepto:r.concepto,categoria:categoriaEgresoLabel(r),tercero:r.empleados?.nombre||r.proveedor||'—',metodo:r.metodos_pago_v2?.nombre||'—',montoUsd:Number(r.monto_equivalente_usd||0),montoBs:Number(r.monto_equivalente_bs||0),estado:r.estado,id:r.id}))].sort((a,b)=>(a.created_at<b.created_at?1:-1)).map((r)=>[shortDate(r.fecha),<Pill key={`t-${r.id}`} color={r.tipo==='ingreso'?'sky':'amber'}>{r.tipo}</Pill>,r.concepto,r.categoria,r.tercero,r.metodo,<span key={`u-${r.id}`} className={`font-semibold ${r.tipo==='ingreso'?'text-emerald-400':'text-rose-400'}`}>{money(r.montoUsd,'USD')}</span>,money(r.montoBs,'VES'),<Pill key={`s-${r.id}`} color={r.estado==='pagado'?'emerald':r.estado==='pendiente'?'amber':'white'}>{r.estado}</Pill>])}/>}
       </Panel>
 
