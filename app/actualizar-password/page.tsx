@@ -1,274 +1,288 @@
-'use client'
+"use client";
 
-export const dynamic = 'force-dynamic'
+export const dynamic = "force-dynamic";
 
-import { FormEvent, useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@supabase/ssr'
+import { FormEvent, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase/client";
 
-const supabase = createBrowserClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+export default function ActualizarPasswordPage() {
+  const router = useRouter();
 
-export default function ResetPasswordPage() {
-  const router = useRouter()
+  const [password, setPassword] = useState("");
+  const [confirmar, setConfirmar] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
+  const [loading, setLoading] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [sesionLista, setSesionLista] = useState(false);
 
-  const [loading, setLoading] = useState(false)
-  const [checking, setChecking] = useState(true)
-
-  const [ready, setReady] = useState(false)
-
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-
-  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
   useEffect(() => {
-    let mounted = true
+    let mounted = true;
 
-    async function initializeRecovery() {
+    async function initRecovery() {
       try {
-        setChecking(true)
-        setError('')
+        setChecking(true);
+        setError("");
 
-        const currentUrl = new URL(window.location.href)
-
-        // PKCE flow (?code=)
-        const code = currentUrl.searchParams.get('code')
+        const url = new URL(window.location.href);
+        const code = url.searchParams.get("code");
+        const hash = window.location.hash;
 
         if (code) {
           const { error: exchangeError } =
-            await supabase.auth.exchangeCodeForSession(code)
+            await supabase.auth.exchangeCodeForSession(code);
 
-          if (exchangeError) {
-            throw exchangeError
-          }
+          if (exchangeError) throw exchangeError;
 
           if (mounted) {
-            setReady(true)
-            setChecking(false)
+            setSesionLista(true);
+            setChecking(false);
+            setError("");
           }
 
-          // limpiar URL
-          window.history.replaceState(
-            {},
-            document.title,
-            window.location.pathname
-          )
-
-          return
+          window.history.replaceState({}, document.title, window.location.pathname);
+          return;
         }
 
-        // hash flow (#access_token)
-        const hash = window.location.hash
-
-        if (hash && hash.includes('access_token')) {
-          const params = new URLSearchParams(hash.replace('#', ''))
-
-          const access_token = params.get('access_token')
-          const refresh_token = params.get('refresh_token')
+        if (hash.includes("access_token")) {
+          const params = new URLSearchParams(hash.replace("#", ""));
+          const access_token = params.get("access_token");
+          const refresh_token = params.get("refresh_token");
 
           if (access_token && refresh_token) {
-            const { error: sessionError } =
-              await supabase.auth.setSession({
-                access_token,
-                refresh_token,
-              })
+            const { error: sessionError } = await supabase.auth.setSession({
+              access_token,
+              refresh_token,
+            });
 
-            if (sessionError) {
-              throw sessionError
-            }
+            if (sessionError) throw sessionError;
 
             if (mounted) {
-              setReady(true)
-              setChecking(false)
+              setSesionLista(true);
+              setChecking(false);
+              setError("");
             }
 
-            return
+            window.history.replaceState({}, document.title, window.location.pathname);
+            return;
           }
         }
 
-        // sesión existente
         const {
           data: { session },
-        } = await supabase.auth.getSession()
+          error: sessionError,
+        } = await supabase.auth.getSession();
+
+        if (sessionError) throw sessionError;
 
         if (session) {
           if (mounted) {
-            setReady(true)
-            setChecking(false)
+            setSesionLista(true);
+            setChecking(false);
+            setError("");
           }
-
-          return
+          return;
         }
 
         if (mounted) {
-          setReady(false)
-          setChecking(false)
-          setError('El enlace de recuperación es inválido o expiró.')
+          setSesionLista(false);
+          setChecking(false);
+          setError("Abre esta pantalla desde el enlace enviado a tu correo.");
         }
       } catch (err: any) {
         if (mounted) {
-          setReady(false)
-          setChecking(false)
-
-          setError(
-            err?.message ||
-              'No se pudo verificar el enlace de recuperación.'
-          )
+          setSesionLista(false);
+          setChecking(false);
+          setError(err?.message || "No se pudo verificar el enlace de recuperación.");
         }
       }
     }
 
-    initializeRecovery()
+    initRecovery();
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      if (
-        event === 'PASSWORD_RECOVERY' ||
-        event === 'SIGNED_IN'
-      ) {
-        if (session) {
-          setReady(true)
-          setChecking(false)
-          setError('')
-        }
+      if ((event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") && session) {
+        setSesionLista(true);
+        setChecking(false);
+        setError("");
       }
-    })
+    });
 
     return () => {
-      mounted = false
-      subscription.unsubscribe()
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  async function handleActualizar(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    setError("");
+    setSuccess("");
+
+    if (password.length < 6) {
+      setError("La contraseña debe tener al menos 6 caracteres.");
+      return;
     }
-  }, [])
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-
-    setError('')
-    setSuccess('')
-
-    if (!password || password.length < 6) {
-      setError('La contraseña debe tener mínimo 6 caracteres.')
-      return
+    if (password !== confirmar) {
+      setError("Las contraseñas no coinciden.");
+      return;
     }
 
-    if (password !== confirmPassword) {
-      setError('Las contraseñas no coinciden.')
-      return
-    }
+    setLoading(true);
 
     try {
-      setLoading(true)
+      const { error: updateError } = await supabase.auth.updateUser({
+        password,
+      });
 
-      const { error: updateError } =
-        await supabase.auth.updateUser({
-          password,
-        })
+      if (updateError) throw updateError;
 
-      if (updateError) {
-        throw updateError
-      }
+      setSuccess("Contraseña actualizada correctamente. Redirigiendo al login...");
 
-      setSuccess('Contraseña actualizada correctamente.')
-
-      await supabase.auth.signOut()
+      await supabase.auth.signOut();
 
       setTimeout(() => {
-        router.replace('/login')
-      }, 1800)
+        router.replace("/login");
+      }, 1800);
     } catch (err: any) {
-      setError(
-        err?.message || 'No se pudo actualizar la contraseña.'
-      )
+      setError(err?.message || "No se pudo actualizar la contraseña.");
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 
   return (
     <>
-      <style jsx global>{`
-        html,
-        body {
+      <style>{`
+        html, body {
           margin: 0;
           padding: 0;
-          background: #06070d;
-          font-family:
-            Inter,
-            system-ui,
-            -apple-system,
-            BlinkMacSystemFont,
-            'Segoe UI',
-            sans-serif;
+          background: #0b0b10;
         }
 
         * {
           box-sizing: border-box;
         }
 
-        input,
-        textarea,
-        select {
+        input, textarea, select {
           font-size: 16px !important;
         }
 
-        @keyframes fadeUp {
-          from {
-            opacity: 0;
-            transform: translateY(18px);
-          }
+        @keyframes slideUp {
+          from { opacity: 0; transform: translateY(32px) scale(0.98); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
 
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
+        .card-anim {
+          animation: slideUp 0.65s cubic-bezier(.22,1,.36,1) 0.05s both;
+        }
+
+        .rpm-input {
+          width: 100%;
+          background: rgba(255,255,255,0.045);
+          border: 1.5px solid rgba(255,255,255,0.09);
+          border-radius: 14px;
+          padding: 15px 16px;
+          color: #fff;
+          font-size: 16px;
+          outline: none;
+          transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+          -webkit-appearance: none;
+        }
+
+        .rpm-input::placeholder {
+          color: rgba(255,255,255,0.2);
+        }
+
+        .rpm-input:focus {
+          border-color: rgba(139,92,246,0.55);
+          background: rgba(255,255,255,0.07);
+          box-shadow: 0 0 0 3px rgba(139,92,246,0.10);
+        }
+
+        .rpm-btn {
+          width: 100%;
+          background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%);
+          color: #fff;
+          border: none;
+          border-radius: 14px;
+          padding: 16px;
+          font-size: 15px;
+          font-weight: 800;
+          cursor: pointer;
+          letter-spacing: 0.03em;
+          transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
+          box-shadow: 0 8px 24px rgba(109,40,217,0.35);
+        }
+
+        .rpm-btn:hover:not(:disabled) {
+          opacity: 0.92;
+          transform: translateY(-1px);
+          box-shadow: 0 12px 28px rgba(109,40,217,0.45);
+        }
+
+        .rpm-btn:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+          box-shadow: none;
+        }
+
+        .eye-btn {
+          position: absolute;
+          right: 14px;
+          top: 50%;
+          transform: translateY(-50%);
+          background: none;
+          border: none;
+          color: rgba(255,255,255,0.4);
+          cursor: pointer;
+          padding: 4px 6px;
+          font-size: 13px;
+          font-weight: 700;
+          white-space: nowrap;
         }
       `}</style>
 
       <div
         style={{
-          minHeight: '100dvh',
+          minHeight: "100dvh",
           background:
-            'radial-gradient(circle at top, rgba(124,58,237,0.18), transparent 35%), #06070d',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 18,
+            "radial-gradient(circle at top, rgba(124,58,237,0.14), transparent 38%), #0b0b10",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "20px 16px",
         }}
       >
         <div
+          className="card-anim"
           style={{
-            width: '100%',
-            maxWidth: 430,
-            borderRadius: 28,
-            padding: 28,
-            background: 'rgba(10,11,18,0.9)',
-            border: '1px solid rgba(255,255,255,0.06)',
-            backdropFilter: 'blur(18px)',
-            WebkitBackdropFilter: 'blur(18px)',
-            boxShadow: '0 30px 80px rgba(0,0,0,0.45)',
-            animation: 'fadeUp .45s ease',
+            width: "100%",
+            maxWidth: 420,
+            background: "rgba(13,12,20,0.82)",
+            backdropFilter: "blur(36px)",
+            WebkitBackdropFilter: "blur(36px)",
+            border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: 22,
+            padding: "clamp(24px, 6vw, 40px)",
+            boxShadow: "0 32px 80px rgba(0,0,0,0.55)",
           }}
         >
-          <div
-            style={{
-              textAlign: 'center',
-              marginBottom: 28,
-            }}
-          >
+          <div style={{ textAlign: "center", marginBottom: 28 }}>
             <h1
               style={{
-                color: '#fff',
-                margin: 0,
-                fontSize: 36,
+                fontSize: 22,
                 fontWeight: 800,
-                letterSpacing: '-0.03em',
+                color: "#fff",
+                margin: "0 0 8px",
               }}
             >
               Nueva contraseña
@@ -276,133 +290,90 @@ export default function ResetPasswordPage() {
 
             <p
               style={{
-                marginTop: 10,
-                color: 'rgba(255,255,255,0.38)',
-                fontSize: 14,
-                lineHeight: 1.5,
+                fontSize: 13,
+                color: "rgba(255,255,255,0.34)",
+                margin: 0,
               }}
             >
-              {ready
-                ? 'Ingresa una nueva contraseña para tu cuenta.'
-                : 'Verificando enlace de recuperación...'}
+              {sesionLista
+                ? "Ingresa tu nueva contraseña"
+                : "Verificando enlace de recuperación..."}
             </p>
           </div>
 
           {checking ? (
             <div
               style={{
-                textAlign: 'center',
-                color: 'rgba(255,255,255,0.45)',
-                fontSize: 14,
-                padding: '30px 0',
+                textAlign: "center",
+                padding: "24px 0",
+                color: "rgba(255,255,255,0.35)",
+                fontSize: 13,
               }}
             >
               Cargando sesión...
             </div>
-          ) : !ready ? (
+          ) : !sesionLista ? (
             <div>
               <div
                 style={{
-                  background: 'rgba(239,68,68,0.08)',
-                  border: '1px solid rgba(239,68,68,0.16)',
-                  color: '#fca5a5',
-                  padding: 14,
-                  borderRadius: 16,
-                  fontSize: 14,
-                  lineHeight: 1.5,
+                  background: "rgba(239,68,68,0.08)",
+                  border: "1px solid rgba(239,68,68,0.18)",
+                  borderRadius: 12,
+                  padding: "12px 14px",
+                  fontSize: 13,
+                  color: "#fca5a5",
+                  marginBottom: 16,
                 }}
               >
                 {error}
               </div>
 
               <button
-                onClick={() => router.replace('/login')}
-                style={{
-                  width: '100%',
-                  marginTop: 16,
-                  border: 'none',
-                  borderRadius: 16,
-                  padding: '15px 18px',
-                  background:
-                    'linear-gradient(135deg,#7c3aed,#6d28d9)',
-                  color: '#fff',
-                  fontWeight: 700,
-                  fontSize: 15,
-                  cursor: 'pointer',
-                }}
+                type="button"
+                onClick={() => router.replace("/login")}
+                className="rpm-btn"
               >
                 Volver al login
               </button>
             </div>
           ) : (
             <form
-              onSubmit={handleSubmit}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 16,
-              }}
+              onSubmit={handleActualizar}
+              style={{ display: "flex", flexDirection: "column", gap: 15 }}
             >
               <div>
                 <label
                   style={{
-                    display: 'block',
+                    display: "block",
+                    fontSize: 11,
+                    color: "rgba(255,255,255,0.42)",
                     marginBottom: 8,
-                    color: 'rgba(255,255,255,0.52)',
-                    fontSize: 12,
-                    fontWeight: 700,
-                    letterSpacing: '.08em',
-                    textTransform: 'uppercase',
+                    fontWeight: 800,
+                    letterSpacing: "0.1em",
+                    textTransform: "uppercase",
                   }}
                 >
                   Nueva contraseña
                 </label>
 
-                <div
-                  style={{
-                    position: 'relative',
-                  }}
-                >
+                <div style={{ position: "relative" }}>
                   <input
-                    type={showPassword ? 'text' : 'password'}
+                    type={showPassword ? "text" : "password"}
                     value={password}
-                    onChange={(e) =>
-                      setPassword(e.target.value)
-                    }
-                    placeholder='Mínimo 6 caracteres'
-                    autoComplete='new-password'
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Mínimo 6 caracteres"
+                    className="rpm-input"
+                    autoComplete="new-password"
+                    style={{ paddingRight: 76 }}
                     required
-                    style={{
-                      width: '100%',
-                      borderRadius: 18,
-                      border:
-                        '1px solid rgba(255,255,255,0.08)',
-                      background: 'rgba(255,255,255,0.04)',
-                      padding: '16px 58px 16px 16px',
-                      color: '#fff',
-                      outline: 'none',
-                    }}
                   />
 
                   <button
-                    type='button'
-                    onClick={() =>
-                      setShowPassword((prev) => !prev)
-                    }
-                    style={{
-                      position: 'absolute',
-                      top: '50%',
-                      right: 14,
-                      transform: 'translateY(-50%)',
-                      border: 'none',
-                      background: 'transparent',
-                      color: 'rgba(255,255,255,0.5)',
-                      fontSize: 13,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
+                    type="button"
+                    className="eye-btn"
+                    onClick={() => setShowPassword((v) => !v)}
                   >
-                    {showPassword ? 'Ocultar' : 'Ver'}
+                    {showPassword ? "Ocultar" : "Ver"}
                   </button>
                 </div>
               </div>
@@ -410,98 +381,66 @@ export default function ResetPasswordPage() {
               <div>
                 <label
                   style={{
-                    display: 'block',
+                    display: "block",
+                    fontSize: 11,
+                    color: "rgba(255,255,255,0.42)",
                     marginBottom: 8,
-                    color: 'rgba(255,255,255,0.52)',
-                    fontSize: 12,
-                    fontWeight: 700,
-                    letterSpacing: '.08em',
-                    textTransform: 'uppercase',
+                    fontWeight: 800,
+                    letterSpacing: "0.1em",
+                    textTransform: "uppercase",
                   }}
                 >
                   Confirmar contraseña
                 </label>
 
                 <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={confirmPassword}
-                  onChange={(e) =>
-                    setConfirmPassword(e.target.value)
-                  }
-                  placeholder='Repite tu contraseña'
-                  autoComplete='new-password'
+                  type={showPassword ? "text" : "password"}
+                  value={confirmar}
+                  onChange={(e) => setConfirmar(e.target.value)}
+                  placeholder="Repite la contraseña"
+                  className="rpm-input"
+                  autoComplete="new-password"
                   required
-                  style={{
-                    width: '100%',
-                    borderRadius: 18,
-                    border:
-                      '1px solid rgba(255,255,255,0.08)',
-                    background: 'rgba(255,255,255,0.04)',
-                    padding: '16px',
-                    color: '#fff',
-                    outline: 'none',
-                  }}
                 />
               </div>
 
-              {error ? (
+              {error && (
                 <div
                   style={{
-                    background: 'rgba(239,68,68,0.08)',
-                    border: '1px solid rgba(239,68,68,0.16)',
-                    color: '#fca5a5',
-                    padding: 14,
-                    borderRadius: 16,
-                    fontSize: 14,
-                    lineHeight: 1.5,
+                    background: "rgba(239,68,68,0.08)",
+                    border: "1px solid rgba(239,68,68,0.18)",
+                    borderRadius: 12,
+                    padding: "12px 14px",
+                    fontSize: 13,
+                    color: "#fca5a5",
                   }}
                 >
                   {error}
                 </div>
-              ) : null}
+              )}
 
-              {success ? (
+              {success && (
                 <div
                   style={{
-                    background: 'rgba(16,185,129,0.08)',
-                    border: '1px solid rgba(16,185,129,0.18)',
-                    color: '#6ee7b7',
-                    padding: 14,
-                    borderRadius: 16,
-                    fontSize: 14,
-                    lineHeight: 1.5,
+                    background: "rgba(52,211,153,0.07)",
+                    border: "1px solid rgba(52,211,153,0.16)",
+                    borderRadius: 12,
+                    padding: "12px 14px",
+                    fontSize: 13,
+                    color: "#6ee7b7",
                   }}
                 >
                   {success}
                 </div>
-              ) : null}
+              )}
 
-              <button
-                type='submit'
-                disabled={loading}
-                style={{
-                  width: '100%',
-                  border: 'none',
-                  borderRadius: 18,
-                  padding: '17px 18px',
-                  background:
-                    'linear-gradient(135deg,#7c3aed,#6d28d9)',
-                  color: '#fff',
-                  fontWeight: 800,
-                  fontSize: 15,
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                  opacity: loading ? 0.6 : 1,
-                  marginTop: 4,
-                }}
-              >
-                {loading
-                  ? 'Actualizando...'
-                  : 'Actualizar contraseña'}
+              <button type="submit" disabled={loading} className="rpm-btn">
+                {loading ? "Guardando..." : "Actualizar contraseña"}
               </button>
             </form>
           )}
         </div>
       </div>
     </>
-  )
+  );
 }
