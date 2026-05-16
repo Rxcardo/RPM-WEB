@@ -155,25 +155,31 @@ export default function LoginPage() {
   }
 
   async function handleRecuperar(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-    setSuccess("");
-    try {
-      const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || window.location.origin;
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-  redirectTo:
-    "https://www.rpmvzla.com/auth/callback?next=/actualizar-password",
-});
-      if (resetError) throw resetError;
-      setSuccess("Te enviamos un correo con el enlace para restablecer tu contraseña.");
-      setEmail("");
-    } catch (err: any) {
-      setError(err?.message || "No se pudo enviar el correo.");
-    } finally {
-      setLoading(false);
-    }
+  e.preventDefault();
+
+  setLoading(true);
+  setError("");
+  setSuccess("");
+
+  try {
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+      email.trim().toLowerCase(),
+      {
+        redirectTo:
+          "https://www.rpmvzla.com/auth/callback?next=/actualizar-password",
+      }
+    );
+
+    if (resetError) throw resetError;
+
+    setSuccess("Te enviamos un correo con el enlace para restablecer tu contraseña.");
+    setEmail("");
+  } catch (err: any) {
+    setError(err?.message || "No se pudo enviar el correo de recuperación.");
+  } finally {
+    setLoading(false);
   }
+}
 
   function updateRegistro(name: string, value: string) {
     setRegistro((prev) => ({ ...prev, [name]: value }));
