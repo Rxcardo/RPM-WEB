@@ -161,10 +161,10 @@ export default function LoginPage() {
     setSuccess("");
     try {
       const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || window.location.origin;
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-        email.trim().toLowerCase(),
-        { redirectTo: `${siteUrl}/auth/callback?next=/actualizar-password` },
-      );
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+  redirectTo:
+    "https://www.rpmvzla.com/auth/callback?next=/actualizar-password",
+});
       if (resetError) throw resetError;
       setSuccess("Te enviamos un correo con el enlace para restablecer tu contraseña.");
       setEmail("");
