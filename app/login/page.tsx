@@ -31,6 +31,7 @@ export default function LoginPage() {
 
   const [registro, setRegistro] = useState({
     nombre: "",
+    identificador: "",
     cedula: "",
     telefono: "",
     email: "",
@@ -125,7 +126,7 @@ export default function LoginPage() {
     try {
       const payload =
         tipoRegistro === "existente"
-          ? { tipo: "existente", cedula: registro.cedula, telefono: registro.telefono, email: registro.email, password: registro.password }
+          ? { tipo: "existente", identificador: registro.identificador, password: registro.password }
           : { tipo: "nuevo", nombre: registro.nombre, cedula: registro.cedula, telefono: registro.telefono, email: registro.email, fecha_nacimiento: registro.fecha_nacimiento || null, motivo: registro.motivo || null };
 
       const res = await fetch("/api/auth/registro", {
@@ -141,11 +142,11 @@ export default function LoginPage() {
 
       if (tipoRegistro === "existente") {
         setVista("login");
-        setEmail(registro.email);
+        setEmail(data.email || registro.identificador);
         setPassword("");
       }
 
-      setRegistro({ nombre: "", cedula: "", telefono: "", email: "", password: "", fecha_nacimiento: "", motivo: "" });
+      setRegistro({ nombre: "", identificador: "", cedula: "", telefono: "", email: "", password: "", fecha_nacimiento: "", motivo: "" });
     } catch (err: any) {
       setError(err?.message || "Error inesperado.");
     } finally {
@@ -496,38 +497,44 @@ export default function LoginPage() {
                   </button>
                 </div>
 
-                {tipoRegistro === "nuevo" && (
-                  <Field label="Nombre completo">
-                    <input className="rpm-input rpm-input-bare" value={registro.nombre} onChange={(e) => updateRegistro("nombre", e.target.value)} placeholder="Nombre y apellido" required />
-                  </Field>
-                )}
-
-                <Field label="Cédula">
-                  <input className="rpm-input rpm-input-bare" value={registro.cedula} onChange={(e) => updateRegistro("cedula", e.target.value)} placeholder="V12345678" required={tipoRegistro === "existente"} />
-                </Field>
-
-                <Field label="Teléfono">
-                  <input className="rpm-input rpm-input-bare" value={registro.telefono} onChange={(e) => updateRegistro("telefono", e.target.value)} placeholder="04141234567" inputMode="tel" required />
-                </Field>
-
-                <Field label="Correo electrónico">
-                  <div style={{ position: "relative" }}>
-                    <span className="rpm-icon"><IconMail /></span>
-                    <input type="email" className="rpm-input" value={registro.email} onChange={(e) => updateRegistro("email", e.target.value)} placeholder="correo@ejemplo.com" inputMode="email" required />
-                  </div>
-                </Field>
-
                 {tipoRegistro === "existente" && (
-                  <Field label="Crear contraseña">
-                    <div style={{ position: "relative" }}>
-                      <span className="rpm-icon"><IconLock /></span>
-                      <input type="password" className="rpm-input" value={registro.password} onChange={(e) => updateRegistro("password", e.target.value)} placeholder="Mínimo 6 caracteres" required />
-                    </div>
-                  </Field>
+                  <>
+                    <Field label="Tu cédula, teléfono o correo">
+                      <input
+                        className="rpm-input rpm-input-bare"
+                        value={registro.identificador}
+                        onChange={(e) => updateRegistro("identificador", e.target.value)}
+                        placeholder="V12345678 · 04141234567 · correo@ejemplo.com"
+                        autoComplete="off"
+                        required
+                      />
+                    </Field>
+                    <Field label="Crear contraseña">
+                      <div style={{ position: "relative" }}>
+                        <span className="rpm-icon"><IconLock /></span>
+                        <input type="password" className="rpm-input" value={registro.password} onChange={(e) => updateRegistro("password", e.target.value)} placeholder="Mínimo 6 caracteres" required />
+                      </div>
+                    </Field>
+                  </>
                 )}
 
                 {tipoRegistro === "nuevo" && (
                   <>
+                    <Field label="Nombre completo">
+                      <input className="rpm-input rpm-input-bare" value={registro.nombre} onChange={(e) => updateRegistro("nombre", e.target.value)} placeholder="Nombre y apellido" required />
+                    </Field>
+                    <Field label="Cédula">
+                      <input className="rpm-input rpm-input-bare" value={registro.cedula} onChange={(e) => updateRegistro("cedula", e.target.value)} placeholder="V12345678" />
+                    </Field>
+                    <Field label="Teléfono">
+                      <input className="rpm-input rpm-input-bare" value={registro.telefono} onChange={(e) => updateRegistro("telefono", e.target.value)} placeholder="04141234567" inputMode="tel" required />
+                    </Field>
+                    <Field label="Correo electrónico">
+                      <div style={{ position: "relative" }}>
+                        <span className="rpm-icon"><IconMail /></span>
+                        <input type="email" className="rpm-input" value={registro.email} onChange={(e) => updateRegistro("email", e.target.value)} placeholder="correo@ejemplo.com" inputMode="email" required />
+                      </div>
+                    </Field>
                     <Field label="Fecha de nacimiento">
                       <input type="date" className="rpm-input rpm-input-bare" value={registro.fecha_nacimiento} onChange={(e) => updateRegistro("fecha_nacimiento", e.target.value)} />
                     </Field>

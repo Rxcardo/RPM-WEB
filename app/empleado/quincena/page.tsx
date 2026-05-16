@@ -621,10 +621,16 @@ export default function EmpleadoQuincenaPage() {
           <p className="p-4 text-sm font-semibold rpm-muted">Cargando quincena...</p>
         ) : comisionesFiltradas.length === 0 ? (
           <div className="p-4">
-            <p className="text-sm font-black">Sin registros con estos filtros.</p>
+            <p className="text-sm font-black">
+              {comisiones.length === 0
+                ? 'Sin comisiones en este período.'
+                : 'Sin resultados con estos filtros.'}
+            </p>
 
             <p className="rpm-muted mt-1 text-xs">
-              La API debe enviar datos desde comisiones_detalle o pagos_empleados_detalle.
+              {comisiones.length === 0
+                ? 'No hay comisiones registradas para la quincena seleccionada.'
+                : 'Prueba cambiando el filtro de estado o moneda.'}
             </p>
           </div>
         ) : (

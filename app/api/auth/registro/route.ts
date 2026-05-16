@@ -5,9 +5,7 @@ export const dynamic = "force-dynamic";
 
 type RegistroExistentePayload = {
   tipo: "existente";
-  cedula: string;
-  telefono: string;
-  email: string;
+  identificador: string; // cédula, teléfono o correo
   password: string;
 };
 
@@ -168,24 +166,12 @@ export async function POST(req: Request) {
       });
     }
 
-    const cedula = normalizeCedula(clean(body.cedula));
-    const telefono = normalizePhone(clean(body.telefono));
-    const email = clean(body.email).toLowerCase();
+    const identificador = clean(body.identificador);
     const password = clean(body.password);
 
-    if (!cedula || !telefono || !email || !password) {
+    if (!identificador || !password) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: "Cédula, teléfono, correo y contraseña son obligatorios.",
-        },
-        { status: 400 }
-      );
-    }
-
-    if (!isEmail(email)) {
-      return NextResponse.json(
-        { ok: false, error: "Correo inválido." },
+        { ok: false, error: "Identificador y contraseña son obligatorios." },
         { status: 400 }
       );
     }
@@ -197,32 +183,64 @@ export async function POST(req: Request) {
       );
     }
 
-    const variantes = cedulaVariantes(cedula);
+    let cliente: { id: string; nombre: string; telefono: string | null; email: string | null; cedula: string | null; estado: string; auth_user_id: string | null; acceso_portal: boolean } | null = null;
 
-    const { data: clientes, error: clienteError } = await supabaseAdmin
-      .from("clientes")
-      .select("id, nombre, telefono, email, cedula, estado, auth_user_id, acceso_portal")
-      .in("cedula", variantes)
-      .limit(20);
-
-    if (clienteError) throw clienteError;
-
-    const cliente = clientes?.find((c) => phoneMatches(c.telefono || "", telefono));
+    if (isEmail(identificador)) {
+      const emailNorm = identificador.toLowerCase();
+      const { data, error: clienteError } = await supabaseAdmin
+        .from("clientes")
+        .select("id, nombre, telefono, email, cedula, estado, auth_user_id, acceso_portal")
+        .eq("email", emailNorm)
+        .maybeSingle();
+      if (clienteError) throw clienteError;
+      cliente = data;
+    } else if (/^\+?[\d\s\-\(\)]+$/.test(identificador) && normalizePhone(identificador).length >= 7) {
+      const telefonoNorm = normalizePhone(identificador);
+      const lastDigits = telefonoNorm.slice(-8);
+      const { data: candidatos, error: clienteError } = await supabaseAdmin
+        .from("clientes")
+        .select("id, nombre, telefono, email, cedula, estado, auth_user_id, acceso_portal")
+        .ilike("telefono", `%${lastDigits}`)
+        .limit(50);
+      if (clienteError) throw clienteError;
+      const matches = (candidatos ?? []).filter((c) => phoneMatches(c.telefono || "", telefonoNorm));
+      if (matches.length > 1) {
+        return NextResponse.json(
+          { ok: false, error: "No pudimos identificarte de forma única. Por favor pasa por recepción." },
+          { status: 404 }
+        );
+      }
+      cliente = matches[0] ?? null;
+    } else {
+      const variantes = cedulaVariantes(normalizeCedula(identificador));
+      const { data: clientes, error: clienteError } = await supabaseAdmin
+        .from("clientes")
+        .select("id, nombre, telefono, email, cedula, estado, auth_user_id, acceso_portal")
+        .in("cedula", variantes)
+        .limit(20);
+      if (clienteError) throw clienteError;
+      if ((clientes?.length ?? 0) > 1) {
+        return NextResponse.json(
+          { ok: false, error: "No pudimos identificarte de forma única. Por favor pasa por recepción." },
+          { status: 404 }
+        );
+      }
+      cliente = clientes?.[0] ?? null;
+    }
 
     if (!cliente) {
       return NextResponse.json(
-        {
-          ok: false,
-          error:
-            "Tus datos no coinciden con recepción. Verifica cédula y teléfono.",
-          debug: {
-            cedula_recibida: cedula,
-            cedulas_buscadas: variantes,
-            telefono_recibido: telefono,
-            coincidencias_cedula: clientes?.length ?? 0,
-          },
-        },
+        { ok: false, error: "No encontramos tu registro en el sistema. Por favor pasa por recepción." },
         { status: 404 }
+      );
+    }
+
+    const email = (isEmail(identificador) ? identificador.toLowerCase() : cliente.email?.toLowerCase() ?? "");
+
+    if (!email) {
+      return NextResponse.json(
+        { ok: false, error: "Tu cuenta no tiene correo registrado. Por favor pasa por recepción para completar tus datos." },
+        { status: 400 }
       );
     }
 
@@ -333,6 +351,7 @@ export async function POST(req: Request) {
       tipo: "existente",
       user_id: userId,
       cliente_id: cliente.id,
+      email,
       message: "Acceso creado correctamente. Ya puedes iniciar sesión.",
     });
   } catch (error: any) {

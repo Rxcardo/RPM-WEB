@@ -354,38 +354,18 @@ export default function EmpleadoAgendaPage() {
       )}
 
       {/* ── RESUMEN ── */}
-      <section className="grid gap-2 sm:grid-cols-[1fr_auto]">
-        <div className="purple-card rounded-[1.3rem] p-4 text-white">
-          <div className="flex items-center gap-3">
-            <div
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
-              style={{ background: 'rgba(255,255,255,0.15)' }}
-            >
-              <CalendarDays className="h-4 w-4" />
-            </div>
-            <div>
-              <p style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.55)' }}>
-                Resumen del día
-              </p>
-              <h2 className="mt-0.5 text-xl font-black leading-none">
-                {totalActividades} {totalActividades === 1 ? 'actividad' : 'actividades'}
-              </h2>
-            </div>
+      <section className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {[
+          { label: 'Actividades', val: totalActividades },
+          { label: 'Sesiones',    val: sesiones.length },
+          { label: 'Pendientes',  val: pendientes },
+          { label: 'Marcadas',    val: marcadas },
+        ].map(({ label, val }) => (
+          <div key={label} className="glass-card rounded-[1.1rem] p-3 text-center">
+            <p className="rpm-label" style={{ fontSize: '9px' }}>{label}</p>
+            <p className="mt-1.5 text-2xl font-black">{val}</p>
           </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-1 sm:gap-2">
-          {[
-            { label: 'Sesiones',  val: sesiones.length },
-            { label: 'Pendientes', val: pendientes },
-            { label: 'Marcadas',  val: marcadas },
-          ].map(({ label, val }) => (
-            <div key={label} className="glass-card rounded-[1.1rem] p-2.5 text-center sm:text-left">
-              <p className="rpm-label" style={{ fontSize: '9px' }}>{label}</p>
-              <p className="mt-1 text-lg font-black">{val}</p>
-            </div>
-          ))}
-        </div>
+        ))}
       </section>
 
       {/* ── SELECTOR DE FECHA ── */}

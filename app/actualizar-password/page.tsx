@@ -18,12 +18,19 @@ export default function ActualizarPasswordPage() {
   const [sesionLista, setSesionLista] = useState(false);
 
   useEffect(() => {
-    // Supabase inyecta la sesión de recuperación desde el hash de la URL
-    supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY") {
+    // Flujo PKCE: el callback ya intercambió el código y hay sesión activa
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) setSesionLista(true);
+    });
+
+    // Flujo hash (legado): Supabase dispara PASSWORD_RECOVERY desde el fragmento de URL
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") {
         setSesionLista(true);
       }
     });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   async function handleActualizar(e: FormEvent) {
